@@ -137,6 +137,7 @@
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="shaders\Particle.comp" />
     <Content Include="shaders\Triangle.frag" />
     <Content Include="shaders\Triangle.vert" />
   </ItemGroup>
