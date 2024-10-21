@@ -34,6 +34,10 @@
 #include <random>
 #include <filesystem>
 
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_vulkan.h"
+
 #include "Path.h"
 
 const uint32_t WIDTH = 800;
@@ -192,6 +196,15 @@ struct Particle
     }
 };
 
+static void check_vk_result(VkResult err)
+{
+    if (err == 0)
+        return;
+    fprintf(stderr, "[vulkan] Error: VkResult = %d\n", err);
+    if (err < 0)
+        abort();
+}
+
 namespace std
 {
     template<> struct hash<Vertex>
@@ -220,6 +233,7 @@ public:
     {
         initWindow();
         initVulkan();
+        initImgui();
         mainLoop();
         cleanup();
     }
@@ -287,9 +301,43 @@ private:
         createSyncObjects();
     }
 
+    void initImgui()
+    {
+        // Setup Dear ImGui context
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        //io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+        //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+
+        // Setup Dear ImGui style
+        ImGui::StyleColorsDark();
+        //ImGui::StyleColorsClassic();
+
+        SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
+
+        // Setup Platform/Renderer bindings
+        ImGui_ImplGlfw_InitForVulkan(window, true);
+        ImGui_ImplVulkan_InitInfo init_info = {};
+        init_info.Instance = instance;
+        init_info.PhysicalDevice = physicalDevice;
+        init_info.Device = device;
+        init_info.QueueFamily = findQueueFamilies(physicalDevice).graphicsAndComputeFamily.value();
+        init_info.Queue = graphicsQueue;
+        init_info.PipelineCache = VK_NULL_HANDLE;
+        init_info.DescriptorPool = descriptorPool;
+        init_info.Allocator = nullptr;
+        init_info.MSAASamples = msaaSamples;
+        init_info.MinImageCount = swapChainSupport.capabilities.minImageCount;
+        init_info.ImageCount = static_cast<uint32_t>(swapChainImages.size());
+        init_info.RenderPass = renderPass;
+        init_info.Subpass = 0;
+        init_info.CheckVkResultFn = check_vk_result;
+        ImGui_ImplVulkan_Init(&init_info);
+    }
+
     void createInstance()
     {
-        
         if (enableValidationLayers && !checkValidationLayerSupport())
             throw std::runtime_error("validation layers requested, but not available!");
         
@@ -2185,6 +2233,10 @@ private:
 
     void cleanup()
     {
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        
         cleanupSwapChain();
 
         vkDestroySampler(device, textureSampler, nullptr);
