@@ -32,12 +32,15 @@
 #include <fstream>
 #include <unordered_map>
 #include <random>
+#include <filesystem>
+
+#include "Path.h"
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
 
-const std::string MODEL_PATH = "models/viking_room.obj";
-const std::string TEXTURE_PATH = "textures/viking_room.png";
+const std::string MODEL_PATH = "../../Resources/models/viking_room.obj";
+const std::string TEXTURE_PATH = "../../Resources/textures/viking_room.png";
 
 const std::vector<const char*> validationLayers =
 {
@@ -95,7 +98,7 @@ struct SwapChainSupportDetails
 
 static std::vector<char> readFile(const std::string& filename)
 {
-    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    std::ifstream file(Path::Combine(Path::GetExecutableDirectory(), filename), std::ios::ate | std::ios::binary);
 
     if (!file.is_open())
         throw std::runtime_error("failed to open file!");
@@ -893,8 +896,8 @@ private:
 
     void createGraphicsPipeline()
     {
-        auto vertShaderCode = readFile("shaders/vert.spv");
-        auto fragShaderCode = readFile("shaders/frag.spv");
+        auto vertShaderCode = readFile("../../Resources/shaders/triangle_vert.spv");
+        auto fragShaderCode = readFile("../../Resources/shaders/triangle_frag.spv");
 
         VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
         VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
@@ -1053,7 +1056,7 @@ private:
 
     void createComputePipeline()
     {
-        auto computeShaderCode = readFile("shaders/compute.spv");
+        auto computeShaderCode = readFile("../../Resources/shaders/particle_compute.spv");
 
         VkShaderModule computeShaderModule = createShaderModule(computeShaderCode);
 
@@ -1540,7 +1543,7 @@ private:
     void createTextureImage()
     {
         int texWidth, texHeight, texChannels;
-        stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+        stbi_uc* pixels = stbi_load(Path::Combine(Path::GetExecutableDirectory(), TEXTURE_PATH).c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
         VkDeviceSize imageSize = texWidth * texHeight * 4;
 
         if (!pixels)
@@ -1636,7 +1639,7 @@ private:
         std::vector<tinyobj::material_t> materials;
         std::string err;
 
-        if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, MODEL_PATH.c_str()))
+        if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, Path::Combine(Path::GetExecutableDirectory(), MODEL_PATH).c_str()))
             throw std::runtime_error(err);
 
         std::unordered_map<Vertex, uint32_t> uniqueVertices{};
@@ -2018,7 +2021,7 @@ private:
             drawFrame();
             // We want to animate the particle system using the last frames time to get smooth, frame-rate independent animation
             double currentTime = glfwGetTime();
-            lastFrameTime = (currentTime - lastTime) * 1000.0;
+            lastFrameTime = static_cast<float>((currentTime - lastTime) * 1000.0);
             lastTime = currentTime;
         }
 
@@ -2314,8 +2317,11 @@ private:
     double lastTime = 0.0f;
 };
 
-int main()
+int main(int argc,char* argv[])
 {
+    auto a = std::filesystem::current_path();
+    Path::InitFromArgv(argv[0]);
+    
     HelloTriangleApplication app;
 
     try
