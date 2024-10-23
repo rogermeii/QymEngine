@@ -35,6 +35,7 @@
 #include <filesystem>
 
 #include "imgui.h"
+#include <imgui_internal.h>
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 
@@ -397,6 +398,9 @@ private:
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO(); (void)io;
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        io.ConfigDockingAlwaysTabBar         = true;
+        io.ConfigWindowsMoveFromTitleBarOnly = true;
         //io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
         //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
 
@@ -2229,13 +2233,112 @@ private:
         SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
         ImGui_ImplVulkan_SetMinImageCount(swapChainSupport.capabilities.minImageCount);
     }
+
+    void drawImGui()
+    {
+        ImGuiDockNodeFlags dock_flags   = ImGuiDockNodeFlags_DockSpace;
+        ImGuiWindowFlags   window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar |
+                                        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                                        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBackground |
+                                        ImGuiConfigFlags_NoMouseCursorChange | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+        const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(main_viewport->WorkPos, ImGuiCond_Always);
+        std::array<int, 2> window_size = {(int)swapChainExtent.width, (int)swapChainExtent.height};
+        ImGui::SetNextWindowSize(ImVec2((float)window_size[0], (float)window_size[1]), ImGuiCond_Always);
+
+        ImGui::SetNextWindowViewport(main_viewport->ID);
+
+        ImGui::Begin("Editor menu", &m_editor_menu_window_open, window_flags);
+
+        ImGuiID main_docking_id = ImGui::GetID("Main Docking");
+        if (ImGui::DockBuilderGetNode(main_docking_id) == nullptr)
+        {
+            ImGui::DockBuilderRemoveNode(main_docking_id);
+
+            ImGui::DockBuilderAddNode(main_docking_id, dock_flags);
+            ImGui::DockBuilderSetNodePos(main_docking_id,
+                                         ImVec2(main_viewport->WorkPos.x, main_viewport->WorkPos.y + 18.0f));
+            ImGui::DockBuilderSetNodeSize(main_docking_id,
+                                          ImVec2((float)window_size[0], (float)window_size[1] - 18.0f));
+
+            ImGuiID center = main_docking_id;
+            ImGuiID left;
+            ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.25f, nullptr, &left);
+
+            ImGuiID left_other;
+            ImGuiID left_file_content = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.30f, nullptr, &left_other);
+
+            ImGuiID left_game_engine;
+            ImGuiID left_asset =
+                ImGui::DockBuilderSplitNode(left_other, ImGuiDir_Left, 0.30f, nullptr, &left_game_engine);
+
+            ImGui::DockBuilderDockWindow("World Objects", left_asset);
+            ImGui::DockBuilderDockWindow("Components Details", right);
+            ImGui::DockBuilderDockWindow("File Content", left_file_content);
+            ImGui::DockBuilderDockWindow("Game Engine", left_game_engine);
+
+            ImGui::DockBuilderFinish(main_docking_id);
+        }
+
+        ImGui::DockSpace(main_docking_id);
+
+        if (ImGui::BeginMenuBar())
+        {
+            if (ImGui::BeginMenu("Menu"))
+            {
+                if (ImGui::MenuItem("Reload Current Level"))
+                {
+                }
+                if (ImGui::MenuItem("Save Current Level"))
+                {
+                }
+                if (ImGui::BeginMenu("Debug"))
+                {
+                    if (ImGui::BeginMenu("Animation"))
+                    {
+                        ImGui::EndMenu();
+                    }
+                    if (ImGui::BeginMenu("Camera"))
+                    {
+                        ImGui::EndMenu();
+                    }
+                    if (ImGui::BeginMenu("Game Object"))
+                    {
+                        ImGui::EndMenu();
+                    }
+                    ImGui::EndMenu();
+                }
+                if (ImGui::MenuItem("Exit"))
+                {
+                    exit(0);
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Window"))
+            {
+                ImGui::MenuItem("World Objects", nullptr, &m_asset_window_open);
+                ImGui::MenuItem("Game", nullptr, &m_game_engine_window_open);
+                ImGui::MenuItem("File Content", nullptr, &m_file_content_window_open);
+                ImGui::MenuItem("Detail", nullptr, &m_detail_window_open);
+                ImGui::EndMenu();
+            }
+            ImGui::EndMenuBar();
+        }
+
+        ImGui::End();
+
+        ImGui::ShowDemoWindow();
+    }
     
     void drawFrame()
     {
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        ImGui::ShowDemoWindow();
+
+        drawImGui();
+        
         ImGui::Render();
         
         VkSubmitInfo submitInfo{};
@@ -2516,6 +2619,12 @@ private:
     std::vector<VkFramebuffer> imGuiFramebuffers;
     VkCommandPool imGuiCommandPool;
     std::vector<VkCommandBuffer> imGuiCommandBuffers;
+
+    bool m_editor_menu_window_open       = true;
+    bool m_asset_window_open             = true;
+    bool m_game_engine_window_open       = true;
+    bool m_file_content_window_open      = true;
+    bool m_detail_window_open            = true;
     
     bool framebufferResized = false;
 
