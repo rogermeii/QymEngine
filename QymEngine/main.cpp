@@ -401,12 +401,21 @@ private:
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         io.ConfigDockingAlwaysTabBar         = true;
         io.ConfigWindowsMoveFromTitleBarOnly = true;
+        io.FontGlobalScale = 2.5f;
         //io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
         //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+
+        ImGuiStyle& style     = ImGui::GetStyle();
+        style.WindowPadding   = ImVec2(1.0, 0);
+        style.FramePadding    = ImVec2(14.0, 2.0f);
+        style.ChildBorderSize = 0.0f;
+        style.FrameRounding   = 5.0f;
+        style.FrameBorderSize = 1.5f;
 
         // Setup Dear ImGui style
         ImGui::StyleColorsDark();
         //ImGui::StyleColorsClassic();
+        
 
         createImGuiDescriptorPool();
         CreateImGuiRenderPass();
@@ -2234,7 +2243,7 @@ private:
         ImGui_ImplVulkan_SetMinImageCount(swapChainSupport.capabilities.minImageCount);
     }
 
-    void drawImGui()
+    void showEditorMenu(bool* p_open)
     {
         ImGuiDockNodeFlags dock_flags   = ImGuiDockNodeFlags_DockSpace;
         ImGuiWindowFlags   window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar |
@@ -2249,7 +2258,7 @@ private:
 
         ImGui::SetNextWindowViewport(main_viewport->ID);
 
-        ImGui::Begin("Editor menu", &m_editor_menu_window_open, window_flags);
+        ImGui::Begin("Editor menu", p_open, window_flags);
 
         ImGuiID main_docking_id = ImGui::GetID("Main Docking");
         if (ImGui::DockBuilderGetNode(main_docking_id) == nullptr)
@@ -2328,7 +2337,139 @@ private:
 
         ImGui::End();
 
-        ImGui::ShowDemoWindow();
+        // ImGui::ShowDemoWindow();
+    }
+
+    void showEditorWorldObjectsWindow(bool* p_open)
+    {
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
+
+        const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+
+        if (!*p_open)
+            return;
+
+        if (!ImGui::Begin("World Objects", p_open, window_flags))
+        {
+            ImGui::End();
+            return;
+        }
+
+        ImGui::End();
+    }
+
+    void showEditorGameWindow(bool* p_open)
+    {
+        ImGuiIO&         io           = ImGui::GetIO();
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
+
+        const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+
+        if (!*p_open)
+            return;
+
+        if (!ImGui::Begin("Game Engine", p_open, window_flags))
+        {
+            ImGui::End();
+            return;
+        }
+
+        if (ImGui::BeginMenuBar())
+        {
+            ImGui::Indent(10.f);
+            ImGui::Unindent();
+
+            ImGui::SameLine();
+
+            ImGui::SameLine();
+
+            ImGui::SameLine();
+
+            float indent_val = 0.0f;
+
+            ImGui::Indent(indent_val);
+            if (true)
+            {
+                ImGui::PushID("Editor Mode");
+                if (ImGui::Button("Editor Mode"))
+                {
+                }
+                ImGui::PopID();
+            }
+            else
+            {
+                if (ImGui::Button("Game Mode"))
+                {
+                }
+            }
+
+            ImGui::Unindent();
+            ImGui::EndMenuBar();
+        }
+
+        ImGui::End();
+    }
+
+    void showEditorFileContentWindow(bool* p_open)
+    {
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
+
+        const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+
+        if (!*p_open)
+            return;
+
+        if (!ImGui::Begin("File Content", p_open, window_flags))
+        {
+            ImGui::End();
+            return;
+        }
+
+        static ImGuiTableFlags flags = ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
+                                       ImGuiTableFlags_Resizable | ImGuiTableFlags_RowBg |
+                                       ImGuiTableFlags_NoBordersInBody;
+
+        if (ImGui::BeginTable("File Content", 2, flags))
+        {
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_NoHide);
+            ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableHeadersRow();
+
+            ImGui::EndTable();
+        }
+
+        // file image list
+
+        ImGui::End();
+    }
+
+    void showEditorDetailWindow(bool* p_open)
+    {
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
+
+        const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+
+        if (!*p_open)
+            return;
+
+        if (!ImGui::Begin("Components Details", p_open, window_flags))
+        {
+            ImGui::End();
+            return;
+        }
+
+        ImGui::Text("Name");
+        ImGui::SameLine();
+        ImGui::End();
+    }
+
+    void drawImGui()
+    {
+        showEditorMenu(&m_editor_menu_window_open);
+        showEditorWorldObjectsWindow(&m_asset_window_open);
+        showEditorGameWindow(&m_game_engine_window_open);
+        showEditorFileContentWindow(&m_file_content_window_open);
+        showEditorDetailWindow(&m_detail_window_open);
     }
     
     void drawFrame()
