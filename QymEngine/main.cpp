@@ -284,7 +284,8 @@ private:
         createComputePipeline();
         createCommandPool(&commandPool, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
         createColorResources();
-        createDepthResources();
+        createMsaaColorResources();
+        createMsaaDepthResources();
         createShaderStorageBuffers();
         createFramebuffers();
         createTextureImage();
@@ -322,7 +323,7 @@ private:
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        poolInfo.maxSets = 1;
+        poolInfo.maxSets = 2;
         poolInfo.poolSizeCount = (uint32_t)IM_ARRAYSIZE(pool_sizes);
         poolInfo.pPoolSizes = pool_sizes;
 
@@ -335,11 +336,11 @@ private:
         VkAttachmentDescription colorAttachment{};
         colorAttachment.format = swapChainImageFormat;
         colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
         VkAttachmentReference colorAttachmentRef{};
@@ -449,6 +450,8 @@ private:
         createCommandBuffers(imGuiCommandBuffers.data(), static_cast<uint32_t>(imGuiCommandBuffers.size()), imGuiCommandPool);
 
         createImGuiFramebuffers();
+
+        viewportImageSet = ImGui_ImplVulkan_AddTexture(textureSampler, colorImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
     void createInstance()
@@ -944,7 +947,7 @@ private:
         colorAttachmentResolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         colorAttachmentResolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         colorAttachmentResolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         VkAttachmentReference colorAttachmentRef{};
         colorAttachmentRef.attachment = 0;
@@ -1255,9 +1258,9 @@ private:
         for (size_t i = 0; i < swapChainImageViews.size(); i++)
         {
             std::array<VkImageView, 3> attachments = {
-                colorImageView,
-                depthImageView,
-                swapChainImageViews[i]
+                msaaColorImageView,
+                msaaDepthImageView,
+                colorImageView
             };
 
             VkFramebufferCreateInfo framebufferInfo{};
@@ -1560,19 +1563,29 @@ private:
     void createColorResources()
     {
         VkFormat colorFormat = swapChainImageFormat;
-
-        createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, colorFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory);
+    
+        createImage(swapChainExtent.width, swapChainExtent.height, 1, VK_SAMPLE_COUNT_1_BIT, colorFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory);
         colorImageView = createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+        
+        // transitionImageLayout(colorImage, colorFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 1);
+    }
+    
+    void createMsaaColorResources()
+    {
+        VkFormat colorFormat = swapChainImageFormat;
+
+        createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, colorFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, msaaColorImage, msaaColorImageMemory);
+        msaaColorImageView = createImageView(msaaColorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
     }
 
-    void createDepthResources()
+    void createMsaaDepthResources()
     {
         VkFormat depthFormat = findDepthFormat();
 
-        createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
-        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
+        createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, msaaDepthImage, msaaDepthImageMemory);
+        msaaDepthImageView = createImageView(msaaDepthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
 
-        // transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1);
+        // transitionImageLayout(msaaDepthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1);
     }
 
     void createShaderStorageBuffers()
@@ -2234,13 +2247,17 @@ private:
         createSwapChain();
         createImageViews();
         createColorResources();
-        createDepthResources();
+        createMsaaColorResources();
+        createMsaaDepthResources();
         createFramebuffers();
 
         createImGuiFramebuffers();
 
         SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
         ImGui_ImplVulkan_SetMinImageCount(swapChainSupport.capabilities.minImageCount);
+
+        ImGui_ImplVulkan_RemoveTexture(viewportImageSet);
+        viewportImageSet = ImGui_ImplVulkan_AddTexture(textureSampler, colorImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
     void showEditorMenu(bool* p_open)
@@ -2406,6 +2423,9 @@ private:
             ImGui::Unindent();
             ImGui::EndMenuBar();
         }
+
+        ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
+        ImGui::Image(reinterpret_cast<ImTextureID>(viewportImageSet), ImVec2{viewportPanelSize.x, viewportPanelSize.y});
 
         ImGui::End();
     }
@@ -2605,9 +2625,13 @@ private:
         vkDestroyImage(device, colorImage, nullptr);
         vkFreeMemory(device, colorImageMemory, nullptr);
         
-        vkDestroyImageView(device, depthImageView, nullptr);
-        vkDestroyImage(device, depthImage, nullptr);
-        vkFreeMemory(device, depthImageMemory, nullptr);
+        vkDestroyImageView(device, msaaColorImageView, nullptr);
+        vkDestroyImage(device, msaaColorImage, nullptr);
+        vkFreeMemory(device, msaaColorImageMemory, nullptr);
+        
+        vkDestroyImageView(device, msaaDepthImageView, nullptr);
+        vkDestroyImage(device, msaaDepthImage, nullptr);
+        vkFreeMemory(device, msaaDepthImageMemory, nullptr);
         
         for (size_t i = 0; i < swapChainFramebuffers.size(); i++)
             vkDestroyFramebuffer(device, swapChainFramebuffers[i], nullptr);
@@ -2739,9 +2763,14 @@ private:
     VkImage colorImage;
     VkDeviceMemory colorImageMemory;
     VkImageView colorImageView;
-    VkImage depthImage;
-    VkDeviceMemory depthImageMemory;
-    VkImageView depthImageView;
+    VkDescriptorSet viewportImageSet;
+    
+    VkImage msaaColorImage;
+    VkDeviceMemory msaaColorImageMemory;
+    VkImageView msaaColorImageView;
+    VkImage msaaDepthImage;
+    VkDeviceMemory msaaDepthImageMemory;
+    VkImageView msaaDepthImageView;
 
     VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 
