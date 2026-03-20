@@ -145,10 +145,10 @@ void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& sc
     if (ImGui::IsWindowHovered() && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
         ImGuiIO& io = ImGui::GetIO();
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-            camera.orbit(io.MouseDelta.x * 0.3f, -io.MouseDelta.y * 0.3f);
+            camera.orbit(io.MouseDelta.x * 0.3f, io.MouseDelta.y * 0.3f);
         }
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
-            camera.pan(-io.MouseDelta.x * 0.01f, io.MouseDelta.y * 0.01f);
+            camera.pan(-io.MouseDelta.x * 0.003f, io.MouseDelta.y * 0.003f);
         }
         if (io.MouseWheel != 0.0f) {
             camera.zoom(-io.MouseWheel * 0.5f);
