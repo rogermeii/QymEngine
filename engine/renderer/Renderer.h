@@ -86,6 +86,11 @@ private:
     uint32_t         m_offscreenWidth  = 0;
     uint32_t         m_offscreenHeight = 0;
 
+    // Depth buffer for offscreen rendering
+    VkImage          m_offscreenDepthImage      = VK_NULL_HANDLE;
+    VkDeviceMemory   m_offscreenDepthMemory     = VK_NULL_HANDLE;
+    VkImageView      m_offscreenDepthImageView  = VK_NULL_HANDLE;
+
     // Pipeline for offscreen render pass
     Pipeline         m_offscreenPipeline;
 };

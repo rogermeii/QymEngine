@@ -3,6 +3,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <array>
 #include <stdexcept>
 #include <cstring>
 
@@ -232,7 +233,7 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
 
     vkBindImageMemory(device, m_offscreenImage, m_offscreenMemory, 0);
 
-    // --- 2. Create image view ---
+    // --- 2. Create color image view ---
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image                           = m_offscreenImage;
@@ -246,6 +247,54 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
 
     if (vkCreateImageView(device, &viewInfo, nullptr, &m_offscreenImageView) != VK_SUCCESS)
         throw std::runtime_error("failed to create offscreen image view!");
+
+    // --- 2b. Create depth image ---
+    {
+        VkImageCreateInfo depthImageInfo{};
+        depthImageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        depthImageInfo.imageType     = VK_IMAGE_TYPE_2D;
+        depthImageInfo.extent        = {width, height, 1};
+        depthImageInfo.mipLevels     = 1;
+        depthImageInfo.arrayLayers   = 1;
+        depthImageInfo.format        = VK_FORMAT_D32_SFLOAT;
+        depthImageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        depthImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthImageInfo.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        depthImageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+        depthImageInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateImage(device, &depthImageInfo, nullptr, &m_offscreenDepthImage) != VK_SUCCESS)
+            throw std::runtime_error("failed to create offscreen depth image!");
+
+        VkMemoryRequirements depthMemReqs;
+        vkGetImageMemoryRequirements(device, m_offscreenDepthImage, &depthMemReqs);
+
+        VkMemoryAllocateInfo depthAllocInfo{};
+        depthAllocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        depthAllocInfo.allocationSize  = depthMemReqs.size;
+        depthAllocInfo.memoryTypeIndex = m_context.findMemoryType(depthMemReqs.memoryTypeBits,
+                                                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        if (vkAllocateMemory(device, &depthAllocInfo, nullptr, &m_offscreenDepthMemory) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate offscreen depth image memory!");
+
+        vkBindImageMemory(device, m_offscreenDepthImage, m_offscreenDepthMemory, 0);
+
+        // Create depth image view
+        VkImageViewCreateInfo depthViewInfo{};
+        depthViewInfo.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        depthViewInfo.image                           = m_offscreenDepthImage;
+        depthViewInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+        depthViewInfo.format                          = VK_FORMAT_D32_SFLOAT;
+        depthViewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+        depthViewInfo.subresourceRange.baseMipLevel   = 0;
+        depthViewInfo.subresourceRange.levelCount     = 1;
+        depthViewInfo.subresourceRange.baseArrayLayer = 0;
+        depthViewInfo.subresourceRange.layerCount     = 1;
+
+        if (vkCreateImageView(device, &depthViewInfo, nullptr, &m_offscreenDepthImageView) != VK_SUCCESS)
+            throw std::runtime_error("failed to create offscreen depth image view!");
+    }
 
     // --- 3. Create sampler (once, shared across resizes) ---
     if (m_offscreenSampler == VK_NULL_HANDLE)
@@ -285,14 +334,31 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         colorAttachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
         colorAttachment.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+        VkAttachmentDescription depthAttachment{};
+        depthAttachment.format         = VK_FORMAT_D32_SFLOAT;
+        depthAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
+        depthAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthAttachment.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+
         VkAttachmentReference colorRef{};
         colorRef.attachment = 0;
         colorRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+        VkAttachmentReference depthAttachmentRef{};
+        depthAttachmentRef.attachment = 1;
+        depthAttachmentRef.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
         VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments    = &colorRef;
+        subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount    = 1;
+        subpass.pColorAttachments       = &colorRef;
+        subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
         // Dependencies to ensure proper synchronization
         VkSubpassDependency dependencies[2] = {};
@@ -302,23 +368,23 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         dependencies[0].dstSubpass      = 0;
         dependencies[0].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
         dependencies[0].srcAccessMask   = VK_ACCESS_SHADER_READ_BIT;
-        dependencies[0].dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[0].dstAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[0].dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependencies[0].dstAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
         // After render pass: make sure color writes are visible to fragment shader
         dependencies[1].srcSubpass      = 0;
         dependencies[1].dstSubpass      = VK_SUBPASS_EXTERNAL;
-        dependencies[1].srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[1].srcAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        dependencies[1].srcAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         dependencies[1].dstStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
         dependencies[1].dstAccessMask   = VK_ACCESS_SHADER_READ_BIT;
         dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
         VkRenderPassCreateInfo rpInfo{};
         rpInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        rpInfo.attachmentCount = 1;
-        rpInfo.pAttachments    = &colorAttachment;
+        rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        rpInfo.pAttachments    = attachments.data();
         rpInfo.subpassCount    = 1;
         rpInfo.pSubpasses      = &subpass;
         rpInfo.dependencyCount = 2;
@@ -339,12 +405,14 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
                                    pcRanges);
     }
 
-    // --- 5. Create framebuffer ---
+    // --- 5. Create framebuffer (color + depth) ---
+    std::array<VkImageView, 2> fbAttachments = { m_offscreenImageView, m_offscreenDepthImageView };
+
     VkFramebufferCreateInfo fbInfo{};
     fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fbInfo.renderPass      = m_offscreenRenderPass;
-    fbInfo.attachmentCount = 1;
-    fbInfo.pAttachments    = &m_offscreenImageView;
+    fbInfo.attachmentCount = static_cast<uint32_t>(fbAttachments.size());
+    fbInfo.pAttachments    = fbAttachments.data();
     fbInfo.width           = width;
     fbInfo.height          = height;
     fbInfo.layers          = 1;
@@ -366,6 +434,24 @@ void Renderer::resizeOffscreen(uint32_t width, uint32_t height)
     {
         vkDestroyFramebuffer(device, m_offscreenFramebuffer, nullptr);
         m_offscreenFramebuffer = VK_NULL_HANDLE;
+    }
+
+    if (m_offscreenDepthImageView != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(device, m_offscreenDepthImageView, nullptr);
+        m_offscreenDepthImageView = VK_NULL_HANDLE;
+    }
+
+    if (m_offscreenDepthImage != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(device, m_offscreenDepthImage, nullptr);
+        m_offscreenDepthImage = VK_NULL_HANDLE;
+    }
+
+    if (m_offscreenDepthMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(device, m_offscreenDepthMemory, nullptr);
+        m_offscreenDepthMemory = VK_NULL_HANDLE;
     }
 
     if (m_offscreenImageView != VK_NULL_HANDLE)
@@ -398,6 +484,24 @@ void Renderer::destroyOffscreen()
     {
         vkDestroyFramebuffer(device, m_offscreenFramebuffer, nullptr);
         m_offscreenFramebuffer = VK_NULL_HANDLE;
+    }
+
+    if (m_offscreenDepthImageView != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(device, m_offscreenDepthImageView, nullptr);
+        m_offscreenDepthImageView = VK_NULL_HANDLE;
+    }
+
+    if (m_offscreenDepthImage != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(device, m_offscreenDepthImage, nullptr);
+        m_offscreenDepthImage = VK_NULL_HANDLE;
+    }
+
+    if (m_offscreenDepthMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(device, m_offscreenDepthMemory, nullptr);
+        m_offscreenDepthMemory = VK_NULL_HANDLE;
     }
 
     if (m_offscreenImageView != VK_NULL_HANDLE)
@@ -443,9 +547,11 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = {m_offscreenWidth, m_offscreenHeight};
 
-    VkClearValue clearColor = {{{0.1f, 0.1f, 0.1f, 1.0f}}};
-    renderPassInfo.clearValueCount = 1;
-    renderPassInfo.pClearValues    = &clearColor;
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.1f, 0.1f, 0.1f, 1.0f}};
+    clearValues[1].depthStencil = {1.0f, 0};
+    renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassInfo.pClearValues    = clearValues.data();
 
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -470,7 +576,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
-    vkCmdBindIndexBuffer(commandBuffer, m_buffer.getIndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
+    vkCmdBindIndexBuffer(commandBuffer, m_buffer.getIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
 
     VkDescriptorSet descriptorSet = m_descriptor.getSet(m_currentFrame);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
