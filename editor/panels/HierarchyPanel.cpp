@@ -3,16 +3,49 @@
 
 namespace QymEngine {
 
-void HierarchyPanel::onImGuiRender()
-{
+void HierarchyPanel::onImGuiRender(Scene& scene) {
     ImGui::Begin("Hierarchy");
-    ImGui::Text("Scene");
-    ImGui::Indent();
-    ImGui::Selectable("Main Camera");
-    ImGui::Selectable("Directional Light");
-    ImGui::Selectable("Triangle");
-    ImGui::Unindent();
+
+    if (ImGui::Button("Add Node")) {
+        scene.createNode("New Node");
+    }
+
+    for (auto& child : scene.getRoot()->getChildren())
+        drawNodeTree(child.get(), scene);
+
+    // Click empty space to deselect
+    if (ImGui::IsMouseDown(0) && ImGui::IsWindowHovered())
+        scene.setSelectedNode(nullptr);
+
     ImGui::End();
+}
+
+void HierarchyPanel::drawNodeTree(Node* node, Scene& scene) {
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (node == scene.getSelectedNode())
+        flags |= ImGuiTreeNodeFlags_Selected;
+    if (node->getChildren().empty())
+        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+
+    bool opened = ImGui::TreeNodeEx((void*)(intptr_t)node, flags, "%s", node->name.c_str());
+
+    if (ImGui::IsItemClicked())
+        scene.setSelectedNode(node);
+
+    // Right-click context menu
+    if (ImGui::BeginPopupContextItem()) {
+        if (ImGui::MenuItem("Create Empty Child"))
+            node->addChild("New Node");
+        if (ImGui::MenuItem("Delete"))
+            scene.removeNode(node);
+        ImGui::EndPopup();
+    }
+
+    if (opened && !(flags & ImGuiTreeNodeFlags_Leaf)) {
+        for (auto& child : node->getChildren())
+            drawNodeTree(child.get(), scene);
+        ImGui::TreePop();
+    }
 }
 
 } // namespace QymEngine
