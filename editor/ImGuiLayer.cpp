@@ -8,6 +8,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
+#include <ImGuizmo.h>
 
 #include <stdexcept>
 
@@ -122,6 +123,7 @@ void ImGuiLayer::beginFrame()
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    ImGuizmo::BeginFrame();
 }
 
 void ImGuiLayer::endFrame(VkCommandBuffer cmd, uint32_t imageIndex)

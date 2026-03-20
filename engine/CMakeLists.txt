@@ -15,6 +15,7 @@ target_compile_definitions(QymEngineLib PUBLIC
     GLM_FORCE_RADIANS
     GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
     GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_ENABLE_EXPERIMENTAL
 )
 
 # 临时：现有 main.cpp 直接编译为可执行文件
