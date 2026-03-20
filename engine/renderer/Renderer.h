@@ -8,6 +8,7 @@
 #include "renderer/Texture.h"
 #include "renderer/Descriptor.h"
 #include "renderer/CommandManager.h"
+#include "scene/Scene.h"
 
 #include <functional>
 
@@ -21,7 +22,7 @@ public:
 
     void init(Window& window);
     bool beginFrame();
-    void drawScene();
+    void drawScene(Scene& scene);
     void endFrame();
     void shutdown();
 
@@ -41,7 +42,7 @@ public:
     void createOffscreen(uint32_t width, uint32_t height);
     void resizeOffscreen(uint32_t width, uint32_t height);
     void destroyOffscreen();
-    void drawSceneToOffscreen(VkCommandBuffer cmd);
+    void drawSceneToOffscreen(VkCommandBuffer cmd, Scene& scene);
 
     VkSampler   getOffscreenSampler()   const { return m_offscreenSampler; }
     VkImageView getOffscreenImageView() const { return m_offscreenImageView; }

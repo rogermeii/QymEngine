@@ -1,5 +1,6 @@
 #include "core/Application.h"
 #include "renderer/Renderer.h"
+#include "scene/Scene.h"
 #include <iostream>
 #include <stdexcept>
 
@@ -10,11 +11,12 @@ public:
 protected:
     void onInit() override {
         m_renderer.init(getWindow());
+        m_scene.createNode("Quad");
     }
 
     void onUpdate() override {
         if (m_renderer.beginFrame()) {
-            m_renderer.drawScene();
+            m_renderer.drawScene(m_scene);
             m_renderer.endFrame();
         }
     }
@@ -25,6 +27,7 @@ protected:
 
 private:
     QymEngine::Renderer m_renderer;
+    QymEngine::Scene    m_scene;
 };
 
 int main() {

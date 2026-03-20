@@ -20,6 +20,8 @@ void EditorApp::onInit()
         m_imguiLayer.onSwapChainRecreated(m_renderer);
     });
 
+    m_scene.createNode("Quad");
+
     m_consolePanel.init();
 
     Log::info("QymEngine Editor initialized");
@@ -33,7 +35,7 @@ void EditorApp::onUpdate()
     // Apply any pending offscreen resize before rendering the scene
     m_sceneViewPanel.applyPendingResize(m_renderer);
 
-    m_renderer.drawScene();
+    m_renderer.drawScene(m_scene);
 
     m_imguiLayer.beginFrame();
 

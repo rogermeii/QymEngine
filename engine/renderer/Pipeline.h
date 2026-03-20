@@ -7,7 +7,8 @@ namespace QymEngine {
 
 class Pipeline {
 public:
-    void create(VkDevice device, VkRenderPass renderPass, VkDescriptorSetLayout descriptorSetLayout, VkExtent2D extent);
+    void create(VkDevice device, VkRenderPass renderPass, VkDescriptorSetLayout descriptorSetLayout, VkExtent2D extent,
+                const std::vector<VkPushConstantRange>& pushConstantRanges = {});
     void cleanup(VkDevice device);
 
     VkPipeline       getPipeline()       const { return m_graphicsPipeline; }

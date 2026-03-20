@@ -2,6 +2,7 @@
 
 #include "core/Application.h"
 #include "renderer/Renderer.h"
+#include "scene/Scene.h"
 #include "ImGuiLayer.h"
 
 #include "panels/SceneViewPanel.h"
@@ -25,6 +26,7 @@ private:
     void setupDockingLayout();
 
     Renderer       m_renderer;
+    Scene          m_scene;
     ImGuiLayer     m_imguiLayer;
 
     SceneViewPanel m_sceneViewPanel;

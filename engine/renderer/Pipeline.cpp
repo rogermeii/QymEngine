@@ -37,7 +37,8 @@ VkShaderModule Pipeline::createShaderModule(VkDevice device, const std::vector<c
 }
 
 void Pipeline::create(VkDevice device, VkRenderPass renderPass,
-                      VkDescriptorSetLayout descriptorSetLayout, VkExtent2D extent)
+                      VkDescriptorSetLayout descriptorSetLayout, VkExtent2D extent,
+                      const std::vector<VkPushConstantRange>& pushConstantRanges)
 {
     auto vertShaderCode = readFile(std::string(ASSETS_DIR) + "/shaders/vert.spv");
     auto fragShaderCode = readFile(std::string(ASSETS_DIR) + "/shaders/frag.spv");
@@ -138,8 +139,8 @@ void Pipeline::create(VkDevice device, VkRenderPass renderPass,
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 0;
-    pipelineLayoutInfo.pPushConstantRanges = nullptr;
+    pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size());
+    pipelineLayoutInfo.pPushConstantRanges = pushConstantRanges.data();
 
     if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create pipeline layout!");

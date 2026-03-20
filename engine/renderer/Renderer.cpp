@@ -3,7 +3,6 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <chrono>
 #include <stdexcept>
 #include <cstring>
 
@@ -29,8 +28,16 @@ void Renderer::init(Window& window)
     m_renderPass.create(m_context.getDevice(), m_swapChain.getImageFormat());
 
     m_descriptor.createLayout(m_context.getDevice());
+
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(PushConstantData);
+    std::vector<VkPushConstantRange> pushConstantRanges = { pushConstantRange };
+
     m_pipeline.create(m_context.getDevice(), m_renderPass.get(),
-                      m_descriptor.getLayout(), m_swapChain.getExtent());
+                      m_descriptor.getLayout(), m_swapChain.getExtent(),
+                      pushConstantRanges);
 
     // Swapchain framebuffers — still created, used by ImGuiLayer's render pass
     // (ImGuiLayer creates its own framebuffers but SwapChain also needs them for
@@ -94,13 +101,13 @@ bool Renderer::beginFrame()
     return true;
 }
 
-void Renderer::drawScene()
+void Renderer::drawScene(Scene& scene)
 {
     // If offscreen is set up, render to offscreen. Otherwise no-op.
     if (m_offscreenRenderPass != VK_NULL_HANDLE && m_offscreenFramebuffer != VK_NULL_HANDLE)
     {
         VkCommandBuffer cmdBuf = m_commandManager.getBuffer(m_currentFrame);
-        drawSceneToOffscreen(cmdBuf);
+        drawSceneToOffscreen(cmdBuf, scene);
     }
 }
 
@@ -321,8 +328,15 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
             throw std::runtime_error("failed to create offscreen render pass!");
 
         // Create pipeline compatible with offscreen render pass
+        VkPushConstantRange pcRange{};
+        pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        pcRange.offset = 0;
+        pcRange.size = sizeof(PushConstantData);
+        std::vector<VkPushConstantRange> pcRanges = { pcRange };
+
         m_offscreenPipeline.create(device, m_offscreenRenderPass,
-                                   m_descriptor.getLayout(), {width, height});
+                                   m_descriptor.getLayout(), {width, height},
+                                   pcRanges);
     }
 
     // --- 5. Create framebuffer ---
@@ -420,7 +434,7 @@ void Renderer::destroyOffscreen()
     m_offscreenHeight = 0;
 }
 
-void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer)
+void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
 {
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -463,7 +477,16 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer)
                             m_offscreenPipeline.getPipelineLayout(), 0, 1,
                             &descriptorSet, 0, nullptr);
 
-    vkCmdDrawIndexed(commandBuffer, m_buffer.getIndexCount(), 1, 0, 0, 0);
+    // Render each scene node with its own model matrix via push constants
+    scene.traverseNodes([&](Node* node) {
+        PushConstantData pc{};
+        pc.model = node->getWorldMatrix();
+        pc.highlighted = (node == scene.getSelectedNode()) ? 1 : 0;
+        vkCmdPushConstants(commandBuffer, m_offscreenPipeline.getPipelineLayout(),
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(PushConstantData), &pc);
+        vkCmdDrawIndexed(commandBuffer, m_buffer.getIndexCount(), 1, 0, 0, 0);
+    });
 
     vkCmdEndRenderPass(commandBuffer);
 }
@@ -478,19 +501,13 @@ void Renderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
 
 void Renderer::updateUniformBuffer(uint32_t currentImage)
 {
-    static auto startTime = std::chrono::high_resolution_clock::now();
-
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
-
-    // Use offscreen dimensions for aspect ratio if available, else swapchain
-    float aspectWidth  = static_cast<float>(m_offscreenWidth  > 0 ? m_offscreenWidth  : m_swapChain.getExtent().width);
-    float aspectHeight = static_cast<float>(m_offscreenHeight > 0 ? m_offscreenHeight : m_swapChain.getExtent().height);
-
     UniformBufferObject ubo{};
-    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.view  = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.proj  = glm::perspective(glm::radians(45.0f), aspectWidth / aspectHeight, 0.1f, 10.0f);
+    ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+    float aspect = (m_offscreenWidth > 0)
+        ? m_offscreenWidth / static_cast<float>(m_offscreenHeight)
+        : 800.0f / 600.0f;
+    ubo.proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
     ubo.proj[1][1] *= -1;
 
     memcpy(m_buffer.getUniformBuffersMapped()[currentImage], &ubo, sizeof(ubo));

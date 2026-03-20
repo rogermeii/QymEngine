@@ -49,9 +49,15 @@ struct Vertex
 
 struct UniformBufferObject
 {
-    alignas(16) glm::mat4 model;
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
+};
+
+struct PushConstantData
+{
+    glm::mat4 model;       // 64 bytes
+    int highlighted = 0;   // 4 bytes
+    int _pad[3] = {};      // padding to 80 bytes
 };
 
 class Buffer {
