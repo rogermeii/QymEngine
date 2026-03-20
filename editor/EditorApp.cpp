@@ -8,6 +8,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <renderdoc_app.h>
+#include <GLFW/glfw3.h>
 
 namespace QymEngine {
 
@@ -83,9 +84,9 @@ void EditorApp::onUpdate()
     if (ImGui::IsKeyPressed(ImGuiKey_F12) && m_rdocApi)
         m_captureRequested = true;
 
-    // Auto-capture on startup (frame 3, after scene is fully rendered)
+    // Auto-capture on startup (frame 5, after scene is fully rendered)
     m_frameCount++;
-    if (!m_autoCaptureDone && m_rdocApi && m_frameCount == 3) {
+    if (!m_autoCaptureDone && m_rdocApi && m_frameCount == 5) {
         m_captureRequested = true;
         m_autoCaptureDone = true;
     }
@@ -118,9 +119,21 @@ void EditorApp::onUpdate()
             m_rdocApi->GetCapture(numCaptures - 1, path, &pathLen, nullptr);
             Log::info(std::string("RenderDoc: captured to ") + path);
 
-            // Auto-open in RenderDoc UI
-            if (!m_rdocApi->IsTargetControlConnected()) {
-                m_rdocApi->LaunchReplayUI(1, nullptr);
+            if (m_captureAndExit) {
+                // Write capture path to output file for analysis script
+                std::string outPath = m_captureOutputPath.empty()
+                    ? std::string(ASSETS_DIR) + "/../capture_path.txt"
+                    : m_captureOutputPath;
+                std::ofstream out(outPath);
+                out << path;
+                out.close();
+                Log::info("RenderDoc: capture-and-exit mode, shutting down");
+                glfwSetWindowShouldClose(m_window->getNativeWindow(), GLFW_TRUE);
+            } else {
+                // Auto-open in RenderDoc UI
+                if (!m_rdocApi->IsTargetControlConnected()) {
+                    m_rdocApi->LaunchReplayUI(1, nullptr);
+                }
             }
         }
     }
@@ -160,6 +173,12 @@ void EditorApp::setupDockingLayout()
     }
 }
 
+void EditorApp::setCaptureAndExit(bool enabled, const std::string& outputPath)
+{
+    m_captureAndExit = enabled;
+    m_captureOutputPath = outputPath;
+}
+
 void EditorApp::initRenderDoc()
 {
     HMODULE mod = GetModuleHandleA("renderdoc.dll");
@@ -189,6 +208,10 @@ void EditorApp::initRenderDoc()
     m_rdocApi->SetCaptureKeys(nullptr, 0);
     m_rdocApi->MaskOverlayBits(~RENDERDOC_OverlayBits::eRENDERDOC_Overlay_None,
                                 RENDERDOC_OverlayBits::eRENDERDOC_Overlay_None);
+
+    // Set capture file path prefix
+    std::string capturePath = std::string(ASSETS_DIR) + "/../captures/qymengine";
+    m_rdocApi->SetCaptureFilePathTemplate(capturePath.c_str());
 
     Log::info("RenderDoc: initialized (press F12 to capture frame)");
 }

@@ -19,6 +19,8 @@ namespace QymEngine {
 class EditorApp : public Application {
 public:
     EditorApp();
+    void setCaptureAndExit(bool enabled, const std::string& outputPath = "");
+
 
 protected:
     void onInit() override;
@@ -47,6 +49,8 @@ private:
     bool m_captureRequested = false;
     int m_frameCount = 0;
     bool m_autoCaptureDone = false;
+    bool m_captureAndExit = false;
+    std::string m_captureOutputPath;
 };
 
 } // namespace QymEngine
