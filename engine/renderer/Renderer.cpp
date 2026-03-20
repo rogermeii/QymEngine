@@ -619,6 +619,14 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
         ubo.proj[1][1] *= -1;
     }
 
+    ubo.lightDir = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
+    ubo.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
+    ubo.ambientColor = glm::vec3(0.15f, 0.15f, 0.15f);
+    if (m_camera)
+        ubo.cameraPos = m_camera->getPosition();
+    else
+        ubo.cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
+
     memcpy(m_buffer.getUniformBuffersMapped()[currentImage], &ubo, sizeof(ubo));
 }
 

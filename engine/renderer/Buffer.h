@@ -56,6 +56,10 @@ struct UniformBufferObject
 {
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
+    alignas(16) glm::vec3 lightDir;
+    alignas(16) glm::vec3 lightColor;
+    alignas(16) glm::vec3 ambientColor;
+    alignas(16) glm::vec3 cameraPos;
 };
 
 struct PushConstantData
