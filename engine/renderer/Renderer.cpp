@@ -725,7 +725,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     renderPassInfo.renderArea.extent = {m_offscreenWidth, m_offscreenHeight};
 
     std::array<VkClearValue, 2> clearValues{};
-    clearValues[0].color = {{0.1f, 0.1f, 0.1f, 1.0f}};
+    clearValues[0].color = {{0.4f, 0.4f, 0.45f, 1.0f}};  // match sky bottom color
     clearValues[1].depthStencil = {1.0f, 0};
     renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
     renderPassInfo.pClearValues    = clearValues.data();

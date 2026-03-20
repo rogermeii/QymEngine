@@ -17,8 +17,8 @@ layout(location = 0) out vec4 outColor;
 vec4 grid(vec3 fragPos, float scale, vec4 color) {
     vec2 coord = fragPos.xz / scale;
     vec2 derivative = fwidth(coord);
-    vec2 grid = abs(fract(coord - 0.5) - 0.5) / derivative;
-    float line = min(grid.x, grid.y);
+    vec2 g = abs(fract(coord - 0.5) - 0.5) / derivative;
+    float line = min(g.x, g.y);
     float alpha = 1.0 - min(line, 1.0);
     return vec4(color.rgb, alpha * color.a);
 }
