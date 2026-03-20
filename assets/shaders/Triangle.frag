@@ -23,6 +23,12 @@ layout(set = 1, binding = 0) uniform sampler2D texSampler;
 layout(location = 0) out vec4 outColor;
 
 void main() {
+    // Wireframe pass: output solid color, skip lighting
+    if (fragHighlighted == 1) {
+        outColor = fragBaseColor;
+        return;
+    }
+
     vec3 texColor = texture(texSampler, fragTexCoord).rgb;
     vec3 albedo = texColor * fragBaseColor.rgb;
     vec3 normal = normalize(fragNormal);
@@ -45,6 +51,4 @@ void main() {
 
     vec3 result = ambient + diffuse + specular;
     outColor = vec4(result, fragBaseColor.a);
-
-    // highlighted flag no longer used for color overlay (wireframe outline instead)
 }

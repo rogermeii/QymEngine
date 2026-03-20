@@ -623,7 +623,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         pc.baseColor = node->material.baseColor;
         pc.metallic = node->material.metallic;
         pc.roughness = node->material.roughness;
-        pc.highlighted = (node == scene.getSelectedNode()) ? 1 : 0;
+        pc.highlighted = 0;  // wireframe pass handles highlight
         vkCmdPushConstants(commandBuffer, m_offscreenPipeline.getPipelineLayout(),
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(PushConstantData), &pc);
@@ -660,7 +660,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         pc.baseColor = glm::vec4(1.0f, 0.5f, 0.0f, 1.0f); // orange outline
         pc.metallic = 0.0f;
         pc.roughness = 1.0f;
-        pc.highlighted = 0;
+        pc.highlighted = 1;
         vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(PushConstantData), &pc);
