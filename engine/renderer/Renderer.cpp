@@ -616,6 +616,9 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         // Push constants
         PushConstantData pc{};
         pc.model = node->getWorldMatrix();
+        pc.baseColor = node->material.baseColor;
+        pc.metallic = node->material.metallic;
+        pc.roughness = node->material.roughness;
         pc.highlighted = (node == scene.getSelectedNode()) ? 1 : 0;
         vkCmdPushConstants(commandBuffer, m_offscreenPipeline.getPipelineLayout(),
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

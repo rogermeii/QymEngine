@@ -11,6 +11,9 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
 
 layout(push_constant) uniform PushConstants {
     mat4 model;
+    vec4 baseColor;
+    float metallic;
+    float roughness;
     int highlighted;
 } pc;
 
@@ -24,6 +27,9 @@ layout(location = 1) out vec2 fragTexCoord;
 layout(location = 2) flat out int fragHighlighted;
 layout(location = 3) out vec3 fragNormal;
 layout(location = 4) out vec3 fragWorldPos;
+layout(location = 5) out vec4 fragBaseColor;
+layout(location = 6) out float fragMetallic;
+layout(location = 7) out float fragRoughness;
 
 void main() {
     vec4 worldPos = pc.model * vec4(inPosition, 1.0);
@@ -33,4 +39,7 @@ void main() {
     fragHighlighted = pc.highlighted;
     fragNormal = mat3(transpose(inverse(pc.model))) * inNormal;
     fragWorldPos = worldPos.xyz;
+    fragBaseColor = pc.baseColor;
+    fragMetallic = pc.metallic;
+    fragRoughness = pc.roughness;
 }

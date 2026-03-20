@@ -83,6 +83,12 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager) {
         }
     }
 
+    if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::ColorEdit4("Base Color", &selected->material.baseColor.x);
+        ImGui::SliderFloat("Metallic", &selected->material.metallic, 0.0f, 1.0f);
+        ImGui::SliderFloat("Roughness", &selected->material.roughness, 0.0f, 1.0f);
+    }
+
     ImGui::End();
 }
 
