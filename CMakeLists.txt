@@ -45,6 +45,10 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PUBLIC Vulkan::Vulkan glfw)
 
+# ImGuizmo (built as part of imgui since it depends on ImGui)
+target_sources(imgui PRIVATE "3rd-party/imguizmo/ImGuizmo.cpp")
+target_include_directories(imgui PUBLIC "${CMAKE_SOURCE_DIR}/3rd-party/imguizmo")
+
 # 引擎（暂时直接编译 main.cpp 为可执行文件）
 add_subdirectory(engine)
 
