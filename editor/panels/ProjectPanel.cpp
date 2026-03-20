@@ -167,11 +167,33 @@ void ProjectPanel::onImGuiRender()
 
         ImGui::PushStyleColor(ImGuiCol_Text, color);
         std::string label = prefix + f.name;
-        ImGui::Selectable(label.c_str()); // display-only, no action on click
+        std::string relativePath = m_currentDir.empty() ? f.name : m_currentDir + "/" + f.name;
+        bool isSelected = (m_selectedFile == relativePath);
+        if (ImGui::Selectable(label.c_str(), isSelected)) {
+            m_selectedFile = relativePath;
+        }
         ImGui::PopStyleColor();
     }
 
     ImGui::End();
+}
+
+bool ProjectPanel::isSelectedImage() const {
+    if (m_selectedFile.empty()) return false;
+    std::string ext;
+    size_t dot = m_selectedFile.rfind('.');
+    if (dot != std::string::npos) ext = m_selectedFile.substr(dot);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+    return ext == ".jpg" || ext == ".jpeg" || ext == ".png";
+}
+
+bool ProjectPanel::isSelectedModel() const {
+    if (m_selectedFile.empty()) return false;
+    std::string ext;
+    size_t dot = m_selectedFile.rfind('.');
+    if (dot != std::string::npos) ext = m_selectedFile.substr(dot);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+    return ext == ".obj";
 }
 
 } // namespace QymEngine

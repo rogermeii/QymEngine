@@ -4,12 +4,39 @@
 
 namespace QymEngine {
 
-void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, ModelPreview& modelPreview) {
+void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, ModelPreview& modelPreview, ProjectPanel& projectPanel) {
     ImGui::Begin("Inspector");
 
     Node* selected = scene.getSelectedNode();
     if (!selected) {
-        ImGui::Text("No node selected");
+        // Asset preview mode: show preview of selected file in Project panel
+        if (projectPanel.hasSelectedFile()) {
+            ImGui::Text("Asset: %s", projectPanel.getSelectedFile().c_str());
+            ImGui::Separator();
+
+            if (projectPanel.isSelectedImage()) {
+                auto* tex = assetManager.loadTexture(projectPanel.getSelectedFile());
+                if (tex && tex->descriptorSet != VK_NULL_HANDLE) {
+                    ImGui::Text("Texture Preview:");
+                    float previewSize = ImGui::GetContentRegionAvail().x - 10.0f;
+                    if (previewSize < 64.0f) previewSize = 64.0f;
+                    if (previewSize > 512.0f) previewSize = 512.0f;
+                    ImGui::Image(reinterpret_cast<ImTextureID>(tex->descriptorSet), ImVec2(previewSize, previewSize));
+                }
+            } else if (projectPanel.isSelectedModel()) {
+                if (modelPreview.isReady()) {
+                    ImGui::Text("Model Preview:");
+                    float previewSize = ImGui::GetContentRegionAvail().x - 10.0f;
+                    if (previewSize < 64.0f) previewSize = 64.0f;
+                    if (previewSize > 512.0f) previewSize = 512.0f;
+                    ImGui::Image(reinterpret_cast<ImTextureID>(modelPreview.getDescriptorSet()), ImVec2(previewSize, previewSize));
+                }
+            } else {
+                ImGui::Text("No preview available for this file type");
+            }
+        } else {
+            ImGui::Text("No node selected");
+        }
         ImGui::End();
         return;
     }
