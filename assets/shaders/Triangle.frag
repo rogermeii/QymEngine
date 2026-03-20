@@ -1,6 +1,6 @@
 #version 450
 
-layout(binding = 0) uniform UniformBufferObject {
+layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 view;
     mat4 proj;
     vec3 lightDir;
@@ -15,7 +15,7 @@ layout(location = 2) flat in int fragHighlighted;
 layout(location = 3) in vec3 fragNormal;
 layout(location = 4) in vec3 fragWorldPos;
 
-layout(binding = 1) uniform sampler2D texSampler;
+layout(set = 1, binding = 0) uniform sampler2D texSampler;
 
 layout(location = 0) out vec4 outColor;
 

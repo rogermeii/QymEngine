@@ -6,20 +6,24 @@ namespace QymEngine {
 
 class Descriptor {
 public:
-    void createLayout(VkDevice device);
-    void createPool(VkDevice device, int maxFramesInFlight);
-    void createSets(VkDevice device, int maxFramesInFlight,
-                    const std::vector<VkBuffer>& uniformBuffers,
-                    VkImageView textureImageView, VkSampler textureSampler);
+    void createUboLayout(VkDevice device);      // set 0: UBO only
+    void createTextureLayout(VkDevice device);   // set 1: texture only
+    void createPool(VkDevice device, int maxFramesInFlight, int maxTextures = 100);
+    void createUboSets(VkDevice device, int maxFramesInFlight,
+                       const std::vector<VkBuffer>& uniformBuffers);
+    VkDescriptorSet createTextureSet(VkDevice device, VkImageView imageView, VkSampler sampler);
     void cleanup(VkDevice device);
 
-    VkDescriptorSetLayout getLayout() const { return m_descriptorSetLayout; }
-    VkDescriptorSet       getSet(uint32_t frame) const { return m_descriptorSets[frame]; }
+    VkDescriptorSetLayout getUboLayout()     const { return m_uboSetLayout; }
+    VkDescriptorSetLayout getTextureLayout() const { return m_textureSetLayout; }
+    VkDescriptorSet       getUboSet(uint32_t frame) const { return m_uboSets[frame]; }
+    VkDescriptorPool      getPool()          const { return m_descriptorPool; }
 
 private:
-    VkDescriptorSetLayout        m_descriptorSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool             m_descriptorPool      = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> m_descriptorSets;
+    VkDescriptorSetLayout        m_uboSetLayout     = VK_NULL_HANDLE;
+    VkDescriptorSetLayout        m_textureSetLayout  = VK_NULL_HANDLE;
+    VkDescriptorPool             m_descriptorPool    = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_uboSets;
 };
 
 } // namespace QymEngine

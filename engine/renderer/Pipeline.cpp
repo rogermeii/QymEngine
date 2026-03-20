@@ -37,7 +37,8 @@ VkShaderModule Pipeline::createShaderModule(VkDevice device, const std::vector<c
 }
 
 void Pipeline::create(VkDevice device, VkRenderPass renderPass,
-                      VkDescriptorSetLayout descriptorSetLayout, VkExtent2D extent,
+                      const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts,
+                      VkExtent2D extent,
                       const std::vector<VkPushConstantRange>& pushConstantRanges)
 {
     auto vertShaderCode = readFile(std::string(ASSETS_DIR) + "/shaders/vert.spv");
@@ -137,8 +138,8 @@ void Pipeline::create(VkDevice device, VkRenderPass renderPass,
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
+    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
+    pipelineLayoutInfo.pSetLayouts = descriptorSetLayouts.data();
     pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size());
     pipelineLayoutInfo.pPushConstantRanges = pushConstantRanges.data();
 
