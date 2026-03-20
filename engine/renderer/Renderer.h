@@ -37,6 +37,19 @@ public:
 
     void setSwapChainRecreatedCallback(SwapChainRecreatedCallback cb) { m_swapChainRecreatedCb = std::move(cb); }
 
+    // --- Offscreen rendering ---
+    void createOffscreen(uint32_t width, uint32_t height);
+    void resizeOffscreen(uint32_t width, uint32_t height);
+    void destroyOffscreen();
+    void drawSceneToOffscreen(VkCommandBuffer cmd);
+
+    VkSampler   getOffscreenSampler()   const { return m_offscreenSampler; }
+    VkImageView getOffscreenImageView() const { return m_offscreenImageView; }
+    uint32_t    getOffscreenWidth()     const { return m_offscreenWidth; }
+    uint32_t    getOffscreenHeight()    const { return m_offscreenHeight; }
+    bool        isOffscreenReady()      const { return m_offscreenRenderPass != VK_NULL_HANDLE
+                                                    && m_offscreenFramebuffer != VK_NULL_HANDLE; }
+
 private:
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -61,6 +74,19 @@ private:
     bool     m_framebufferResized = false;
 
     SwapChainRecreatedCallback m_swapChainRecreatedCb;
+
+    // --- Offscreen resources ---
+    VkImage          m_offscreenImage       = VK_NULL_HANDLE;
+    VkDeviceMemory   m_offscreenMemory      = VK_NULL_HANDLE;
+    VkImageView      m_offscreenImageView   = VK_NULL_HANDLE;
+    VkSampler        m_offscreenSampler     = VK_NULL_HANDLE;
+    VkFramebuffer    m_offscreenFramebuffer = VK_NULL_HANDLE;
+    VkRenderPass     m_offscreenRenderPass  = VK_NULL_HANDLE;
+    uint32_t         m_offscreenWidth  = 0;
+    uint32_t         m_offscreenHeight = 0;
+
+    // Pipeline for offscreen render pass
+    Pipeline         m_offscreenPipeline;
 };
 
 } // namespace QymEngine

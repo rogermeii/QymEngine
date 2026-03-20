@@ -39,7 +39,7 @@ void ImGuiLayer::init(Renderer& renderer)
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_pool) != VK_SUCCESS)
         throw std::runtime_error("failed to create ImGui descriptor pool!");
 
-    // --- 2. Render pass (draws on top of scene, loadOp = LOAD) --------------------------
+    // --- 2. Render pass (clears swapchain; scene renders to offscreen) -------------------
     createRenderPass(m_device, sc.getImageFormat());
 
     // --- 3. Framebuffers ----------------------------------------------------------------
@@ -117,14 +117,16 @@ void ImGuiLayer::endFrame(VkCommandBuffer cmd, uint32_t imageIndex)
 {
     ImGui::Render();
 
+    VkClearValue clearColor = {{{0.15f, 0.15f, 0.15f, 1.0f}}};
+
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpInfo.renderPass        = m_renderPass;
     rpInfo.framebuffer       = m_framebuffers[imageIndex];
     rpInfo.renderArea.offset = {0, 0};
     rpInfo.renderArea.extent = m_extent;
-    rpInfo.clearValueCount   = 0;
-    rpInfo.pClearValues      = nullptr;
+    rpInfo.clearValueCount   = 1;
+    rpInfo.pClearValues      = &clearColor;
 
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
@@ -158,11 +160,11 @@ void ImGuiLayer::createRenderPass(VkDevice device, VkFormat imageFormat)
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format         = imageFormat;
     colorAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;   // preserve scene content
+    colorAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;  // clear — scene renders to offscreen
     colorAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout  = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    colorAttachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
     colorAttachment.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
     VkAttachmentReference colorRef{};
@@ -178,7 +180,7 @@ void ImGuiLayer::createRenderPass(VkDevice device, VkFormat imageFormat)
     dependency.srcSubpass    = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass    = 0;
     dependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.srcAccessMask = 0;
     dependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 

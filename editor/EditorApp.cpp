@@ -30,6 +30,9 @@ void EditorApp::onUpdate()
     if (!m_renderer.beginFrame())
         return;
 
+    // Apply any pending offscreen resize before rendering the scene
+    m_sceneViewPanel.applyPendingResize(m_renderer);
+
     m_renderer.drawScene();
 
     m_imguiLayer.beginFrame();
@@ -38,7 +41,7 @@ void EditorApp::onUpdate()
     setupDockingLayout();
 
     // Render all panels
-    m_sceneViewPanel.onImGuiRender();
+    m_sceneViewPanel.onImGuiRender(m_renderer);
     m_hierarchyPanel.onImGuiRender();
     m_inspectorPanel.onImGuiRender();
     m_projectPanel.onImGuiRender();
@@ -53,6 +56,7 @@ void EditorApp::onUpdate()
 void EditorApp::onShutdown()
 {
     vkDeviceWaitIdle(m_renderer.getContext().getDevice());
+    m_sceneViewPanel.cleanup();   // free ImGui descriptor set before ImGui shutdown
     m_imguiLayer.shutdown();
     m_renderer.shutdown();
 }
