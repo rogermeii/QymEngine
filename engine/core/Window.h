@@ -1,5 +1,5 @@
 #pragma once
-#define GLFW_INCLUDE_VULKAN
+// GLFW_INCLUDE_VULKAN is defined via CMake target_compile_definitions
 #include <GLFW/glfw3.h>
 #include <string>
 #include <functional>
