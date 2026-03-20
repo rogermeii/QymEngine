@@ -52,6 +52,7 @@ void ImGuiLayer::init(Renderer& renderer)
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;  // optional multi-viewport
+    io.FontGlobalScale = 1.5f;
 
     ImGui::StyleColorsDark();
 
