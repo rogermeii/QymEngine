@@ -42,6 +42,7 @@ void EditorApp::onInit()
     }
 
     m_consolePanel.init();
+    m_modelPreview.init(m_renderer);
 
     if (m_rdocApi)
         Log::info("RenderDoc: ready (press F12 to capture)");
@@ -58,6 +59,20 @@ void EditorApp::onUpdate()
     m_sceneViewPanel.applyPendingResize(m_renderer);
 
     m_renderer.drawScene(m_scene);
+
+    // Render model preview (after main scene, before ImGui)
+    {
+        Node* selected = m_scene.getSelectedNode();
+        if (selected) {
+            if (!selected->meshPath.empty()) {
+                auto* mesh = m_renderer.getAssetManager().loadMesh(selected->meshPath);
+                if (mesh)
+                    m_modelPreview.renderMesh(m_renderer, mesh);
+            } else if (selected->meshType != MeshType::None) {
+                m_modelPreview.renderBuiltIn(m_renderer, selected->meshType);
+            }
+        }
+    }
 
     m_imguiLayer.beginFrame();
 
@@ -97,7 +112,7 @@ void EditorApp::onUpdate()
     // Render all panels
     m_sceneViewPanel.onImGuiRender(m_renderer, m_camera, m_scene);
     m_hierarchyPanel.onImGuiRender(m_scene);
-    m_inspectorPanel.onImGuiRender(m_scene, m_renderer.getAssetManager());
+    m_inspectorPanel.onImGuiRender(m_scene, m_renderer.getAssetManager(), m_modelPreview);
     m_projectPanel.onImGuiRender();
     m_consolePanel.onImGuiRender();
 
@@ -152,6 +167,7 @@ void EditorApp::onUpdate()
 void EditorApp::onShutdown()
 {
     vkDeviceWaitIdle(m_renderer.getContext().getDevice());
+    m_modelPreview.shutdown(m_renderer.getContext().getDevice());
     m_sceneViewPanel.cleanup();   // free ImGui descriptor set before ImGui shutdown
     m_imguiLayer.shutdown();
     m_renderer.shutdown();

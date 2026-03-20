@@ -4,7 +4,7 @@
 
 namespace QymEngine {
 
-void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager) {
+void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, ModelPreview& modelPreview) {
     ImGui::Begin("Inspector");
 
     Node* selected = scene.getSelectedNode();
@@ -61,6 +61,16 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager) {
         }
     }
 
+    // 模型3D预览
+    if (modelPreview.isReady()) {
+        bool hasMesh = (!selected->meshPath.empty() || selected->meshType != MeshType::None);
+        if (hasMesh) {
+            ImGui::Separator();
+            ImGui::Text("Model Preview:");
+            ImGui::Image(reinterpret_cast<ImTextureID>(modelPreview.getDescriptorSet()), ImVec2(200, 200));
+        }
+    }
+
     if (ImGui::CollapsingHeader("Texture", ImGuiTreeNodeFlags_DefaultOpen)) {
         std::vector<std::string> texItems = {"Default"};
         for (auto& f : assetManager.getTextureFiles())
@@ -80,6 +90,15 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager) {
                 }
             }
             ImGui::EndCombo();
+        }
+
+        // Texture preview
+        if (!selected->texturePath.empty()) {
+            auto* tex = assetManager.loadTexture(selected->texturePath);
+            if (tex && tex->descriptorSet != VK_NULL_HANDLE) {
+                ImGui::Text("Preview:");
+                ImGui::Image(reinterpret_cast<ImTextureID>(tex->descriptorSet), ImVec2(128, 128));
+            }
         }
     }
 

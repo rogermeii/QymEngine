@@ -57,6 +57,14 @@ public:
     bool        isOffscreenReady()      const { return m_offscreenRenderPass != VK_NULL_HANDLE
                                                     && m_offscreenFramebuffer != VK_NULL_HANDLE; }
 
+    // Expose internals for model preview rendering
+    VkRenderPass     getOffscreenRenderPass()    const { return m_offscreenRenderPass; }
+    Pipeline&        getOffscreenPipeline()             { return m_offscreenPipeline; }
+    Descriptor&      getDescriptor()                    { return m_descriptor; }
+    Buffer&          getBuffer()                        { return m_buffer; }
+    MeshLibrary&     getMeshLibrary()                   { return m_meshLibrary; }
+    VkDescriptorSet  getDefaultTextureSet()      const { return m_defaultTextureSet; }
+
 private:
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 

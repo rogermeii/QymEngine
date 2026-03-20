@@ -11,6 +11,7 @@
 #include "panels/InspectorPanel.h"
 #include "panels/ProjectPanel.h"
 #include "panels/ConsolePanel.h"
+#include "panels/ModelPreview.h"
 
 #include <renderdoc_app.h>
 
@@ -43,6 +44,7 @@ private:
     InspectorPanel m_inspectorPanel;
     ProjectPanel   m_projectPanel;
     ConsolePanel   m_consolePanel;
+    ModelPreview   m_modelPreview;
 
     bool m_firstFrame = true;
 
