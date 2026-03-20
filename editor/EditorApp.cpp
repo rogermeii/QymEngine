@@ -3,6 +3,7 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <fstream>
 
 namespace QymEngine {
 
@@ -20,7 +21,16 @@ void EditorApp::onInit()
         m_imguiLayer.onSwapChainRecreated(m_renderer);
     });
 
-    m_scene.createNode("Quad");
+    std::string scenePath = std::string(ASSETS_DIR) + "/scenes/default.json";
+    std::ifstream check(scenePath);
+    if (check.good()) {
+        check.close();
+        m_scene.deserialize(scenePath);
+        Log::info("Loaded scene: " + scenePath);
+    } else {
+        m_scene.createNode("Quad");
+        Log::info("Created default scene");
+    }
 
     m_consolePanel.init();
 
@@ -41,6 +51,17 @@ void EditorApp::onUpdate()
 
     // Enable docking and set up layout
     setupDockingLayout();
+
+    if (ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Save Scene"))
+                m_scene.serialize(std::string(ASSETS_DIR) + "/scenes/default.json");
+            if (ImGui::MenuItem("Load Scene"))
+                m_scene.deserialize(std::string(ASSETS_DIR) + "/scenes/default.json");
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
+    }
 
     // Render all panels
     m_sceneViewPanel.onImGuiRender(m_renderer);
