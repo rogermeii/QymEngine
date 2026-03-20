@@ -12,6 +12,9 @@ public:
     void createUboSets(VkDevice device, int maxFramesInFlight,
                        const std::vector<VkBuffer>& uniformBuffers);
     VkDescriptorSet createTextureSet(VkDevice device, VkImageView imageView, VkSampler sampler);
+    VkDescriptorSet createTextureSet(VkDevice device,
+        VkImageView albedoView, VkSampler albedoSampler,
+        VkImageView normalView, VkSampler normalSampler);
     void cleanup(VkDevice device);
 
     VkDescriptorSetLayout getUboLayout()     const { return m_uboSetLayout; }
