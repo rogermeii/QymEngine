@@ -31,6 +31,7 @@ private:
     void setupDockingLayout();
     void initRenderDoc();
     void captureFrame();
+    void checkExternalCaptureTrigger();
 
     Renderer       m_renderer;
     Scene          m_scene;

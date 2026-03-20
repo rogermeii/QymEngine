@@ -84,6 +84,16 @@ void EditorApp::onUpdate()
     if (ImGui::IsKeyPressed(ImGuiKey_F12) && m_rdocApi)
         m_captureRequested = true;
 
+    // File-based external trigger: captures/trigger
+    checkExternalCaptureTrigger();
+
+    // Auto-capture for --capture-and-exit mode
+    m_frameCount++;
+    if (m_captureAndExit && !m_autoCaptureDone && m_rdocApi && m_frameCount == 5) {
+        m_captureRequested = true;
+        m_autoCaptureDone = true;
+    }
+
     // Render all panels
     m_sceneViewPanel.onImGuiRender(m_renderer, m_camera, m_scene);
     m_hierarchyPanel.onImGuiRender(m_scene);
@@ -111,6 +121,13 @@ void EditorApp::onUpdate()
             uint32_t pathLen = sizeof(path);
             m_rdocApi->GetCapture(numCaptures - 1, path, &pathLen, nullptr);
             Log::info(std::string("RenderDoc: captured to ") + path);
+
+            // Write capture result for external tools
+            {
+                std::string resultPath = std::string(ASSETS_DIR) + "/../captures/result.txt";
+                std::ofstream resultFile(resultPath);
+                resultFile << path;
+            }
 
             if (m_captureAndExit) {
                 // Write capture path to output file for analysis script
@@ -213,6 +230,21 @@ void EditorApp::captureFrame()
 {
     if (!m_rdocApi) return;
     m_captureRequested = true;
+}
+
+void EditorApp::checkExternalCaptureTrigger()
+{
+    if (!m_rdocApi) return;
+
+    std::string triggerPath = std::string(ASSETS_DIR) + "/../captures/trigger";
+    std::ifstream check(triggerPath);
+    if (check.good()) {
+        check.close();
+        // Delete trigger file immediately
+        std::remove(triggerPath.c_str());
+        m_captureRequested = true;
+        Log::info("RenderDoc: external capture triggered");
+    }
 }
 
 } // namespace QymEngine
