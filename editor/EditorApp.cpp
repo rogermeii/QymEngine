@@ -84,13 +84,6 @@ void EditorApp::onUpdate()
     if (ImGui::IsKeyPressed(ImGuiKey_F12) && m_rdocApi)
         m_captureRequested = true;
 
-    // Auto-capture on startup (frame 5, after scene is fully rendered)
-    m_frameCount++;
-    if (!m_autoCaptureDone && m_rdocApi && m_frameCount == 5) {
-        m_captureRequested = true;
-        m_autoCaptureDone = true;
-    }
-
     // Render all panels
     m_sceneViewPanel.onImGuiRender(m_renderer, m_camera, m_scene);
     m_hierarchyPanel.onImGuiRender(m_scene);
