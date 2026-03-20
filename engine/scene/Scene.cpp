@@ -40,6 +40,8 @@ static json serializeNode(const Node* node) {
     j["transform"]["position"] = {node->transform.position.x, node->transform.position.y, node->transform.position.z};
     j["transform"]["rotation"] = {node->transform.rotation.x, node->transform.rotation.y, node->transform.rotation.z};
     j["transform"]["scale"] = {node->transform.scale.x, node->transform.scale.y, node->transform.scale.z};
+    j["meshPath"] = node->meshPath;
+    j["texturePath"] = node->texturePath;
     j["children"] = json::array();
     for (auto& child : node->getChildren())
         j["children"].push_back(serializeNode(child.get()));
@@ -65,6 +67,10 @@ static void deserializeNode(Node* parent, const json& j) {
             node->transform.scale = {s[0].get<float>(), s[1].get<float>(), s[2].get<float>()};
         }
     }
+    if (j.contains("meshPath"))
+        node->meshPath = j["meshPath"].get<std::string>();
+    if (j.contains("texturePath"))
+        node->texturePath = j["texturePath"].get<std::string>();
     if (j.contains("children")) {
         for (auto& childJson : j["children"])
             deserializeNode(node, childJson);

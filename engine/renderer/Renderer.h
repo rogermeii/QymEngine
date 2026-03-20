@@ -9,6 +9,7 @@
 #include "renderer/Descriptor.h"
 #include "renderer/CommandManager.h"
 #include "renderer/MeshLibrary.h"
+#include "asset/AssetManager.h"
 #include "scene/Scene.h"
 #include "scene/Camera.h"
 
@@ -31,6 +32,7 @@ public:
     VulkanContext&  getContext()               { return m_context; }
     SwapChain&      getSwapChain()             { return m_swapChain; }
     CommandManager& getCommandManager()        { return m_commandManager; }
+    AssetManager&   getAssetManager()          { return m_assetManager; }
     VkCommandBuffer getCurrentCommandBuffer()  { return m_commandManager.getBuffer(m_currentFrame); }
     uint32_t        getImageIndex()      const { return m_currentImageIndex; }
     uint32_t        getCurrentFrame()    const { return m_currentFrame; }
@@ -72,6 +74,10 @@ private:
     Buffer         m_buffer;
     Texture        m_texture;
     MeshLibrary    m_meshLibrary;
+    AssetManager   m_assetManager;
+
+    // Default texture descriptor set (for nodes without texturePath)
+    VkDescriptorSet m_defaultTextureSet = VK_NULL_HANDLE;
 
     const Camera* m_camera = nullptr;
     Window* m_window = nullptr;

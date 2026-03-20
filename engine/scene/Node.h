@@ -14,6 +14,8 @@ public:
     std::string name;
     Transform transform;
     MeshType meshType = MeshType::Cube;
+    std::string meshPath;     // empty = use built-in meshType
+    std::string texturePath;  // empty = use default texture
 
     Node* getParent() const { return m_parent; }
     const std::vector<std::unique_ptr<Node>>& getChildren() const { return m_children; }

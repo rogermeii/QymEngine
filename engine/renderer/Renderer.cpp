@@ -28,7 +28,9 @@ void Renderer::init(Window& window)
     // The original scene RenderPass (used for swapchain). Kept for init compatibility.
     m_renderPass.create(m_context.getDevice(), m_swapChain.getImageFormat());
 
-    m_descriptor.createLayout(m_context.getDevice());
+    // Create split descriptor set layouts: set 0 = UBO, set 1 = texture
+    m_descriptor.createUboLayout(m_context.getDevice());
+    m_descriptor.createTextureLayout(m_context.getDevice());
 
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -36,13 +38,16 @@ void Renderer::init(Window& window)
     pushConstantRange.size = sizeof(PushConstantData);
     std::vector<VkPushConstantRange> pushConstantRanges = { pushConstantRange };
 
+    // Pipeline layout now uses both descriptor set layouts
+    std::vector<VkDescriptorSetLayout> setLayouts = {
+        m_descriptor.getUboLayout(),
+        m_descriptor.getTextureLayout()
+    };
     m_pipeline.create(m_context.getDevice(), m_renderPass.get(),
-                      m_descriptor.getLayout(), m_swapChain.getExtent(),
+                      setLayouts, m_swapChain.getExtent(),
                       pushConstantRanges);
 
-    // Swapchain framebuffers — still created, used by ImGuiLayer's render pass
-    // (ImGuiLayer creates its own framebuffers but SwapChain also needs them for
-    //  the old render pass reference; we keep them to avoid breaking the cleanup path).
+    // Swapchain framebuffers
     m_swapChain.createFramebuffers(m_context.getDevice(), m_renderPass.get());
 
     m_texture.createTextureImage(m_context, m_commandManager);
@@ -52,10 +57,22 @@ void Renderer::init(Window& window)
     m_meshLibrary.init(m_context, m_commandManager);
     m_buffer.createUniformBuffers(m_context, MAX_FRAMES_IN_FLIGHT);
 
-    m_descriptor.createPool(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT);
-    m_descriptor.createSets(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT,
-                            m_buffer.getUniformBuffers(),
-                            m_texture.getImageView(), m_texture.getSampler());
+    // Create descriptor pool with space for UBO sets + texture sets
+    m_descriptor.createPool(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT, 100);
+
+    // Create UBO descriptor sets (set 0, per frame-in-flight)
+    m_descriptor.createUboSets(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT,
+                               m_buffer.getUniformBuffers());
+
+    // Create default texture descriptor set (set 1) for the existing texture.jpg
+    m_defaultTextureSet = m_descriptor.createTextureSet(
+        m_context.getDevice(), m_texture.getImageView(), m_texture.getSampler());
+
+    // Initialize AssetManager
+    m_assetManager.init(m_context, m_commandManager);
+    m_assetManager.setTextureDescriptorSetLayout(m_descriptor.getTextureLayout());
+    m_assetManager.setTextureDescriptorPool(m_descriptor.getPool());
+    m_assetManager.scanAssets(std::string(ASSETS_DIR));
 
     m_commandManager.createBuffers(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT);
     m_swapChain.createSyncObjects(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT);
@@ -175,6 +192,7 @@ void Renderer::shutdown()
 
     destroyOffscreen();
 
+    m_assetManager.shutdown(device);
     m_swapChain.cleanup(device);
     m_texture.cleanup(device);
     m_meshLibrary.shutdown(device);
@@ -363,7 +381,6 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         // Dependencies to ensure proper synchronization
         VkSubpassDependency dependencies[2] = {};
 
-        // Before render pass: wait for previous fragment shader reads to finish
         dependencies[0].srcSubpass      = VK_SUBPASS_EXTERNAL;
         dependencies[0].dstSubpass      = 0;
         dependencies[0].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
@@ -372,7 +389,6 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         dependencies[0].dstAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
-        // After render pass: make sure color writes are visible to fragment shader
         dependencies[1].srcSubpass      = 0;
         dependencies[1].dstSubpass      = VK_SUBPASS_EXTERNAL;
         dependencies[1].srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
@@ -400,8 +416,12 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         pcRange.size = sizeof(PushConstantData);
         std::vector<VkPushConstantRange> pcRanges = { pcRange };
 
+        std::vector<VkDescriptorSetLayout> setLayouts = {
+            m_descriptor.getUboLayout(),
+            m_descriptor.getTextureLayout()
+        };
         m_offscreenPipeline.create(device, m_offscreenRenderPass,
-                                   m_descriptor.getLayout(), {width, height},
+                                   setLayouts, {width, height},
                                    pcRanges);
     }
 
@@ -572,31 +592,56 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     scissor.extent = {m_offscreenWidth, m_offscreenHeight};
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    VkDescriptorSet descriptorSet = m_descriptor.getSet(m_currentFrame);
+    // Bind UBO descriptor set (set 0) - once per frame
+    VkDescriptorSet uboSet = m_descriptor.getUboSet(m_currentFrame);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             m_offscreenPipeline.getPipelineLayout(), 0, 1,
-                            &descriptorSet, 0, nullptr);
+                            &uboSet, 0, nullptr);
 
-    // Render each scene node with its own mesh type and model matrix
+    // Render each scene node with its own mesh and texture
     scene.traverseNodes([&](Node* node) {
-        if (node->meshType == MeshType::None) return;
+        // Determine texture descriptor set (set 1)
+        VkDescriptorSet texSet = m_defaultTextureSet;
+        if (!node->texturePath.empty()) {
+            auto* tex = m_assetManager.loadTexture(node->texturePath);
+            if (tex && tex->descriptorSet != VK_NULL_HANDLE)
+                texSet = tex->descriptorSet;
+        }
 
-        m_meshLibrary.bind(commandBuffer, node->meshType);
+        // Bind texture descriptor set (set 1)
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_offscreenPipeline.getPipelineLayout(), 1, 1,
+                                &texSet, 0, nullptr);
 
+        // Push constants
         PushConstantData pc{};
         pc.model = node->getWorldMatrix();
         pc.highlighted = (node == scene.getSelectedNode()) ? 1 : 0;
         vkCmdPushConstants(commandBuffer, m_offscreenPipeline.getPipelineLayout(),
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(PushConstantData), &pc);
-        vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(node->meshType), 1, 0, 0, 0);
+
+        // Determine mesh and draw
+        if (!node->meshPath.empty()) {
+            auto* mesh = m_assetManager.loadMesh(node->meshPath);
+            if (mesh) {
+                VkBuffer buffers[] = {mesh->vertexBuffer};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
+                vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(commandBuffer, mesh->indexCount, 1, 0, 0, 0);
+            }
+        } else if (node->meshType != MeshType::None) {
+            m_meshLibrary.bind(commandBuffer, node->meshType);
+            vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(node->meshType), 1, 0, 0, 0);
+        }
     });
 
     vkCmdEndRenderPass(commandBuffer);
 }
 
 // ---------------------------------------------------------------------------
-// Old recordCommandBuffer — no longer used for swapchain scene rendering.
+// Old recordCommandBuffer -- no longer used for swapchain scene rendering.
 // ---------------------------------------------------------------------------
 void Renderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
 {
