@@ -68,7 +68,7 @@ void EditorApp::onUpdate()
     // Render all panels
     m_sceneViewPanel.onImGuiRender(m_renderer, m_camera, m_scene);
     m_hierarchyPanel.onImGuiRender(m_scene);
-    m_inspectorPanel.onImGuiRender(m_scene);
+    m_inspectorPanel.onImGuiRender(m_scene, m_renderer.getAssetManager());
     m_projectPanel.onImGuiRender();
     m_consolePanel.onImGuiRender();
 
