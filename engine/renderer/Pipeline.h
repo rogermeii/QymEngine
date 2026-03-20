@@ -10,7 +10,8 @@ public:
     void create(VkDevice device, VkRenderPass renderPass,
                 const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts,
                 VkExtent2D extent,
-                const std::vector<VkPushConstantRange>& pushConstantRanges = {});
+                const std::vector<VkPushConstantRange>& pushConstantRanges = {},
+                VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL);
     void cleanup(VkDevice device);
 
     VkPipeline       getPipeline()       const { return m_graphicsPipeline; }

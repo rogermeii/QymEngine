@@ -46,7 +46,5 @@ void main() {
     vec3 result = ambient + diffuse + specular;
     outColor = vec4(result, fragBaseColor.a);
 
-    if (fragHighlighted == 1) {
-        outColor = mix(outColor, vec4(1.0, 0.5, 0.0, 1.0), 0.3);
-    }
+    // highlighted flag no longer used for color overlay (wireframe outline instead)
 }

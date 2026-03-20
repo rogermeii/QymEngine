@@ -39,7 +39,8 @@ VkShaderModule Pipeline::createShaderModule(VkDevice device, const std::vector<c
 void Pipeline::create(VkDevice device, VkRenderPass renderPass,
                       const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts,
                       VkExtent2D extent,
-                      const std::vector<VkPushConstantRange>& pushConstantRanges)
+                      const std::vector<VkPushConstantRange>& pushConstantRanges,
+                      VkPolygonMode polygonMode)
 {
     auto vertShaderCode = readFile(std::string(ASSETS_DIR) + "/shaders/vert.spv");
     auto fragShaderCode = readFile(std::string(ASSETS_DIR) + "/shaders/frag.spv");
@@ -96,7 +97,7 @@ void Pipeline::create(VkDevice device, VkRenderPass renderPass,
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.depthClampEnable = VK_FALSE;
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.polygonMode = polygonMode;
     rasterizer.lineWidth = 1.0f;
     rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;

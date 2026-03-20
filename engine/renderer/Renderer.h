@@ -105,6 +105,7 @@ private:
 
     // Pipeline for offscreen render pass
     Pipeline         m_offscreenPipeline;
+    Pipeline         m_wireframePipeline;
 };
 
 } // namespace QymEngine

@@ -423,6 +423,10 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         m_offscreenPipeline.create(device, m_offscreenRenderPass,
                                    setLayouts, {width, height},
                                    pcRanges);
+
+        m_wireframePipeline.create(device, m_offscreenRenderPass,
+                                   setLayouts, {width, height},
+                                   pcRanges, VK_POLYGON_MODE_LINE);
     }
 
     // --- 5. Create framebuffer (color + depth) ---
@@ -639,6 +643,42 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
             vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(node->meshType), 1, 0, 0, 0);
         }
     });
+
+    // Draw wireframe outline for selected node
+    Node* selected = scene.getSelectedNode();
+    if (selected && (selected->meshType != MeshType::None || !selected->meshPath.empty())) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_wireframePipeline.getPipeline());
+
+        // Reuse UBO set 0 (already bound), bind texture set 1
+        VkDescriptorSet texSet = m_defaultTextureSet;
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_wireframePipeline.getPipelineLayout(), 1, 1,
+                                &texSet, 0, nullptr);
+
+        PushConstantData pc{};
+        pc.model = selected->getWorldMatrix();
+        pc.baseColor = glm::vec4(1.0f, 0.5f, 0.0f, 1.0f); // orange outline
+        pc.metallic = 0.0f;
+        pc.roughness = 1.0f;
+        pc.highlighted = 0;
+        vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(PushConstantData), &pc);
+
+        if (!selected->meshPath.empty()) {
+            auto* mesh = m_assetManager.loadMesh(selected->meshPath);
+            if (mesh) {
+                VkBuffer buffers[] = {mesh->vertexBuffer};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
+                vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(commandBuffer, mesh->indexCount, 1, 0, 0, 0);
+            }
+        } else {
+            m_meshLibrary.bind(commandBuffer, selected->meshType);
+            vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(selected->meshType), 1, 0, 0, 0);
+        }
+    }
 
     vkCmdEndRenderPass(commandBuffer);
 }
