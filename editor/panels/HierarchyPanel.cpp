@@ -6,8 +6,15 @@ namespace QymEngine {
 void HierarchyPanel::onImGuiRender(Scene& scene) {
     ImGui::Begin("Hierarchy");
 
-    if (ImGui::Button("Add Node")) {
-        scene.createNode("New Node");
+    if (ImGui::Button("Add..."))
+        ImGui::OpenPopup("AddNodePopup");
+    if (ImGui::BeginPopup("AddNodePopup")) {
+        if (ImGui::MenuItem("Empty"))  { auto* n = scene.createNode("Empty");  n->meshType = MeshType::None; }
+        if (ImGui::MenuItem("Cube"))   { auto* n = scene.createNode("Cube");   n->meshType = MeshType::Cube; }
+        if (ImGui::MenuItem("Plane"))  { auto* n = scene.createNode("Plane");  n->meshType = MeshType::Plane; }
+        if (ImGui::MenuItem("Sphere")) { auto* n = scene.createNode("Sphere"); n->meshType = MeshType::Sphere; }
+        if (ImGui::MenuItem("Quad"))   { auto* n = scene.createNode("Quad");   n->meshType = MeshType::Quad; }
+        ImGui::EndPopup();
     }
 
     m_nodeToDelete = nullptr;

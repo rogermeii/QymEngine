@@ -29,6 +29,13 @@ void InspectorPanel::onImGuiRender(Scene& scene) {
         ImGui::DragFloat3("Scale",    &selected->transform.scale.x, 0.01f, 0.01f, 100.0f);
     }
 
+    if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const char* meshTypes[] = {"None", "Quad", "Cube", "Plane", "Sphere"};
+        int current = static_cast<int>(selected->meshType);
+        if (ImGui::Combo("Type", &current, meshTypes, IM_ARRAYSIZE(meshTypes)))
+            selected->meshType = static_cast<MeshType>(current);
+    }
+
     ImGui::End();
 }
 
