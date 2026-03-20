@@ -1,5 +1,6 @@
 #pragma once
 #include "Transform.h"
+#include "renderer/MeshLibrary.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -12,6 +13,7 @@ public:
 
     std::string name;
     Transform transform;
+    MeshType meshType = MeshType::Cube;
 
     Node* getParent() const { return m_parent; }
     const std::vector<std::unique_ptr<Node>>& getChildren() const { return m_children; }

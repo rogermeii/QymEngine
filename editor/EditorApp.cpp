@@ -28,7 +28,8 @@ void EditorApp::onInit()
         m_scene.deserialize(scenePath);
         Log::info("Loaded scene: " + scenePath);
     } else {
-        m_scene.createNode("Quad");
+        auto* node = m_scene.createNode("Cube");
+        node->meshType = MeshType::Cube;
         Log::info("Created default scene");
     }
 

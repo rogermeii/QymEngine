@@ -8,6 +8,7 @@
 #include "renderer/Texture.h"
 #include "renderer/Descriptor.h"
 #include "renderer/CommandManager.h"
+#include "renderer/MeshLibrary.h"
 #include "scene/Scene.h"
 
 #include <functional>
@@ -67,6 +68,7 @@ private:
     Pipeline       m_pipeline;
     Buffer         m_buffer;
     Texture        m_texture;
+    MeshLibrary    m_meshLibrary;
 
     Window* m_window = nullptr;
 

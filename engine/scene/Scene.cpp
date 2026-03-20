@@ -36,6 +36,7 @@ void Scene::traverseRecursive(Node* node, const std::function<void(Node*)>& fn) 
 static json serializeNode(const Node* node) {
     json j;
     j["name"] = node->name;
+    j["meshType"] = meshTypeToString(node->meshType);
     j["transform"]["position"] = {node->transform.position.x, node->transform.position.y, node->transform.position.z};
     j["transform"]["rotation"] = {node->transform.rotation.x, node->transform.rotation.y, node->transform.rotation.z};
     j["transform"]["scale"] = {node->transform.scale.x, node->transform.scale.y, node->transform.scale.z};
@@ -47,6 +48,8 @@ static json serializeNode(const Node* node) {
 
 static void deserializeNode(Node* parent, const json& j) {
     Node* node = parent->addChild(j.value("name", "Node"));
+    if (j.contains("meshType"))
+        node->meshType = meshTypeFromString(j["meshType"].get<std::string>());
     if (j.contains("transform")) {
         auto& t = j["transform"];
         if (t.contains("position")) {

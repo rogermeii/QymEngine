@@ -7,7 +7,6 @@
 namespace QymEngine {
 
 class VulkanContext;
-class CommandManager;
 
 struct Vertex
 {
@@ -68,14 +67,8 @@ struct PushConstantData
 
 class Buffer {
 public:
-    void createVertexBuffer(VulkanContext& ctx, CommandManager& cmdMgr);
-    void createIndexBuffer(VulkanContext& ctx, CommandManager& cmdMgr);
     void createUniformBuffers(VulkanContext& ctx, int maxFramesInFlight);
     void cleanup(VkDevice device, int maxFramesInFlight);
-
-    VkBuffer getVertexBuffer() const { return m_vertexBuffer; }
-    VkBuffer getIndexBuffer()  const { return m_indexBuffer; }
-    uint32_t getIndexCount()   const { return static_cast<uint32_t>(s_indices.size()); }
 
     const std::vector<VkBuffer>& getUniformBuffers() const { return m_uniformBuffers; }
     const std::vector<void*>&    getUniformBuffersMapped() const { return m_uniformBuffersMapped; }
@@ -84,18 +77,7 @@ public:
                              VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
                              VkBuffer& buffer, VkDeviceMemory& bufferMemory);
 
-    static const std::vector<Vertex>   s_vertices;
-    static const std::vector<uint32_t> s_indices;
-
 private:
-    void copyBuffer(VulkanContext& ctx, CommandManager& cmdMgr,
-                    VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
-
-    VkBuffer       m_vertexBuffer       = VK_NULL_HANDLE;
-    VkDeviceMemory m_vertexBufferMemory = VK_NULL_HANDLE;
-    VkBuffer       m_indexBuffer        = VK_NULL_HANDLE;
-    VkDeviceMemory m_indexBufferMemory  = VK_NULL_HANDLE;
-
     std::vector<VkBuffer>       m_uniformBuffers;
     std::vector<VkDeviceMemory> m_uniformBuffersMemory;
     std::vector<void*>          m_uniformBuffersMapped;

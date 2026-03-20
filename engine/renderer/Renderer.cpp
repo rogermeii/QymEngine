@@ -49,8 +49,7 @@ void Renderer::init(Window& window)
     m_texture.createTextureImageView(m_context.getDevice());
     m_texture.createTextureSampler(m_context);
 
-    m_buffer.createVertexBuffer(m_context, m_commandManager);
-    m_buffer.createIndexBuffer(m_context, m_commandManager);
+    m_meshLibrary.init(m_context, m_commandManager);
     m_buffer.createUniformBuffers(m_context, MAX_FRAMES_IN_FLIGHT);
 
     m_descriptor.createPool(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT);
@@ -178,6 +177,7 @@ void Renderer::shutdown()
 
     m_swapChain.cleanup(device);
     m_texture.cleanup(device);
+    m_meshLibrary.shutdown(device);
     m_buffer.cleanup(device, MAX_FRAMES_IN_FLIGHT);
     m_descriptor.cleanup(device);
     m_offscreenPipeline.cleanup(device);
@@ -572,26 +572,24 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     scissor.extent = {m_offscreenWidth, m_offscreenHeight};
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    VkBuffer vertexBuffers[] = { m_buffer.getVertexBuffer() };
-    VkDeviceSize offsets[] = { 0 };
-    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-
-    vkCmdBindIndexBuffer(commandBuffer, m_buffer.getIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
-
     VkDescriptorSet descriptorSet = m_descriptor.getSet(m_currentFrame);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             m_offscreenPipeline.getPipelineLayout(), 0, 1,
                             &descriptorSet, 0, nullptr);
 
-    // Render each scene node with its own model matrix via push constants
+    // Render each scene node with its own mesh type and model matrix
     scene.traverseNodes([&](Node* node) {
+        if (node->meshType == MeshType::None) return;
+
+        m_meshLibrary.bind(commandBuffer, node->meshType);
+
         PushConstantData pc{};
         pc.model = node->getWorldMatrix();
         pc.highlighted = (node == scene.getSelectedNode()) ? 1 : 0;
         vkCmdPushConstants(commandBuffer, m_offscreenPipeline.getPipelineLayout(),
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(PushConstantData), &pc);
-        vkCmdDrawIndexed(commandBuffer, m_buffer.getIndexCount(), 1, 0, 0, 0);
+        vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(node->meshType), 1, 0, 0, 0);
     });
 
     vkCmdEndRenderPass(commandBuffer);
