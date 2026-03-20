@@ -43,3 +43,6 @@ target_link_libraries(imgui PUBLIC Vulkan::Vulkan glfw)
 
 # 引擎（暂时直接编译 main.cpp 为可执行文件）
 add_subdirectory(engine)
+
+# 编辑器
+add_subdirectory(editor)

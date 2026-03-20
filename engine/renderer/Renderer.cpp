@@ -80,12 +80,17 @@ void Renderer::drawScene()
     VkCommandBuffer cmdBuf = m_commandManager.getBuffer(m_currentFrame);
     vkResetCommandBuffer(cmdBuf, 0);
     recordCommandBuffer(cmdBuf, m_currentImageIndex);
+    // Note: command buffer is left open after drawScene() so that additional
+    // render passes (e.g. ImGui) can be recorded before endFrame().
 }
 
 void Renderer::endFrame()
 {
     VkDevice device = m_context.getDevice();
     VkCommandBuffer cmdBuf = m_commandManager.getBuffer(m_currentFrame);
+
+    if (vkEndCommandBuffer(cmdBuf) != VK_SUCCESS)
+        throw std::runtime_error("failed to record command buffer!");
 
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -204,9 +209,7 @@ void Renderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
     vkCmdDrawIndexed(commandBuffer, m_buffer.getIndexCount(), 1, 0, 0, 0);
 
     vkCmdEndRenderPass(commandBuffer);
-
-    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
-        throw std::runtime_error("failed to record command buffer!");
+    // Command buffer is NOT ended here — endFrame() will call vkEndCommandBuffer().
 }
 
 void Renderer::updateUniformBuffer(uint32_t currentImage)
@@ -244,6 +247,9 @@ void Renderer::recreateSwapChain()
 
     m_swapChain.create(m_context, nativeWindow);
     m_swapChain.createFramebuffers(m_context.getDevice(), m_renderPass.get());
+
+    if (m_swapChainRecreatedCb)
+        m_swapChainRecreatedCb();
 }
 
 } // namespace QymEngine

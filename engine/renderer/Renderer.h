@@ -9,17 +9,33 @@
 #include "renderer/Descriptor.h"
 #include "renderer/CommandManager.h"
 
+#include <functional>
+
 namespace QymEngine {
 
 class Window;
 
 class Renderer {
 public:
+    using SwapChainRecreatedCallback = std::function<void()>;
+
     void init(Window& window);
     bool beginFrame();
     void drawScene();
     void endFrame();
     void shutdown();
+
+    VulkanContext&  getContext()               { return m_context; }
+    SwapChain&      getSwapChain()             { return m_swapChain; }
+    CommandManager& getCommandManager()        { return m_commandManager; }
+    VkCommandBuffer getCurrentCommandBuffer()  { return m_commandManager.getBuffer(m_currentFrame); }
+    uint32_t        getImageIndex()      const { return m_currentImageIndex; }
+    uint32_t        getCurrentFrame()    const { return m_currentFrame; }
+    Window*         getWindow()                { return m_window; }
+
+    static constexpr int getMaxFramesInFlight() { return MAX_FRAMES_IN_FLIGHT; }
+
+    void setSwapChainRecreatedCallback(SwapChainRecreatedCallback cb) { m_swapChainRecreatedCb = std::move(cb); }
 
 private:
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
@@ -43,6 +59,8 @@ private:
     uint32_t m_currentFrame = 0;
     uint32_t m_currentImageIndex = 0;
     bool     m_framebufferResized = false;
+
+    SwapChainRecreatedCallback m_swapChainRecreatedCb;
 };
 
 } // namespace QymEngine

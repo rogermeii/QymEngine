@@ -27,7 +27,10 @@ public:
     VkSwapchainKHR          getSwapChain()        const { return m_swapChain; }
     VkFormat                getImageFormat()      const { return m_imageFormat; }
     VkExtent2D              getExtent()           const { return m_extent; }
+    const std::vector<VkImage>&       getImages()       const { return m_images; }
+    const std::vector<VkImageView>&   getImageViews()   const { return m_imageViews; }
     const std::vector<VkFramebuffer>& getFramebuffers() const { return m_framebuffers; }
+    uint32_t                getImageCount()       const { return static_cast<uint32_t>(m_images.size()); }
 
     VkSemaphore getImageAvailableSemaphore(uint32_t frame) const { return m_imageAvailableSemaphores[frame]; }
     VkSemaphore getRenderFinishedSemaphore(uint32_t frame) const { return m_renderFinishedSemaphores[frame]; }
