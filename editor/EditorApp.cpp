@@ -14,6 +14,8 @@ namespace QymEngine {
 EditorApp::EditorApp()
     : Application({"QymEngine Editor", 1280, 720, true})
 {
+    // Must load RenderDoc BEFORE Vulkan initialization
+    initRenderDoc();
 }
 
 void EditorApp::onInit()
@@ -40,7 +42,8 @@ void EditorApp::onInit()
 
     m_consolePanel.init();
 
-    initRenderDoc();
+    if (m_rdocApi)
+        Log::info("RenderDoc: ready (press F12 to capture)");
 
     Log::info("QymEngine Editor initialized");
 }
