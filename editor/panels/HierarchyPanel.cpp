@@ -10,8 +10,16 @@ void HierarchyPanel::onImGuiRender(Scene& scene) {
         scene.createNode("New Node");
     }
 
+    m_nodeToDelete = nullptr;
+
     for (auto& child : scene.getRoot()->getChildren())
         drawNodeTree(child.get(), scene);
+
+    // Deferred delete after iteration
+    if (m_nodeToDelete) {
+        scene.removeNode(m_nodeToDelete);
+        m_nodeToDelete = nullptr;
+    }
 
     // Click empty space to deselect
     if (ImGui::IsMouseDown(0) && ImGui::IsWindowHovered())
@@ -37,7 +45,7 @@ void HierarchyPanel::drawNodeTree(Node* node, Scene& scene) {
         if (ImGui::MenuItem("Create Empty Child"))
             node->addChild("New Node");
         if (ImGui::MenuItem("Delete"))
-            scene.removeNode(node);
+            m_nodeToDelete = node;
         ImGui::EndPopup();
     }
 

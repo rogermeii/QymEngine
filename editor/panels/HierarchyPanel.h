@@ -7,5 +7,6 @@ public:
     void onImGuiRender(Scene& scene);
 private:
     void drawNodeTree(Node* node, Scene& scene);
+    Node* m_nodeToDelete = nullptr;
 };
 }
