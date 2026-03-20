@@ -12,6 +12,8 @@
 #include "panels/ProjectPanel.h"
 #include "panels/ConsolePanel.h"
 
+#include <renderdoc_app.h>
+
 namespace QymEngine {
 
 class EditorApp : public Application {
@@ -25,6 +27,8 @@ protected:
 
 private:
     void setupDockingLayout();
+    void initRenderDoc();
+    void captureFrame();
 
     Renderer       m_renderer;
     Scene          m_scene;
@@ -38,6 +42,11 @@ private:
     ConsolePanel   m_consolePanel;
 
     bool m_firstFrame = true;
+
+    RENDERDOC_API_1_6_0* m_rdocApi = nullptr;
+    bool m_captureRequested = false;
+    int m_frameCount = 0;
+    bool m_autoCaptureDone = false;
 };
 
 } // namespace QymEngine

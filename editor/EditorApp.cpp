@@ -5,6 +5,10 @@
 #include <imgui_internal.h>
 #include <fstream>
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <renderdoc_app.h>
+
 namespace QymEngine {
 
 EditorApp::EditorApp()
@@ -36,6 +40,8 @@ void EditorApp::onInit()
 
     m_consolePanel.init();
 
+    initRenderDoc();
+
     Log::info("QymEngine Editor initialized");
 }
 
@@ -62,7 +68,23 @@ void EditorApp::onUpdate()
                 m_scene.deserialize(std::string(ASSETS_DIR) + "/scenes/default.json");
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Debug")) {
+            if (ImGui::MenuItem("Capture Frame (F12)", "F12", false, m_rdocApi != nullptr))
+                m_captureRequested = true;
+            ImGui::EndMenu();
+        }
         ImGui::EndMainMenuBar();
+    }
+
+    // F12 shortcut for RenderDoc capture
+    if (ImGui::IsKeyPressed(ImGuiKey_F12) && m_rdocApi)
+        m_captureRequested = true;
+
+    // Auto-capture on startup (frame 3, after scene is fully rendered)
+    m_frameCount++;
+    if (!m_autoCaptureDone && m_rdocApi && m_frameCount == 3) {
+        m_captureRequested = true;
+        m_autoCaptureDone = true;
     }
 
     // Render all panels
@@ -75,7 +97,30 @@ void EditorApp::onUpdate()
     m_imguiLayer.endFrame(m_renderer.getCurrentCommandBuffer(),
                           m_renderer.getImageIndex());
 
+    // RenderDoc frame capture (wrap the submit+present)
+    if (m_captureRequested && m_rdocApi) {
+        m_rdocApi->StartFrameCapture(nullptr, nullptr);
+    }
+
     m_renderer.endFrame();
+
+    if (m_captureRequested && m_rdocApi) {
+        m_rdocApi->EndFrameCapture(nullptr, nullptr);
+        m_captureRequested = false;
+
+        uint32_t numCaptures = m_rdocApi->GetNumCaptures();
+        if (numCaptures > 0) {
+            char path[512];
+            uint32_t pathLen = sizeof(path);
+            m_rdocApi->GetCapture(numCaptures - 1, path, &pathLen, nullptr);
+            Log::info(std::string("RenderDoc: captured to ") + path);
+
+            // Auto-open in RenderDoc UI
+            if (!m_rdocApi->IsTargetControlConnected()) {
+                m_rdocApi->LaunchReplayUI(1, nullptr);
+            }
+        }
+    }
 }
 
 void EditorApp::onShutdown()
@@ -110,6 +155,45 @@ void EditorApp::setupDockingLayout()
         ImGui::DockBuilderDockWindow("Console", dock_bottom);
         ImGui::DockBuilderFinish(dockspace_id);
     }
+}
+
+void EditorApp::initRenderDoc()
+{
+    HMODULE mod = GetModuleHandleA("renderdoc.dll");
+    if (!mod) {
+        // Try to load from default install path
+        mod = LoadLibraryA("C:/Program Files/RenderDoc/renderdoc.dll");
+    }
+    if (!mod) {
+        Log::warn("RenderDoc: not found (install RenderDoc or launch from RenderDoc to enable capture)");
+        return;
+    }
+
+    pRENDERDOC_GetAPI RENDERDOC_GetAPI = (pRENDERDOC_GetAPI)GetProcAddress(mod, "RENDERDOC_GetAPI");
+    if (!RENDERDOC_GetAPI) {
+        Log::warn("RenderDoc: failed to get API entry point");
+        return;
+    }
+
+    int ret = RENDERDOC_GetAPI(eRENDERDOC_API_Version_1_6_0, (void**)&m_rdocApi);
+    if (ret != 1 || !m_rdocApi) {
+        Log::warn("RenderDoc: failed to initialize API");
+        m_rdocApi = nullptr;
+        return;
+    }
+
+    // Disable RenderDoc's own capture key (we use our own F12)
+    m_rdocApi->SetCaptureKeys(nullptr, 0);
+    m_rdocApi->MaskOverlayBits(~RENDERDOC_OverlayBits::eRENDERDOC_Overlay_None,
+                                RENDERDOC_OverlayBits::eRENDERDOC_Overlay_None);
+
+    Log::info("RenderDoc: initialized (press F12 to capture frame)");
+}
+
+void EditorApp::captureFrame()
+{
+    if (!m_rdocApi) return;
+    m_captureRequested = true;
 }
 
 } // namespace QymEngine
