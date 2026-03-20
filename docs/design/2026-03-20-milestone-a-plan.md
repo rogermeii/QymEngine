@@ -31,6 +31,9 @@ project(QymEngine LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Debug/Release 配置（MSVC 自动在 Release 下定义 NDEBUG，控制 validation layer 开关）
+set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
+
 # 资源路径宏
 add_compile_definitions(ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets")
 
@@ -84,7 +87,7 @@ target_compile_definitions(QymEngine PRIVATE
 
 - [ ] **Step 0.4: 迁移资源文件**
 
-将 `QymEngine/shaders/` 和 `QymEngine/textures/` 移动到 `assets/shaders/` 和 `assets/textures/`。
+将 `QymEngine/shaders/` 和 `QymEngine/textures/` 移动到 `assets/shaders/` 和 `assets/textures/`。移动后检查并更新 `compile.bat` 中的路径。
 
 - [ ] **Step 0.5: CMake 构建验证**
 
@@ -204,7 +207,8 @@ Window::Window(const WindowProps& props)
 {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    // 暂时保持不可 resize，Task 2 完成 SwapChain 重建逻辑后改为 GLFW_TRUE
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     m_window = glfwCreateWindow(m_width, m_height, props.title.c_str(), nullptr, nullptr);
     if (!m_window)
@@ -327,7 +331,6 @@ public:
     static void error(const std::string& msg);
 
     static void addCallback(Callback cb);
-    static const std::vector<LogEntry>& getEntries();
 
 private:
     static void log(LogLevel level, const std::string& msg);
@@ -359,11 +362,6 @@ void Log::addCallback(Callback cb)
 {
     std::lock_guard<std::mutex> lock(s_mutex);
     s_callbacks.push_back(std::move(cb));
-}
-
-const std::vector<LogEntry>& Log::getEntries()
-{
-    return s_entries;
 }
 
 void Log::log(LogLevel level, const std::string& msg)
@@ -518,11 +516,12 @@ private:
     VkQueue m_graphicsQueue = VK_NULL_HANDLE;
     VkQueue m_presentQueue = VK_NULL_HANDLE;
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
-    VkCommandPool m_commandPool = VK_NULL_HANDLE;
 };
 
 } // namespace QymEngine
 ```
+
+> **注**：CommandPool 的创建放在 CommandManager 中（与 spec 一致），VulkanContext 仅负责 Instance/Device/Queue。
 
 实现：将 main.cpp 中对应函数逻辑原样搬迁到 `VulkanContext.cpp`，成员变量加 `m_` 前缀。
 
@@ -545,8 +544,9 @@ SwapChain 接收 `VulkanContext&` 引用，包含 `acquireNextImage()` 和 `pres
 
 从 main.cpp 提取：
 - `createGraphicsPipeline()`, `createShaderModule()`, `readFile()`
-- `createDescriptorSetLayout()`
-- 成员：`graphicsPipeline`, `pipelineLayout`, `descriptorSetLayout`
+- 成员：`graphicsPipeline`, `pipelineLayout`
+
+> **注**：`createDescriptorSetLayout()` 放在 Descriptor 模块中（与 pool/set 保持一致），Pipeline 通过参数接收 layout。
 
 - [ ] **Step 2.5: 提取 Buffer**
 
@@ -632,6 +632,8 @@ private:
 // QymEngine/main.cpp（精简版）
 #include "core/Application.h"
 #include "renderer/Renderer.h"
+#include <iostream>
+#include <stdexcept>
 
 class TriangleApp : public QymEngine::Application {
 public:
@@ -886,13 +888,11 @@ void InspectorPanel::onImGuiRender() {
     ImGui::Begin("Inspector");
     ImGui::Text("Triangle");
     ImGui::Separator();
+    // 第一阶段：只读展示，值不可编辑（占位）
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-        float pos[3] = {0, 0, 0};
-        float rot[3] = {0, 0, 0};
-        float scale[3] = {1, 1, 1};
-        ImGui::DragFloat3("Position", pos, 0.1f);
-        ImGui::DragFloat3("Rotation", rot, 0.1f);
-        ImGui::DragFloat3("Scale", scale, 0.1f);
+        ImGui::Text("Position: 0.0, 0.0, 0.0");
+        ImGui::Text("Rotation: 0.0, 0.0, 0.0");
+        ImGui::Text("Scale:    1.0, 1.0, 1.0");
     }
     ImGui::End();
 }
@@ -1021,13 +1021,15 @@ git commit -m "feat: add editor panels - SceneView, Hierarchy, Inspector, Projec
 
 初始大小：800x600，后续跟随面板大小。
 
+> **注**：现有场景管线没有深度测试，offscreen 暂时只需颜色附件。深度附件在后续里程碑添加 3D 场景时再加入。
+
 - [ ] **Step 5.2: 修改渲染流程为双 pass**
 
-每帧流程变为：
+每帧流程变为（在同一个 command buffer 中录制，通过录制顺序隐式同步，无需额外 semaphore）：
 1. `beginFrame()` — wait fence, acquire swapchain image
 2. Begin command buffer
 3. **Scene RenderPass** — bind offscreen framebuffer, draw scene, end render pass
-4. **ImGui RenderPass** — bind swapchain framebuffer, render ImGui, end render pass
+4. **ImGui RenderPass** — bind swapchain framebuffer, render ImGui（包含 SceneView 的 ImGui::Image），end render pass
 5. End command buffer
 6. `endFrame()` — submit, present
 
