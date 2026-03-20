@@ -606,13 +606,18 @@ void Renderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
 void Renderer::updateUniformBuffer(uint32_t currentImage)
 {
     UniformBufferObject ubo{};
-    ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-
     float aspect = (m_offscreenWidth > 0)
         ? m_offscreenWidth / static_cast<float>(m_offscreenHeight)
-        : 800.0f / 600.0f;
-    ubo.proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
-    ubo.proj[1][1] *= -1;
+        : 1.0f;
+
+    if (m_camera) {
+        ubo.view = m_camera->getViewMatrix();
+        ubo.proj = m_camera->getProjMatrix(aspect);
+    } else {
+        ubo.view = glm::lookAt(glm::vec3(2,2,2), glm::vec3(0,0,0), glm::vec3(0,1,0));
+        ubo.proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
+        ubo.proj[1][1] *= -1;
+    }
 
     memcpy(m_buffer.getUniformBuffersMapped()[currentImage], &ubo, sizeof(ubo));
 }

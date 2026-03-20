@@ -3,6 +3,7 @@
 #include "core/Application.h"
 #include "renderer/Renderer.h"
 #include "scene/Scene.h"
+#include "scene/Camera.h"
 #include "ImGuiLayer.h"
 
 #include "panels/SceneViewPanel.h"
@@ -27,6 +28,7 @@ private:
 
     Renderer       m_renderer;
     Scene          m_scene;
+    Camera         m_camera;
     ImGuiLayer     m_imguiLayer;
 
     SceneViewPanel m_sceneViewPanel;

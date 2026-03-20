@@ -15,6 +15,7 @@ EditorApp::EditorApp()
 void EditorApp::onInit()
 {
     m_renderer.init(getWindow());
+    m_renderer.setCamera(&m_camera);
     m_imguiLayer.init(m_renderer);
 
     m_renderer.setSwapChainRecreatedCallback([this]() {
@@ -65,7 +66,7 @@ void EditorApp::onUpdate()
     }
 
     // Render all panels
-    m_sceneViewPanel.onImGuiRender(m_renderer);
+    m_sceneViewPanel.onImGuiRender(m_renderer, m_camera);
     m_hierarchyPanel.onImGuiRender(m_scene);
     m_inspectorPanel.onImGuiRender(m_scene);
     m_projectPanel.onImGuiRender();

@@ -6,10 +6,11 @@
 namespace QymEngine {
 
 class Renderer;
+class Camera;
 
 class SceneViewPanel {
 public:
-    void onImGuiRender(Renderer& renderer);
+    void onImGuiRender(Renderer& renderer, Camera& camera);
     void cleanup();
 
     /// Called before drawScene() each frame to apply pending resize.

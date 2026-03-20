@@ -1,5 +1,6 @@
 #include "SceneViewPanel.h"
 #include "renderer/Renderer.h"
+#include "scene/Camera.h"
 
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
@@ -29,7 +30,7 @@ void SceneViewPanel::applyPendingResize(Renderer& renderer)
     recreateDescriptorSet(renderer);
 }
 
-void SceneViewPanel::onImGuiRender(Renderer& renderer)
+void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera)
 {
     ImGui::Begin("Scene View");
 
@@ -64,6 +65,20 @@ void SceneViewPanel::onImGuiRender(Renderer& renderer)
     {
         ImVec2 displaySize(static_cast<float>(m_width), static_cast<float>(m_height));
         ImGui::Image(reinterpret_cast<ImTextureID>(m_descriptorSet), displaySize);
+    }
+
+    // Camera input (only when hovering Scene View)
+    if (ImGui::IsWindowHovered()) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
+            camera.orbit(io.MouseDelta.x * 0.3f, -io.MouseDelta.y * 0.3f);
+        }
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+            camera.pan(-io.MouseDelta.x * 0.01f, io.MouseDelta.y * 0.01f);
+        }
+        if (io.MouseWheel != 0.0f) {
+            camera.zoom(-io.MouseWheel * 0.5f);
+        }
     }
 
     ImGui::End();

@@ -10,6 +10,7 @@
 #include "renderer/CommandManager.h"
 #include "renderer/MeshLibrary.h"
 #include "scene/Scene.h"
+#include "scene/Camera.h"
 
 #include <functional>
 
@@ -38,6 +39,8 @@ public:
     static constexpr int getMaxFramesInFlight() { return MAX_FRAMES_IN_FLIGHT; }
 
     void setSwapChainRecreatedCallback(SwapChainRecreatedCallback cb) { m_swapChainRecreatedCb = std::move(cb); }
+
+    void setCamera(const Camera* camera) { m_camera = camera; }
 
     // --- Offscreen rendering ---
     void createOffscreen(uint32_t width, uint32_t height);
@@ -70,6 +73,7 @@ private:
     Texture        m_texture;
     MeshLibrary    m_meshLibrary;
 
+    const Camera* m_camera = nullptr;
     Window* m_window = nullptr;
 
     uint32_t m_currentFrame = 0;
