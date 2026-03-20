@@ -28,6 +28,10 @@ target_include_directories(glm INTERFACE "${CMAKE_SOURCE_DIR}/3rd-party/glm-1.0.
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE "${CMAKE_SOURCE_DIR}/3rd-party/stb-master")
 
+# nlohmann/json (header-only)
+add_library(nlohmann_json INTERFACE)
+target_include_directories(nlohmann_json INTERFACE "${CMAKE_SOURCE_DIR}/3rd-party/nlohmann")
+
 # ImGui（docking 分支）
 file(GLOB IMGUI_SOURCES
     "3rd-party/imgui/*.cpp"

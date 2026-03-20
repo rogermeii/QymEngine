@@ -4,10 +4,11 @@
 file(GLOB_RECURSE ENGINE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/renderer/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scene/*.cpp"
 )
 add_library(QymEngineLib STATIC ${ENGINE_SOURCES})
 target_include_directories(QymEngineLib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(QymEngineLib PUBLIC Vulkan::Vulkan glfw glm stb)
+target_link_libraries(QymEngineLib PUBLIC Vulkan::Vulkan glfw glm stb nlohmann_json)
 target_compile_definitions(QymEngineLib PUBLIC
     VK_USE_PLATFORM_WIN32_KHR
     GLFW_INCLUDE_VULKAN
