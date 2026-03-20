@@ -52,7 +52,17 @@ void ImGuiLayer::init(Renderer& renderer)
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;  // optional multi-viewport
-    io.FontGlobalScale = 1.5f;
+
+    // Load Microsoft YaHei font (supports Chinese + English)
+    ImFontConfig fontConfig;
+    fontConfig.OversampleH = 2;
+    fontConfig.OversampleV = 2;
+    const char* fontPath = "C:/Windows/Fonts/msyh.ttc";
+    ImFont* font = io.Fonts->AddFontFromFileTTF(fontPath, 20.0f, &fontConfig, io.Fonts->GetGlyphRangesChineseFull());
+    if (!font) {
+        // Fallback: scale default font if msyh not found
+        io.FontGlobalScale = 1.5f;
+    }
 
     ImGui::StyleColorsDark();
 
