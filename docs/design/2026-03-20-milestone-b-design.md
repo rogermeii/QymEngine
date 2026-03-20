@@ -106,12 +106,14 @@ class Scene {
 public:
     Scene();
 
+    std::string name = "Untitled";
+
     Node* getRoot() const;             // invisible root node
     Node* getSelectedNode() const;
     void setSelectedNode(Node* node);
 
     Node* createNode(const std::string& name, Node* parent = nullptr);
-    void removeNode(Node* node);
+    void removeNode(Node* node);       // if removed node == selectedNode, auto clear selection
 
     void serialize(const std::string& path) const;
     void deserialize(const std::string& path);
@@ -137,7 +139,7 @@ private:
 ### 5.2 Inspector 面板
 
 - 仅在 `selectedNode != nullptr` 时显示内容
-- 名称：`ImGui::InputText` 可编辑 `node->name`
+- 名称：使用 `char buf[256]` 中转缓冲区 + `ImGui::InputText`，回车或失焦后同步回 `node->name`
 - Transform 组件（`ImGui::CollapsingHeader`）：
   - `ImGui::DragFloat3("Position", &transform.position, 0.1f)`
   - `ImGui::DragFloat3("Rotation", &transform.rotation, 0.1f)`
@@ -157,13 +159,26 @@ private:
 
 ### 6.1 drawScene 改造
 
+`Renderer::drawScene()` 改为 `Renderer::drawScene(Scene& scene)`，内部调用 `drawSceneToOffscreen(VkCommandBuffer, Scene&)`。`EditorApp::onUpdate()` 改为 `m_renderer.drawScene(m_scene)`。
+
+**多节点 UBO 更新策略**：使用 push constant 传递 model 矩阵（`glm::mat4`，64 bytes），取代 UBO 中的 model 字段。view/proj 矩阵保留在 UBO 中（每帧更新一次）。这样每个节点只需 `vkCmdPushConstants` + `vkCmdDrawIndexed`，无需多次 memcpy UBO。
+
+UBO 简化为：
+```cpp
+struct UniformBufferObject {
+    alignas(16) glm::mat4 view;
+    alignas(16) glm::mat4 proj;
+};
 ```
-Renderer::drawScene(Scene& scene):
+
+渲染伪代码：
+```
+drawSceneToOffscreen(cmd, scene):
     beginRenderPass(offscreen)
-    for each node in scene (depth-first traversal, skip root):
-        updateUBO(node.getWorldMatrix(), viewMatrix, projMatrix)
-        setPushConstant(isHighlighted = (node == scene.selectedNode))
-        drawIndexed(sharedMesh)  // all nodes share the same quad mesh
+    bindPipeline, bindDescriptorSets, bindVertexBuffer, bindIndexBuffer
+    for each node in scene (depth-first, skip root):
+        pushConstants(cmd, model = node.getWorldMatrix(), highlighted)
+        drawIndexed(sharedMesh)
     endRenderPass
 ```
 
@@ -171,17 +186,31 @@ Renderer::drawScene(Scene& scene):
 
 ```cpp
 struct PushConstantData {
-    int highlighted = 0;  // 0 = normal, 1 = highlighted
+    glm::mat4 model;        // 64 bytes
+    int highlighted = 0;    // 4 bytes
+    // padding to 80 bytes (alignment)
 };
 ```
 
-Pipeline layout 添加 push constant range（vertex + fragment stage, 4 bytes）。
+Pipeline layout 添加 push constant range（`VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT`，80 bytes）。`Pipeline::create()` 增加 `std::vector<VkPushConstantRange>` 参数。
 
 ### 6.3 着色器改动
 
-Fragment shader 新增：
+Vertex shader:
 ```glsl
 layout(push_constant) uniform PushConstants {
+    mat4 model;
+    int highlighted;
+} pc;
+
+// In main(): use pc.model instead of ubo.model
+gl_Position = ubo.proj * ubo.view * pc.model * vec4(inPosition, 0.0, 1.0);
+```
+
+Fragment shader:
+```glsl
+layout(push_constant) uniform PushConstants {
+    mat4 model;
     int highlighted;
 } pc;
 
@@ -191,7 +220,7 @@ if (pc.highlighted == 1) {
 }
 ```
 
-需要重新编译 GLSL → SPIR-V。
+需要重新编译 GLSL -> SPIR-V。
 
 ## 7. 场景序列化
 
@@ -272,5 +301,6 @@ if (pc.highlighted == 1) {
 
 1. **UBO 更新频率**：每个节点需要更新一次 model 矩阵到 UBO，当前是 persistent mapped memory，每帧 memcpy 即可。节点数量少时无性能问题。
 2. **push constant 兼容性**：push constant 最小保证 128 bytes，4 bytes 的 int 完全安全。
-3. **场景树递归深度**：栈溢出风险极低，编辑器场景不会有极深层级。
-4. **序列化路径**：使用 ASSETS_DIR 宏构建绝对路径，确保运行时能找到文件。
+3. **场景树递归深度**：栈溢出风险极低，编辑器场景不会有极深层级。`addChild` 不检查循环引用（学习项目简化）。
+4. **序列化路径**：使用 ASSETS_DIR 宏构建绝对路径（`std::string(ASSETS_DIR) + "/scenes/default.json"`），确保运行时能找到文件。`assets/scenes/` 目录在 Step 5 中创建。
+5. **engine/CMakeLists.txt**：现有 `GLOB_RECURSE` 模式 `core/*.cpp` 需扩展为同时包含 `scene/*.cpp`。
