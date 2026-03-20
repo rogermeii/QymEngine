@@ -106,6 +106,10 @@ private:
     // Pipeline for offscreen render pass
     Pipeline         m_offscreenPipeline;
     Pipeline         m_wireframePipeline;
+
+    // Grid pipeline (no vertex input, alpha blending, UBO-only layout)
+    VkPipeline       m_gridPipeline       = VK_NULL_HANDLE;
+    VkPipelineLayout m_gridPipelineLayout = VK_NULL_HANDLE;
 };
 
 } // namespace QymEngine

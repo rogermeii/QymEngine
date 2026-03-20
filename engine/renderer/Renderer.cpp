@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <array>
+#include <fstream>
 #include <stdexcept>
 #include <cstring>
 
@@ -198,6 +199,14 @@ void Renderer::shutdown()
     m_meshLibrary.shutdown(device);
     m_buffer.cleanup(device, MAX_FRAMES_IN_FLIGHT);
     m_descriptor.cleanup(device);
+    if (m_gridPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, m_gridPipeline, nullptr);
+        m_gridPipeline = VK_NULL_HANDLE;
+    }
+    if (m_gridPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, m_gridPipelineLayout, nullptr);
+        m_gridPipelineLayout = VK_NULL_HANDLE;
+    }
     m_offscreenPipeline.cleanup(device);
     m_pipeline.cleanup(device);
     m_renderPass.cleanup(device);
@@ -427,6 +436,150 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         m_wireframePipeline.create(device, m_offscreenRenderPass,
                                    setLayouts, {width, height},
                                    pcRanges, VK_POLYGON_MODE_LINE);
+
+        // --- Create grid pipeline (no vertex input, alpha blending, UBO-only) ---
+        {
+            auto readFile = [](const std::string& filename) -> std::vector<char> {
+                std::ifstream file(filename, std::ios::ate | std::ios::binary);
+                if (!file.is_open())
+                    throw std::runtime_error("failed to open file: " + filename);
+                size_t fileSize = static_cast<size_t>(file.tellg());
+                std::vector<char> buffer(fileSize);
+                file.seekg(0);
+                file.read(buffer.data(), fileSize);
+                return buffer;
+            };
+
+            auto gridVertCode = readFile(std::string(ASSETS_DIR) + "/shaders/grid_vert.spv");
+            auto gridFragCode = readFile(std::string(ASSETS_DIR) + "/shaders/grid_frag.spv");
+
+            auto createShaderModule = [&](const std::vector<char>& code) -> VkShaderModule {
+                VkShaderModuleCreateInfo ci{};
+                ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                ci.codeSize = code.size();
+                ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
+                VkShaderModule mod;
+                if (vkCreateShaderModule(device, &ci, nullptr, &mod) != VK_SUCCESS)
+                    throw std::runtime_error("failed to create grid shader module!");
+                return mod;
+            };
+
+            VkShaderModule gridVert = createShaderModule(gridVertCode);
+            VkShaderModule gridFrag = createShaderModule(gridFragCode);
+
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = gridVert;
+            stages[0].pName = "main";
+            stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = gridFrag;
+            stages[1].pName = "main";
+
+            // No vertex input
+            VkPipelineVertexInputStateCreateInfo vertexInput{};
+            vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            vertexInput.vertexBindingDescriptionCount = 0;
+            vertexInput.vertexAttributeDescriptionCount = 0;
+
+            VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+            inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+            VkPipelineViewportStateCreateInfo viewportState{};
+            viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            viewportState.viewportCount = 1;
+            viewportState.scissorCount = 1;
+
+            VkPipelineRasterizationStateCreateInfo rasterizer{};
+            rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rasterizer.depthClampEnable = VK_FALSE;
+            rasterizer.rasterizerDiscardEnable = VK_FALSE;
+            rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+            rasterizer.lineWidth = 1.0f;
+            rasterizer.cullMode = VK_CULL_MODE_NONE;
+            rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rasterizer.depthBiasEnable = VK_FALSE;
+
+            VkPipelineMultisampleStateCreateInfo multisampling{};
+            multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            multisampling.sampleShadingEnable = VK_FALSE;
+
+            // Alpha blending
+            VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+            colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            colorBlendAttachment.blendEnable = VK_TRUE;
+            colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+            colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+            VkPipelineColorBlendStateCreateInfo colorBlending{};
+            colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            colorBlending.logicOpEnable = VK_FALSE;
+            colorBlending.attachmentCount = 1;
+            colorBlending.pAttachments = &colorBlendAttachment;
+
+            // Depth test + write enabled
+            VkPipelineDepthStencilStateCreateInfo depthStencil{};
+            depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            depthStencil.depthTestEnable = VK_TRUE;
+            depthStencil.depthWriteEnable = VK_TRUE;
+            depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+            depthStencil.depthBoundsTestEnable = VK_FALSE;
+            depthStencil.stencilTestEnable = VK_FALSE;
+
+            std::vector<VkDynamicState> dynamicStates = {
+                VK_DYNAMIC_STATE_VIEWPORT,
+                VK_DYNAMIC_STATE_SCISSOR
+            };
+            VkPipelineDynamicStateCreateInfo dynamicState{};
+            dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+            dynamicState.pDynamicStates = dynamicStates.data();
+
+            // Pipeline layout: only UBO set (set 0), no push constants
+            VkDescriptorSetLayout gridSetLayout = m_descriptor.getUboLayout();
+            VkPipelineLayoutCreateInfo gridLayoutInfo{};
+            gridLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            gridLayoutInfo.setLayoutCount = 1;
+            gridLayoutInfo.pSetLayouts = &gridSetLayout;
+            gridLayoutInfo.pushConstantRangeCount = 0;
+            gridLayoutInfo.pPushConstantRanges = nullptr;
+
+            if (vkCreatePipelineLayout(device, &gridLayoutInfo, nullptr, &m_gridPipelineLayout) != VK_SUCCESS)
+                throw std::runtime_error("failed to create grid pipeline layout!");
+
+            VkGraphicsPipelineCreateInfo pipelineInfo{};
+            pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            pipelineInfo.stageCount = 2;
+            pipelineInfo.pStages = stages;
+            pipelineInfo.pVertexInputState = &vertexInput;
+            pipelineInfo.pInputAssemblyState = &inputAssembly;
+            pipelineInfo.pViewportState = &viewportState;
+            pipelineInfo.pRasterizationState = &rasterizer;
+            pipelineInfo.pMultisampleState = &multisampling;
+            pipelineInfo.pDepthStencilState = &depthStencil;
+            pipelineInfo.pColorBlendState = &colorBlending;
+            pipelineInfo.pDynamicState = &dynamicState;
+            pipelineInfo.layout = m_gridPipelineLayout;
+            pipelineInfo.renderPass = m_offscreenRenderPass;
+            pipelineInfo.subpass = 0;
+            pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+            pipelineInfo.basePipelineIndex = -1;
+
+            if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_gridPipeline) != VK_SUCCESS)
+                throw std::runtime_error("failed to create grid pipeline!");
+
+            vkDestroyShaderModule(device, gridFrag, nullptr);
+            vkDestroyShaderModule(device, gridVert, nullptr);
+        }
     }
 
     // --- 5. Create framebuffer (color + depth) ---
@@ -579,9 +732,6 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
 
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      m_offscreenPipeline.getPipeline());
-
     VkViewport viewport{};
     viewport.x        = 0.0f;
     viewport.y        = 0.0f;
@@ -595,6 +745,19 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     scissor.offset = {0, 0};
     scissor.extent = {m_offscreenWidth, m_offscreenHeight};
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+    // --- Draw grid + sky (before scene objects) ---
+    if (m_gridPipeline != VK_NULL_HANDLE) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_gridPipeline);
+        VkDescriptorSet gridUboSet = m_descriptor.getUboSet(m_currentFrame);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_gridPipelineLayout, 0, 1, &gridUboSet, 0, nullptr);
+        vkCmdDraw(commandBuffer, 6, 1, 0, 0);
+    }
+
+    // --- Bind scene pipeline ---
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      m_offscreenPipeline.getPipeline());
 
     // Bind UBO descriptor set (set 0) - once per frame
     VkDescriptorSet uboSet = m_descriptor.getUboSet(m_currentFrame);

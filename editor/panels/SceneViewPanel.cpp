@@ -73,6 +73,44 @@ void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& sc
         ImGui::Image(reinterpret_cast<ImTextureID>(m_descriptorSet), displaySize);
     }
 
+    // --- Orientation axis gizmo (top-right corner) ---
+    {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 winPos = ImGui::GetWindowPos();
+        ImVec2 contentMin = ImGui::GetWindowContentRegionMin();
+
+        float gizmoSize = 60.0f;
+        float padding = 15.0f;
+        ImVec2 center = ImVec2(
+            winPos.x + contentMin.x + viewportSize.x - gizmoSize - padding + gizmoSize * 0.5f,
+            winPos.y + contentMin.y + padding + gizmoSize * 0.5f
+        );
+
+        // Get camera rotation to transform axes
+        glm::mat4 viewMat = camera.getViewMatrix();
+        glm::mat3 rot = glm::mat3(viewMat); // extract rotation part
+
+        float axisLen = gizmoSize * 0.4f;
+
+        // X axis (red)
+        glm::vec3 xEnd = rot * glm::vec3(1, 0, 0);
+        ImVec2 xScreen = ImVec2(center.x + xEnd.x * axisLen, center.y - xEnd.y * axisLen);
+        drawList->AddLine(center, xScreen, IM_COL32(255, 60, 60, 255), 2.0f);
+        drawList->AddText(ImVec2(xScreen.x - 4, xScreen.y - 8), IM_COL32(255, 60, 60, 255), "X");
+
+        // Y axis (green)
+        glm::vec3 yEnd = rot * glm::vec3(0, 1, 0);
+        ImVec2 yScreen = ImVec2(center.x + yEnd.x * axisLen, center.y - yEnd.y * axisLen);
+        drawList->AddLine(center, yScreen, IM_COL32(60, 255, 60, 255), 2.0f);
+        drawList->AddText(ImVec2(yScreen.x - 4, yScreen.y - 8), IM_COL32(60, 255, 60, 255), "Y");
+
+        // Z axis (blue)
+        glm::vec3 zEnd = rot * glm::vec3(0, 0, 1);
+        ImVec2 zScreen = ImVec2(center.x + zEnd.x * axisLen, center.y - zEnd.y * axisLen);
+        drawList->AddLine(center, zScreen, IM_COL32(60, 60, 255, 255), 2.0f);
+        drawList->AddText(ImVec2(zScreen.x - 4, zScreen.y - 8), IM_COL32(60, 60, 255, 255), "Z");
+    }
+
     // --- Gizmo ---
     Node* selected = scene.getSelectedNode();
     if (selected && selected->meshType != MeshType::None) {
