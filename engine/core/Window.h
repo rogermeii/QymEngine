@@ -10,6 +10,7 @@ struct WindowProps {
     std::string title = "QymEngine";
     uint32_t width = 1280;
     uint32_t height = 720;
+    bool maximized = false;
 };
 
 class Window {

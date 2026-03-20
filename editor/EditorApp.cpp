@@ -7,7 +7,7 @@
 namespace QymEngine {
 
 EditorApp::EditorApp()
-    : Application({"QymEngine Editor", 1280, 720})
+    : Application({"QymEngine Editor", 1280, 720, true})
 {
 }
 

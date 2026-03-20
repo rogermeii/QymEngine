@@ -8,11 +8,21 @@ Window::Window(const WindowProps& props)
 {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    if (props.maximized)
+        glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
     m_window = glfwCreateWindow(m_width, m_height, props.title.c_str(), nullptr, nullptr);
     if (!m_window)
         throw std::runtime_error("Failed to create GLFW window!");
+
+    // Update actual size (may differ from requested when maximized)
+    if (props.maximized) {
+        int w, h;
+        glfwGetFramebufferSize(m_window, &w, &h);
+        m_width = static_cast<uint32_t>(w);
+        m_height = static_cast<uint32_t>(h);
+    }
 
     glfwSetWindowUserPointer(m_window, this);
     glfwSetFramebufferSizeCallback(m_window, framebufferResizeCallback);
