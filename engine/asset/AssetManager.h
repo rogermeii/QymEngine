@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include "asset/ShaderAsset.h"
+#include "asset/MaterialAsset.h"
 
 namespace QymEngine {
 
@@ -41,10 +42,16 @@ public:
     const MeshAsset* loadMesh(const std::string& relativePath);
     const TextureAsset* loadTexture(const std::string& relativePath);
     const ShaderAsset* loadShader(const std::string& relativePath);
+    const MaterialAsset* loadMaterial(const std::string& relativePath);
 
     const std::vector<std::string>& getMeshFiles() const { return m_meshFiles; }
     const std::vector<std::string>& getTextureFiles() const { return m_textureFiles; }
     const std::vector<std::string>& getShaderFiles() const { return m_shaderFiles; }
+    const std::vector<std::string>& getMaterialFiles() const { return m_materialFiles; }
+
+    // For fallback textures (called by Renderer after creating fallbacks)
+    void setFallbackAlbedo(VkImageView view, VkSampler sampler) { m_fallbackAlbedoView = view; m_fallbackAlbedoSampler = sampler; }
+    void setFallbackNormal(VkImageView view, VkSampler sampler) { m_fallbackNormalView = view; m_fallbackNormalSampler = sampler; }
 
     // For per-texture descriptor set creation
     void setTextureDescriptorSetLayout(VkDescriptorSetLayout layout) { m_textureSetLayout = layout; }
@@ -62,13 +69,21 @@ private:
     CommandManager* m_cmdMgr = nullptr;
     std::string m_assetsDir;
 
-    std::vector<std::string> m_meshFiles;    // relative paths like "models/cube.obj"
-    std::vector<std::string> m_textureFiles; // relative paths like "textures/wall.jpg"
-    std::vector<std::string> m_shaderFiles;  // relative paths like "shaders/standard_lit.shader.json"
+    std::vector<std::string> m_meshFiles;      // relative paths like "models/cube.obj"
+    std::vector<std::string> m_textureFiles;   // relative paths like "textures/wall.jpg"
+    std::vector<std::string> m_shaderFiles;    // relative paths like "shaders/standard_lit.shader.json"
+    std::vector<std::string> m_materialFiles;  // relative paths like "materials/default_lit.mat.json"
 
     std::unordered_map<std::string, MeshAsset> m_meshCache;
     std::unordered_map<std::string, TextureAsset> m_textureCache;
     std::unordered_map<std::string, ShaderAsset> m_shaderCache;
+    std::unordered_map<std::string, MaterialAsset> m_materialCache;
+
+    // Fallback textures for materials without explicit maps
+    VkImageView m_fallbackAlbedoView = VK_NULL_HANDLE;
+    VkSampler m_fallbackAlbedoSampler = VK_NULL_HANDLE;
+    VkImageView m_fallbackNormalView = VK_NULL_HANDLE;
+    VkSampler m_fallbackNormalSampler = VK_NULL_HANDLE;
 
     VkDescriptorSetLayout m_textureSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_textureDescriptorPool = VK_NULL_HANDLE;

@@ -76,6 +76,8 @@ void Renderer::init(Window& window)
     m_assetManager.init(m_context, m_commandManager);
     m_assetManager.setTextureDescriptorSetLayout(m_descriptor.getTextureLayout());
     m_assetManager.setTextureDescriptorPool(m_descriptor.getPool());
+    m_assetManager.setFallbackAlbedo(m_whiteFallbackView, m_fallbackSampler);
+    m_assetManager.setFallbackNormal(m_normalFallbackView, m_fallbackSampler);
     m_assetManager.scanAssets(std::string(ASSETS_DIR));
 
     m_commandManager.createBuffers(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT);

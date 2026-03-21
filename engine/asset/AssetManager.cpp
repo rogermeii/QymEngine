@@ -9,6 +9,7 @@
 #include "renderer/CommandManager.h"
 #include "renderer/Buffer.h"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -56,6 +57,9 @@ void AssetManager::shutdown(VkDevice device)
         shader.pipeline.cleanup(device);
     }
     m_shaderCache.clear();
+
+    // Material descriptor sets are freed when the pool is destroyed
+    m_materialCache.clear();
 }
 
 void AssetManager::scanAssets(const std::string& assetsDir)
@@ -64,6 +68,7 @@ void AssetManager::scanAssets(const std::string& assetsDir)
     m_meshFiles.clear();
     m_textureFiles.clear();
     m_shaderFiles.clear();
+    m_materialFiles.clear();
 
     if (!fs::exists(assetsDir)) return;
 
@@ -78,8 +83,10 @@ void AssetManager::scanAssets(const std::string& assetsDir)
         std::transform(ext.begin(), ext.end(), ext.begin(),
             [](unsigned char c){ return std::tolower(c); });
 
-        // Check for .shader.json files first (before simple extension check)
-        if (relPath.find(".shader.json") != std::string::npos) {
+        // Check for .mat.json and .shader.json files first (before simple extension check)
+        if (relPath.find(".mat.json") != std::string::npos) {
+            m_materialFiles.push_back(relPath);
+        } else if (relPath.find(".shader.json") != std::string::npos) {
             m_shaderFiles.push_back(relPath);
         } else if (ext == ".obj") {
             m_meshFiles.push_back(relPath);
@@ -357,6 +364,118 @@ const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
 
     m_shaderCache[relativePath] = std::move(shader);
     return &m_shaderCache[relativePath];
+}
+
+const MaterialAsset* AssetManager::loadMaterial(const std::string& relativePath)
+{
+    // Check cache
+    auto it = m_materialCache.find(relativePath);
+    if (it != m_materialCache.end())
+        return &it->second;
+
+    if (!m_ctx) return nullptr;
+
+    std::string fullPath = m_assetsDir + "/" + relativePath;
+    if (!fs::exists(fullPath)) return nullptr;
+
+    // Parse JSON
+    std::ifstream file(fullPath);
+    if (!file.is_open()) return nullptr;
+
+    nlohmann::json j;
+    try {
+        file >> j;
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+
+    MaterialAsset mat{};
+    mat.name = j.value("name", "Unnamed");
+    mat.shaderPath = j.value("shader", "");
+
+    // Load shader
+    if (!mat.shaderPath.empty()) {
+        mat.shader = const_cast<ShaderAsset*>(loadShader(mat.shaderPath));
+    }
+
+    // Parse properties
+    if (j.contains("properties")) {
+        auto& props = j["properties"];
+        if (props.contains("baseColor")) {
+            auto& c = props["baseColor"];
+            mat.baseColor = {c[0].get<float>(), c[1].get<float>(), c[2].get<float>(), c[3].get<float>()};
+        }
+        if (props.contains("metallic"))
+            mat.metallic = props["metallic"].get<float>();
+        if (props.contains("roughness"))
+            mat.roughness = props["roughness"].get<float>();
+        if (props.contains("albedoMap"))
+            mat.albedoMapPath = props["albedoMap"].get<std::string>();
+        if (props.contains("normalMap"))
+            mat.normalMapPath = props["normalMap"].get<std::string>();
+    }
+
+    // Load textures, using fallbacks for missing maps
+    VkImageView albedoView = m_fallbackAlbedoView;
+    VkSampler albedoSampler = m_fallbackAlbedoSampler;
+    VkImageView normalView = m_fallbackNormalView;
+    VkSampler normalSampler = m_fallbackNormalSampler;
+
+    if (!mat.albedoMapPath.empty()) {
+        auto* tex = loadTexture(mat.albedoMapPath);
+        if (tex) {
+            albedoView = tex->view;
+            albedoSampler = tex->sampler;
+        }
+    }
+    if (!mat.normalMapPath.empty()) {
+        auto* tex = loadTexture(mat.normalMapPath);
+        if (tex) {
+            normalView = tex->view;
+            normalSampler = tex->sampler;
+        }
+    }
+
+    // Create descriptor set with both albedo and normal map bindings
+    VkDevice device = m_ctx->getDevice();
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_textureDescriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_textureSetLayout;
+
+    if (vkAllocateDescriptorSets(device, &allocInfo, &mat.textureSet) != VK_SUCCESS)
+        throw std::runtime_error("failed to allocate material texture descriptor set!");
+
+    std::array<VkDescriptorImageInfo, 2> imageInfos{};
+    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfos[0].imageView = albedoView;
+    imageInfos[0].sampler = albedoSampler;
+
+    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfos[1].imageView = normalView;
+    imageInfos[1].sampler = normalSampler;
+
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = mat.textureSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].descriptorCount = 1;
+    writes[0].pImageInfo = &imageInfos[0];
+
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = mat.textureSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &imageInfos[1];
+
+    vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+
+    m_materialCache[relativePath] = mat;
+    return &m_materialCache[relativePath];
 }
 
 // ---------------------------------------------------------------------------
