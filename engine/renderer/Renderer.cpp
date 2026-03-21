@@ -916,35 +916,44 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         vkCmdDraw(commandBuffer, 6, 1, 0, 0);
     }
 
-    // --- Bind scene pipeline ---
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      m_offscreenPipeline.getPipeline());
-
-    // Bind UBO descriptor set (set 0) - once per frame
+    // UBO descriptor set (set 0) - shared across all nodes
     VkDescriptorSet uboSet = m_descriptor.getUboSet(m_currentFrame);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            m_offscreenPipeline.getPipelineLayout(), 0, 1,
-                            &uboSet, 0, nullptr);
 
-    // Render each scene node with its own mesh and texture
+    // Render each scene node with its own material, pipeline, and mesh
     scene.traverseNodes([&](Node* node) {
-        // Determine texture descriptor set (set 1) — use default material tex set for now
-        // Material system will replace this in Task 7
-        VkDescriptorSet texSet = m_defaultMaterialTexSet;
+        // Load material (or use defaults)
+        const MaterialAsset* mat = nullptr;
+        if (!node->materialPath.empty())
+            mat = m_assetManager.loadMaterial(node->materialPath);
 
-        // Bind texture descriptor set (set 1)
+        // Bind shader pipeline — different nodes may use different shaders
+        VkPipeline shaderPipeline = (mat && mat->shader)
+            ? mat->shader->pipeline.getPipeline()
+            : m_offscreenPipeline.getPipeline();
+        VkPipelineLayout pipelineLayout = (mat && mat->shader)
+            ? mat->shader->pipeline.getPipelineLayout()
+            : m_offscreenPipeline.getPipelineLayout();
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shaderPipeline);
+
+        // Re-bind UBO descriptor set (set 0) after pipeline change
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_offscreenPipeline.getPipelineLayout(), 1, 1,
-                                &texSet, 0, nullptr);
+                                pipelineLayout, 0, 1, &uboSet, 0, nullptr);
 
-        // Push constants — use defaults until material system is integrated
+        // Bind material texture set (set 1) or default
+        VkDescriptorSet texSet = (mat && mat->textureSet != VK_NULL_HANDLE)
+            ? mat->textureSet
+            : m_defaultMaterialTexSet;
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipelineLayout, 1, 1, &texSet, 0, nullptr);
+
+        // Push constants from material (or defaults)
         PushConstantData pc{};
         pc.model = node->getWorldMatrix();
-        pc.baseColor = glm::vec4(1.0f);
-        pc.metallic = 0.0f;
-        pc.roughness = 0.5f;
+        pc.baseColor = mat ? mat->baseColor : glm::vec4(1.0f);
+        pc.metallic = mat ? mat->metallic : 0.0f;
+        pc.roughness = mat ? mat->roughness : 0.5f;
         pc.highlighted = 0;  // wireframe pass handles highlight
-        vkCmdPushConstants(commandBuffer, m_offscreenPipeline.getPipelineLayout(),
+        vkCmdPushConstants(commandBuffer, pipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(PushConstantData), &pc);
 
@@ -969,7 +978,10 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     if (selected && (selected->meshType != MeshType::None || !selected->meshPath.empty())) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_wireframePipeline.getPipeline());
 
-        // Reuse UBO set 0 (already bound), bind texture set 1
+        // Re-bind UBO set 0 after pipeline change, bind texture set 1
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_wireframePipeline.getPipelineLayout(), 0, 1,
+                                &uboSet, 0, nullptr);
         VkDescriptorSet texSet = m_defaultTextureSet;
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_wireframePipeline.getPipelineLayout(), 1, 1,
