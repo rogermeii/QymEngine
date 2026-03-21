@@ -26,6 +26,7 @@ public:
     void init(Window& window);
     bool beginFrame();
     void drawScene(Scene& scene);
+    void blitToSwapchain();
     void endFrame();
     void shutdown();
 

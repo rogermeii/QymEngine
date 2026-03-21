@@ -3,7 +3,7 @@
 #include <vector>
 #include <optional>
 
-struct GLFWwindow;
+struct SDL_Window;
 
 namespace QymEngine {
 
@@ -20,7 +20,7 @@ struct QueueFamilyIndices
 
 class VulkanContext {
 public:
-    void init(GLFWwindow* window);
+    void init(SDL_Window* window);
     void shutdown();
 
     VkInstance       getInstance()       const { return m_instance; }
@@ -53,7 +53,7 @@ private:
         const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
         void* pUserData);
 
-    GLFWwindow* m_window = nullptr;
+    SDL_Window* m_window = nullptr;
 
     VkInstance               m_instance       = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT m_debugMessenger = VK_NULL_HANDLE;

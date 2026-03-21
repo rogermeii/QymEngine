@@ -6,7 +6,7 @@
 #include "core/Window.h"
 
 #include <imgui.h>
-#include <imgui_impl_glfw.h>
+#include <imgui_impl_sdl2.h>
 #include <imgui_impl_vulkan.h>
 #include <ImGuizmo.h>
 
@@ -54,21 +54,31 @@ void ImGuiLayer::init(Renderer& renderer)
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;  // optional multi-viewport
 
-    // Load Microsoft YaHei font (supports Chinese + English)
+    // Load CJK font
     ImFontConfig fontConfig;
     fontConfig.OversampleH = 2;
     fontConfig.OversampleV = 2;
+#ifdef __ANDROID__
+    const char* fontPath = "/system/fonts/NotoSansCJK-Regular.ttc";
+    float fontSize = 36.0f;
+#else
     const char* fontPath = "C:/Windows/Fonts/msyh.ttc";
-    ImFont* font = io.Fonts->AddFontFromFileTTF(fontPath, 20.0f, &fontConfig, io.Fonts->GetGlyphRangesChineseFull());
+    float fontSize = 20.0f;
+#endif
+    ImFont* font = io.Fonts->AddFontFromFileTTF(fontPath, fontSize, &fontConfig, io.Fonts->GetGlyphRangesChineseFull());
     if (!font) {
-        // Fallback: scale default font if msyh not found
         io.FontGlobalScale = 1.5f;
     }
 
     ImGui::StyleColorsDark();
 
     // --- 5. Platform / Renderer backends ------------------------------------------------
-    ImGui_ImplGlfw_InitForVulkan(renderer.getWindow()->getNativeWindow(), true);
+    ImGui_ImplSDL2_InitForVulkan(renderer.getWindow()->getNativeWindow());
+
+    // 注册 SDL 事件回调，转发给 ImGui
+    renderer.getWindow()->setEventCallback([](const SDL_Event& event) {
+        ImGui_ImplSDL2_ProcessEvent(&event);
+    });
 
     QueueFamilyIndices indices = ctx.findQueueFamilies(ctx.getPhysicalDevice());
 
@@ -98,7 +108,7 @@ void ImGuiLayer::init(Renderer& renderer)
 void ImGuiLayer::shutdown()
 {
     ImGui_ImplVulkan_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
+    ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
 
     for (auto fb : m_framebuffers)
@@ -121,7 +131,7 @@ void ImGuiLayer::shutdown()
 void ImGuiLayer::beginFrame()
 {
     ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
     ImGuizmo::BeginFrame();
 }

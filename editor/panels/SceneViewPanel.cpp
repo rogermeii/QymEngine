@@ -7,9 +7,11 @@
 #include <imgui_impl_vulkan.h>
 #include <ImGuizmo.h>
 
+#include <SDL.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <glm/gtx/matrix_decompose.hpp>
+
+#include <cmath>
 
 namespace QymEngine {
 
@@ -113,8 +115,9 @@ void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& sc
 
     // --- Gizmo ---
     Node* selected = scene.getSelectedNode();
-    if (selected && selected->meshType != MeshType::None) {
+    if (selected) {
         ImGuizmo::SetOrthographic(false);
+        ImGuizmo::AllowAxisFlip(false);
         ImGuizmo::SetDrawlist();
 
         // Get the Scene View panel's screen position and size
@@ -132,6 +135,8 @@ void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& sc
         glm::mat4 view = camera.getViewMatrix();
         float aspect = viewportSize.x / viewportSize.y;
         glm::mat4 proj = camera.getProjMatrix(aspect);
+        // Undo Vulkan Y-flip for ImGuizmo (it uses OpenGL conventions internally)
+        proj[1][1] *= -1;
 
         // Get node's world transform
         glm::mat4 worldMatrix = selected->getWorldMatrix();
@@ -154,44 +159,109 @@ void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& sc
                 localMatrix = glm::inverse(parentWorld) * worldMatrix;
             }
 
-            // Decompose local matrix into position/rotation/scale
-            glm::vec3 translation, scale, skew;
-            glm::quat rotation;
-            glm::vec4 perspective;
-            glm::decompose(localMatrix, scale, rotation, translation, skew, perspective);
+            // Extract position from column 3
+            selected->transform.position = glm::vec3(localMatrix[3]);
 
-            selected->transform.position = translation;
+            // Extract scale from column lengths
+            glm::vec3 colX(localMatrix[0]);
+            glm::vec3 colY(localMatrix[1]);
+            glm::vec3 colZ(localMatrix[2]);
+            glm::vec3 scale(glm::length(colX), glm::length(colY), glm::length(colZ));
+
+            // Handle reflection (negative determinant)
+            glm::mat3 rot3(localMatrix);
+            if (glm::determinant(rot3) < 0.0f)
+                scale.x = -scale.x;
+
             selected->transform.scale = scale;
 
-            // Convert quaternion to euler angles (degrees)
-            glm::vec3 eulerRad = glm::eulerAngles(rotation);
-            selected->transform.rotation = glm::degrees(eulerRad);
+            // Normalize columns to get pure rotation matrix
+            glm::mat3 r;
+            r[0] = glm::vec3(localMatrix[0]) / scale.x;
+            r[1] = glm::vec3(localMatrix[1]) / scale.y;
+            r[2] = glm::vec3(localMatrix[2]) / scale.z;
+
+            // Extract XYZ intrinsic euler angles matching getLocalMatrix() order:
+            // R = Rx(a) * Ry(b) * Rz(c)  =>  r[2][0] = sin(b)
+            float sinY = glm::clamp(r[2][0], -1.0f, 1.0f);
+            float y = std::asin(sinY);
+            float cosY = std::cos(y);
+            float x, z;
+            if (std::abs(cosY) > 0.0001f) {
+                x = std::atan2(-r[2][1], r[2][2]);
+                z = std::atan2(-r[1][0], r[0][0]);
+            } else {
+                x = std::atan2(r[1][2], r[1][1]);
+                z = 0.0f;
+            }
+            selected->transform.rotation = glm::degrees(glm::vec3(x, y, z));
         }
     }
 
-    // Keyboard shortcuts for gizmo mode (when Scene View is focused)
-    if (ImGui::IsWindowFocused()) {
-        if (ImGui::IsKeyPressed(ImGuiKey_W))
-            m_gizmoOperation = ImGuizmo::TRANSLATE;
-        if (ImGui::IsKeyPressed(ImGuiKey_E))
-            m_gizmoOperation = ImGuizmo::ROTATE;
-        if (ImGui::IsKeyPressed(ImGuiKey_R))
-            m_gizmoOperation = ImGuizmo::SCALE;
-    }
-
-    // Camera input (only when hovering AND gizmo is not active)
+    // Camera & keyboard input (when hovering Scene View, gizmo not active)
     if (ImGui::IsWindowHovered() && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
         ImGuiIO& io = ImGui::GetIO();
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-            camera.orbit(io.MouseDelta.x * 0.3f, io.MouseDelta.y * 0.3f);
+
+        // --- Consume accumulated touch gesture deltas (from processEvent) ---
+        if (std::abs(m_pendingZoom) > 0.001f) {
+            camera.zoom(m_pendingZoom);
         }
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
-            camera.pan(-io.MouseDelta.x * 0.003f, io.MouseDelta.y * 0.003f);
+        if (std::abs(m_pendingPanX) > 0.001f || std::abs(m_pendingPanY) > 0.001f) {
+            camera.pan(m_pendingPanX, m_pendingPanY);
         }
-        if (io.MouseWheel != 0.0f) {
-            camera.zoom(-io.MouseWheel * 0.5f);
+
+        // Single finger / mouse input (only when no multi-touch active)
+        if (m_fingerCount < 2) {
+            bool rightMouseHeld = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+
+            // Right-click + WASD: fly camera (Shift to boost)
+            if (rightMouseHeld) {
+                float speed = io.KeyShift ? 8.0f : 2.5f;
+                speed *= io.DeltaTime;
+                glm::vec3 forward = glm::normalize(camera.target - camera.getPosition());
+                glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0, 1, 0)));
+
+                glm::vec3 move(0.0f);
+                if (ImGui::IsKeyDown(ImGuiKey_W)) move += forward * speed;
+                if (ImGui::IsKeyDown(ImGuiKey_S)) move -= forward * speed;
+                if (ImGui::IsKeyDown(ImGuiKey_A)) move -= right * speed;
+                if (ImGui::IsKeyDown(ImGuiKey_D)) move += right * speed;
+
+                camera.target += move;
+
+                if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
+                    camera.orbit(io.MouseDelta.x * 0.3f, io.MouseDelta.y * 0.3f);
+                }
+            } else {
+                // Single finger drag (touch as left mouse): orbit
+                if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                    camera.orbit(io.MouseDelta.x * 0.3f, io.MouseDelta.y * 0.3f);
+                }
+
+                // W/E/R: gizmo mode shortcuts
+                if (ImGui::IsKeyPressed(ImGuiKey_W))
+                    m_gizmoOperation = ImGuizmo::TRANSLATE;
+                if (ImGui::IsKeyPressed(ImGuiKey_E))
+                    m_gizmoOperation = ImGuizmo::ROTATE;
+                if (ImGui::IsKeyPressed(ImGuiKey_R))
+                    m_gizmoOperation = ImGuizmo::SCALE;
+            }
+
+            // Middle-click drag: pan (desktop)
+            if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+                camera.pan(-io.MouseDelta.x * 0.003f, io.MouseDelta.y * 0.003f);
+            }
+            // Scroll: zoom (desktop)
+            if (io.MouseWheel != 0.0f) {
+                camera.zoom(-io.MouseWheel * 0.5f);
+            }
         }
     }
+
+    // Reset per-frame gesture accumulators
+    m_pendingZoom = 0.0f;
+    m_pendingPanX = 0.0f;
+    m_pendingPanY = 0.0f;
 
     ImGui::End();
 }
@@ -226,6 +296,58 @@ void SceneViewPanel::recreateDescriptorSet(Renderer& renderer)
     m_descriptorSet = ImGui_ImplVulkan_AddTexture(
         sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     m_cachedImageView = currentView;
+}
+
+void SceneViewPanel::processEvent(const SDL_Event& event)
+{
+    switch (event.type) {
+    case SDL_FINGERDOWN:
+        m_fingerCount++;
+        m_hasPinchPrev = false; // Reset pinch tracking when finger count changes
+        break;
+
+    case SDL_FINGERUP:
+        m_fingerCount--;
+        if (m_fingerCount < 0) m_fingerCount = 0;
+        m_hasPinchPrev = false;
+        break;
+
+    case SDL_FINGERMOTION:
+        if (m_fingerCount >= 2) {
+            // Get all current fingers for pinch/pan calculation
+            SDL_TouchID touchId = event.tfinger.touchId;
+            int numFingers = SDL_GetNumTouchFingers(touchId);
+            if (numFingers >= 2) {
+                SDL_Finger* f0 = SDL_GetTouchFinger(touchId, 0);
+                SDL_Finger* f1 = SDL_GetTouchFinger(touchId, 1);
+                if (f0 && f1) {
+                    float dx = f1->x - f0->x;
+                    float dy = f1->y - f0->y;
+                    float dist = std::sqrt(dx * dx + dy * dy);
+                    float cx = (f0->x + f1->x) * 0.5f;
+                    float cy = (f0->y + f1->y) * 0.5f;
+
+                    if (m_hasPinchPrev) {
+                        // Pinch zoom (distance change)
+                        float deltaDist = dist - m_pinchDist;
+                        m_pendingZoom += -deltaDist * 5.0f;
+
+                        // Two-finger pan (center movement)
+                        float panDx = cx - m_pinchCenterX;
+                        float panDy = cy - m_pinchCenterY;
+                        m_pendingPanX += -panDx * 2.0f;
+                        m_pendingPanY += panDy * 2.0f;
+                    }
+
+                    m_pinchDist = dist;
+                    m_pinchCenterX = cx;
+                    m_pinchCenterY = cy;
+                    m_hasPinchPrev = true;
+                }
+            }
+        }
+        break;
+    }
 }
 
 } // namespace QymEngine

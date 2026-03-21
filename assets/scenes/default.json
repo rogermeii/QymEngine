@@ -1,27 +1,165 @@
 {
   "scene": {
-    "name": "Untitled",
+    "name": "Test Scene",
     "nodes": [
       {
-        "children": [],
-        "name": "New Node",
+        "name": "Ground",
+        "nodeType": "Mesh",
+        "meshType": "Plane",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
         "transform": {
-          "position": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "rotation": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "scale": [
-            1.0,
-            1.3799999952316284,
-            1.0
-          ]
-        }
+          "position": [0.0, -0.5, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [10.0, 1.0, 10.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Center Cube",
+        "nodeType": "Mesh",
+        "meshType": "Cube",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [0.0, 0.5, 0.0],
+          "rotation": [0.0, 45.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Tall Pillar",
+        "nodeType": "Mesh",
+        "meshType": "Cube",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [-3.0, 1.0, -2.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [0.5, 2.5, 0.5]
+        },
+        "children": []
+      },
+      {
+        "name": "Sphere",
+        "nodeType": "Mesh",
+        "meshType": "Sphere",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [2.5, 0.3, 1.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [0.8, 0.8, 0.8]
+        },
+        "children": []
+      },
+      {
+        "name": "Tilted Cube",
+        "nodeType": "Mesh",
+        "meshType": "Cube",
+        "meshPath": "",
+        "materialPath": "materials/default_unlit.mat.json",
+        "transform": {
+          "position": [-1.5, 0.7, 2.5],
+          "rotation": [25.0, -30.0, 15.0],
+          "scale": [0.6, 0.6, 0.6]
+        },
+        "children": []
+      },
+      {
+        "name": "Pyramid",
+        "nodeType": "Mesh",
+        "meshType": "None",
+        "meshPath": "models/pyramid.obj",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [3.0, 0.0, -2.5],
+          "rotation": [0.0, 60.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Quad Wall",
+        "nodeType": "Mesh",
+        "meshType": "Quad",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [0.0, 1.5, -4.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [3.0, 2.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Parent Group",
+        "nodeType": "Mesh",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [-4.0, 0.0, 2.0],
+          "rotation": [0.0, 20.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": [
+          {
+            "name": "Child Sphere A",
+            "nodeType": "Mesh",
+            "meshType": "Sphere",
+            "meshPath": "",
+            "materialPath": "materials/default_lit.mat.json",
+            "transform": {
+              "position": [0.0, 0.5, 0.0],
+              "rotation": [0.0, 0.0, 0.0],
+              "scale": [0.4, 0.4, 0.4]
+            },
+            "children": []
+          },
+          {
+            "name": "Child Sphere B",
+            "nodeType": "Mesh",
+            "meshType": "Sphere",
+            "meshPath": "",
+            "materialPath": "materials/default_unlit.mat.json",
+            "transform": {
+              "position": [1.0, 0.5, 0.0],
+              "rotation": [0.0, 0.0, 0.0],
+              "scale": [0.4, 0.4, 0.4]
+            },
+            "children": []
+          },
+          {
+            "name": "Child Cube",
+            "nodeType": "Mesh",
+            "meshType": "Cube",
+            "meshPath": "",
+            "materialPath": "materials/default_lit.mat.json",
+            "transform": {
+              "position": [0.5, 1.2, 0.0],
+              "rotation": [0.0, 45.0, 0.0],
+              "scale": [0.3, 0.3, 0.3]
+            },
+            "children": []
+          }
+        ]
+      },
+      {
+        "name": "Sun Light",
+        "nodeType": "DirectionalLight",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [0.0, 5.0, 0.0],
+          "rotation": [-50.0, -30.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "lightColor": [1.0, 0.95, 0.85],
+        "lightIntensity": 1.5,
+        "children": []
       }
     ]
   }

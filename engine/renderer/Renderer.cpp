@@ -1,10 +1,10 @@
 #include "renderer/Renderer.h"
 #include "core/Window.h"
 
+#include <SDL.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <array>
-#include <fstream>
 #include <stdexcept>
 #include <cstring>
 
@@ -19,7 +19,7 @@ void Renderer::init(Window& window)
         m_framebufferResized = true;
     });
 
-    GLFWwindow* nativeWindow = m_window->getNativeWindow();
+    SDL_Window* nativeWindow = m_window->getNativeWindow();
 
     // Init order follows dependency chain
     m_context.init(nativeWindow);
@@ -78,7 +78,9 @@ void Renderer::init(Window& window)
     m_assetManager.setTextureDescriptorPool(m_descriptor.getPool());
     m_assetManager.setFallbackAlbedo(m_whiteFallbackView, m_fallbackSampler);
     m_assetManager.setFallbackNormal(m_normalFallbackView, m_fallbackSampler);
+#ifndef __ANDROID__
     m_assetManager.scanAssets(std::string(ASSETS_DIR));
+#endif
 
     m_commandManager.createBuffers(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT);
     m_swapChain.createSyncObjects(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT);
@@ -132,6 +134,75 @@ void Renderer::drawScene(Scene& scene)
         VkCommandBuffer cmdBuf = m_commandManager.getBuffer(m_currentFrame);
         drawSceneToOffscreen(cmdBuf, scene);
     }
+}
+
+void Renderer::blitToSwapchain()
+{
+    if (!isOffscreenReady()) return;
+
+    VkCommandBuffer cmd = m_commandManager.getBuffer(m_currentFrame);
+    VkImage swapImage = m_swapChain.getImages()[m_currentImageIndex];
+
+    // Transition offscreen image: SHADER_READ_ONLY -> TRANSFER_SRC
+    VkImageMemoryBarrier offscreenBarrier{};
+    offscreenBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    offscreenBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    offscreenBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    offscreenBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    offscreenBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    offscreenBarrier.image = m_offscreenImage;
+    offscreenBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    offscreenBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    offscreenBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    // Transition swapchain image: UNDEFINED -> TRANSFER_DST
+    VkImageMemoryBarrier swapBarrier{};
+    swapBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    swapBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    swapBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    swapBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    swapBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    swapBarrier.image = swapImage;
+    swapBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    swapBarrier.srcAccessMask = 0;
+    swapBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    VkImageMemoryBarrier barriers[] = {offscreenBarrier, swapBarrier};
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 2, barriers);
+
+    // Blit offscreen -> swapchain
+    VkImageBlit blitRegion{};
+    blitRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    blitRegion.srcOffsets[0] = {0, 0, 0};
+    blitRegion.srcOffsets[1] = {(int32_t)m_offscreenWidth, (int32_t)m_offscreenHeight, 1};
+    blitRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    blitRegion.dstOffsets[0] = {0, 0, 0};
+    VkExtent2D swapExtent = m_swapChain.getExtent();
+    blitRegion.dstOffsets[1] = {(int32_t)swapExtent.width, (int32_t)swapExtent.height, 1};
+
+    vkCmdBlitImage(cmd,
+        m_offscreenImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1, &blitRegion, VK_FILTER_LINEAR);
+
+    // Transition offscreen back: TRANSFER_SRC -> SHADER_READ_ONLY
+    offscreenBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    offscreenBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    offscreenBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    offscreenBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    // Transition swapchain: TRANSFER_DST -> PRESENT_SRC
+    swapBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    swapBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    swapBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    swapBarrier.dstAccessMask = 0;
+
+    VkImageMemoryBarrier barriers2[] = {offscreenBarrier, swapBarrier};
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0, 0, nullptr, 0, nullptr, 2, barriers2);
 }
 
 void Renderer::endFrame()
@@ -596,18 +667,23 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         // --- Create grid pipeline (no vertex input, alpha blending, UBO-only) ---
         {
             auto readFile = [](const std::string& filename) -> std::vector<char> {
-                std::ifstream file(filename, std::ios::ate | std::ios::binary);
-                if (!file.is_open())
+                SDL_RWops* rw = SDL_RWFromFile(filename.c_str(), "rb");
+                if (!rw)
                     throw std::runtime_error("failed to open file: " + filename);
-                size_t fileSize = static_cast<size_t>(file.tellg());
-                std::vector<char> buffer(fileSize);
-                file.seekg(0);
-                file.read(buffer.data(), fileSize);
+                Sint64 size = SDL_RWsize(rw);
+                std::vector<char> buffer(static_cast<size_t>(size));
+                SDL_RWread(rw, buffer.data(), 1, static_cast<size_t>(size));
+                SDL_RWclose(rw);
                 return buffer;
             };
 
+#ifdef __ANDROID__
+            auto gridVertCode = readFile("shaders/grid_vert.spv");
+            auto gridFragCode = readFile("shaders/grid_frag.spv");
+#else
             auto gridVertCode = readFile(std::string(ASSETS_DIR) + "/shaders/grid_vert.spv");
             auto gridFragCode = readFile(std::string(ASSETS_DIR) + "/shaders/grid_frag.spv");
+#endif
 
             auto createShaderModule = [&](const std::vector<char>& code) -> VkShaderModule {
                 VkShaderModuleCreateInfo ci{};
@@ -1032,41 +1108,47 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
                                 m_wireframePipeline.getPipelineLayout(), 1, 1,
                                 &texSet, 0, nullptr);
 
-        // Small sphere at light position, scaled down
-        glm::mat4 model = glm::translate(glm::mat4(1.0f), node->transform.position);
-        model = glm::scale(model, glm::vec3(0.2f));
+        // Light gizmo: sphere at position + single arrow showing direction
+        glm::vec3 pos = node->transform.position;
+        glm::vec3 dir = node->getLightDirection();
 
         PushConstantData pc{};
-        pc.model = model;
-        pc.baseColor = glm::vec4(node->lightColor, 1.0f);
+        pc.baseColor = glm::vec4(1.0f, 0.9f, 0.3f, 1.0f); // yellow
         pc.highlighted = 1;
+
+        // Sphere at light position
+        pc.model = glm::scale(glm::translate(glm::mat4(1.0f), pos), glm::vec3(0.15f));
         vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(PushConstantData), &pc);
-
         m_meshLibrary.bind(commandBuffer, MeshType::Sphere);
         vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(MeshType::Sphere), 1, 0, 0, 0);
 
-        // Draw direction arrow using a scaled cube along light direction
-        glm::vec3 dir = node->getLightDirection();
-        glm::vec3 arrowEnd = node->transform.position + dir * 0.5f;
-        glm::vec3 arrowCenter = (node->transform.position + arrowEnd) * 0.5f;
+        // Arrow from sphere center along light direction
+        // Place a thin scaled cube from pos to pos + dir * length
+        float arrowLen = 0.6f;
+        glm::vec3 arrowCenter = pos + dir * (arrowLen * 0.5f);
 
-        glm::mat4 arrowModel = glm::translate(glm::mat4(1.0f), arrowCenter);
-        // Scale thin along perpendicular axes, long along direction
-        arrowModel = glm::scale(arrowModel, glm::vec3(0.02f, 0.02f, 0.25f));
-        // Rotate cube to align with light direction
-        glm::vec3 up = glm::vec3(0, 0, -1);
-        if (glm::abs(glm::dot(dir, up)) > 0.99f)
-            up = glm::vec3(1, 0, 0);
-        glm::mat4 lookMat = glm::inverse(glm::lookAt(glm::vec3(0), dir, up));
-        arrowModel = glm::translate(glm::mat4(1.0f), arrowCenter) * lookMat * glm::scale(glm::mat4(1.0f), glm::vec3(0.02f, 0.02f, 0.25f));
+        // Build rotation from (0,1,0) to dir using quaternion
+        glm::vec3 defaultUp = glm::vec3(0, 1, 0); // cube is tall along Y by default
+        glm::vec3 axis = glm::cross(defaultUp, dir);
+        float axisLen = glm::length(axis);
+        glm::mat4 rotMat(1.0f);
+        if (axisLen > 0.0001f) {
+            axis /= axisLen;
+            float angle = std::acos(glm::clamp(glm::dot(defaultUp, dir), -1.0f, 1.0f));
+            rotMat = glm::rotate(glm::mat4(1.0f), angle, axis);
+        } else if (glm::dot(defaultUp, dir) < 0.0f) {
+            // 180 degree flip
+            rotMat = glm::rotate(glm::mat4(1.0f), glm::pi<float>(), glm::vec3(1, 0, 0));
+        }
 
-        pc.model = arrowModel;
+        pc.model = glm::translate(glm::mat4(1.0f), arrowCenter)
+                 * rotMat
+                 * glm::scale(glm::mat4(1.0f), glm::vec3(0.03f, arrowLen, 0.03f));
         vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(PushConstantData), &pc);
-
         m_meshLibrary.bind(commandBuffer, MeshType::Cube);
         vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(MeshType::Cube), 1, 0, 0, 0);
     });
@@ -1120,14 +1202,14 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
 
 void Renderer::recreateSwapChain()
 {
-    // Wait until window is non-zero size
-    GLFWwindow* nativeWindow = m_window->getNativeWindow();
+    // 等待窗口恢复非零尺寸
+    SDL_Window* nativeWindow = m_window->getNativeWindow();
     int width = 0, height = 0;
-    glfwGetFramebufferSize(nativeWindow, &width, &height);
+    SDL_Vulkan_GetDrawableSize(nativeWindow, &width, &height);
     while (width == 0 || height == 0)
     {
-        glfwGetFramebufferSize(nativeWindow, &width, &height);
-        glfwWaitEvents();
+        SDL_Vulkan_GetDrawableSize(nativeWindow, &width, &height);
+        SDL_WaitEvent(nullptr);
     }
 
     vkDeviceWaitIdle(m_context.getDevice());

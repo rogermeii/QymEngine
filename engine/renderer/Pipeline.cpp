@@ -1,23 +1,25 @@
 #include "renderer/Pipeline.h"
 #include "renderer/Buffer.h"
-#include <fstream>
+#include <SDL.h>
 #include <stdexcept>
 
 namespace QymEngine {
 
 std::vector<char> Pipeline::readFile(const std::string& filename)
 {
-    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    SDL_RWops* rw = SDL_RWFromFile(filename.c_str(), "rb");
+    if (!rw)
+        throw std::runtime_error("failed to open file: " + filename + " (" + SDL_GetError() + ")");
 
-    if (!file.is_open())
-        throw std::runtime_error("failed to open file: " + filename);
+    Sint64 fileSize = SDL_RWsize(rw);
+    if (fileSize < 0) {
+        SDL_RWclose(rw);
+        throw std::runtime_error("failed to get file size: " + filename);
+    }
 
-    size_t fileSize = (size_t)file.tellg();
-    std::vector<char> buffer(fileSize);
-
-    file.seekg(0);
-    file.read(buffer.data(), fileSize);
-    file.close();
+    std::vector<char> buffer(static_cast<size_t>(fileSize));
+    SDL_RWread(rw, buffer.data(), 1, static_cast<size_t>(fileSize));
+    SDL_RWclose(rw);
 
     return buffer;
 }
@@ -44,12 +46,17 @@ void Pipeline::create(VkDevice device, VkRenderPass renderPass,
                       const std::string& vertPath,
                       const std::string& fragPath)
 {
+#ifdef __ANDROID__
+    std::string vertFile = vertPath.empty() ? "shaders/vert.spv" : vertPath;
+    std::string fragFile = fragPath.empty() ? "shaders/frag.spv" : fragPath;
+#else
     std::string vertFile = vertPath.empty()
         ? std::string(ASSETS_DIR) + "/shaders/vert.spv"
         : std::string(ASSETS_DIR) + "/" + vertPath;
     std::string fragFile = fragPath.empty()
         ? std::string(ASSETS_DIR) + "/shaders/frag.spv"
         : std::string(ASSETS_DIR) + "/" + fragPath;
+#endif
     auto vertShaderCode = readFile(vertFile);
     auto fragShaderCode = readFile(fragFile);
 

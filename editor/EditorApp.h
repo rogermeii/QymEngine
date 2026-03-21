@@ -13,7 +13,9 @@
 #include "panels/ConsolePanel.h"
 #include "panels/ModelPreview.h"
 
+#ifndef __ANDROID__
 #include <renderdoc_app.h>
+#endif
 
 namespace QymEngine {
 
@@ -48,12 +50,14 @@ private:
 
     bool m_firstFrame = true;
 
+#ifndef __ANDROID__
     RENDERDOC_API_1_6_0* m_rdocApi = nullptr;
     bool m_captureRequested = false;
     int m_frameCount = 0;
     bool m_autoCaptureDone = false;
     bool m_captureAndExit = false;
     std::string m_captureOutputPath;
+#endif
 };
 
 } // namespace QymEngine

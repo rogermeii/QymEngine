@@ -13,12 +13,16 @@ add_compile_definitions(ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets")
 # Vulkan
 find_package(Vulkan REQUIRED)
 
-# GLFW（预编译库）
-add_library(glfw STATIC IMPORTED)
-set_target_properties(glfw PROPERTIES
-    IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/3rd-party/glfw-3.4.bin.WIN64/lib-vc2022/glfw3.lib"
-    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/3rd-party/glfw-3.4.bin.WIN64/include"
+# SDL2（通过 FetchContent 获取）
+include(FetchContent)
+FetchContent_Declare(SDL2
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+    GIT_TAG release-2.30.12
 )
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(SDL2)
 
 # GLM（header-only）
 add_library(glm INTERFACE)
@@ -39,7 +43,7 @@ target_include_directories(tinyobjloader INTERFACE "${CMAKE_SOURCE_DIR}/3rd-part
 # ImGui（docking 分支）
 file(GLOB IMGUI_SOURCES
     "3rd-party/imgui/*.cpp"
-    "3rd-party/imgui/backends/imgui_impl_glfw.cpp"
+    "3rd-party/imgui/backends/imgui_impl_sdl2.cpp"
     "3rd-party/imgui/backends/imgui_impl_vulkan.cpp"
 )
 add_library(imgui STATIC ${IMGUI_SOURCES})
@@ -47,7 +51,7 @@ target_include_directories(imgui PUBLIC
     "${CMAKE_SOURCE_DIR}/3rd-party/imgui"
     "${CMAKE_SOURCE_DIR}/3rd-party/imgui/backends"
 )
-target_link_libraries(imgui PUBLIC Vulkan::Vulkan glfw)
+target_link_libraries(imgui PUBLIC Vulkan::Vulkan SDL2::SDL2-static)
 
 # ImGuizmo (built as part of imgui since it depends on ImGui)
 target_sources(imgui PRIVATE "3rd-party/imguizmo/ImGuizmo.cpp")

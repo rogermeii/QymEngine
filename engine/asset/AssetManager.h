@@ -37,7 +37,9 @@ public:
     void init(VulkanContext& ctx, CommandManager& cmdMgr);
     void shutdown(VkDevice device);
 
+#ifndef __ANDROID__
     void scanAssets(const std::string& assetsDir);
+#endif
 
     const MeshAsset* loadMesh(const std::string& relativePath);
     const TextureAsset* loadTexture(const std::string& relativePath);

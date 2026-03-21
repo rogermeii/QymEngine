@@ -1,6 +1,7 @@
 #include "renderer/SwapChain.h"
 #include "renderer/VulkanContext.h"
-#include <GLFW/glfw3.h>
+#include <SDL.h>
+#include <SDL_vulkan.h>
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
@@ -33,7 +34,7 @@ SwapChainSupportDetails SwapChain::querySupport(VkPhysicalDevice device, VkSurfa
 }
 
 // --- Public ---
-void SwapChain::create(VulkanContext& ctx, GLFWwindow* window)
+void SwapChain::create(VulkanContext& ctx, SDL_Window* window)
 {
     SwapChainSupportDetails swapChainSupport = querySupport(ctx.getPhysicalDevice(), ctx.getSurface());
 
@@ -56,7 +57,7 @@ void SwapChain::create(VulkanContext& ctx, GLFWwindow* window)
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
     QueueFamilyIndices indices = ctx.findQueueFamilies(ctx.getPhysicalDevice());
     uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
@@ -74,7 +75,9 @@ void SwapChain::create(VulkanContext& ctx, GLFWwindow* window)
         createInfo.pQueueFamilyIndices = nullptr;
     }
 
-    createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+    // Use IDENTITY transform — let the compositor handle rotation.
+    // This avoids needing a pre-transform rotation matrix in the projection.
+    createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
@@ -198,7 +201,7 @@ VkPresentModeKHR SwapChain::chooseSwapPresentMode(const std::vector<VkPresentMod
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
-VkExtent2D SwapChain::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, GLFWwindow* window)
+VkExtent2D SwapChain::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, SDL_Window* window)
 {
     if (capabilities.currentExtent.width != (std::numeric_limits<uint32_t>::max)())
     {
@@ -207,7 +210,7 @@ VkExtent2D SwapChain::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilit
     else
     {
         int width, height;
-        glfwGetFramebufferSize(window, &width, &height);
+        SDL_Vulkan_GetDrawableSize(window, &width, &height);
 
         VkExtent2D actualExtent = {
             static_cast<uint32_t>(width),

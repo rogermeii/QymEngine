@@ -3,20 +3,25 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <imgui_impl_sdl2.h>
+#include <SDL.h>
 #include <fstream>
 
+#ifndef __ANDROID__
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <renderdoc_app.h>
-#include <GLFW/glfw3.h>
+#endif
 
 namespace QymEngine {
 
 EditorApp::EditorApp()
     : Application({"QymEngine Editor", 1280, 720, true})
 {
+#ifndef __ANDROID__
     // Must load RenderDoc BEFORE Vulkan initialization
     initRenderDoc();
+#endif
 }
 
 void EditorApp::onInit()
@@ -29,6 +34,16 @@ void EditorApp::onInit()
         m_imguiLayer.onSwapChainRecreated(m_renderer);
     });
 
+    // Override event callback to forward touch events to SceneViewPanel
+    getWindow().setEventCallback([this](const SDL_Event& event) {
+        ImGui_ImplSDL2_ProcessEvent(&event);
+        m_sceneViewPanel.processEvent(event);
+    });
+
+#ifdef __ANDROID__
+    m_scene.deserialize("scenes/default.json");
+    Log::info("Loaded scene from assets");
+#else
     std::string scenePath = std::string(ASSETS_DIR) + "/scenes/default.json";
     std::ifstream check(scenePath);
     if (check.good()) {
@@ -40,12 +55,15 @@ void EditorApp::onInit()
         node->meshType = MeshType::Cube;
         Log::info("Created default scene");
     }
+#endif
 
     m_consolePanel.init();
     m_modelPreview.init(m_renderer);
 
+#ifndef __ANDROID__
     if (m_rdocApi)
         Log::info("RenderDoc: ready (press F12 to capture)");
+#endif
 
     Log::info("QymEngine Editor initialized");
 }
@@ -92,14 +110,17 @@ void EditorApp::onUpdate()
                 m_scene.deserialize(std::string(ASSETS_DIR) + "/scenes/default.json");
             ImGui::EndMenu();
         }
+#ifndef __ANDROID__
         if (ImGui::BeginMenu("Debug")) {
             if (ImGui::MenuItem("Capture Frame (F12)", "F12", false, m_rdocApi != nullptr))
                 m_captureRequested = true;
             ImGui::EndMenu();
         }
+#endif
         ImGui::EndMainMenuBar();
     }
 
+#ifndef __ANDROID__
     // F12 shortcut for RenderDoc capture
     if (ImGui::IsKeyPressed(ImGuiKey_F12) && m_rdocApi)
         m_captureRequested = true;
@@ -113,6 +134,7 @@ void EditorApp::onUpdate()
         m_captureRequested = true;
         m_autoCaptureDone = true;
     }
+#endif
 
     // Render all panels
     m_sceneViewPanel.onImGuiRender(m_renderer, m_camera, m_scene);
@@ -124,13 +146,16 @@ void EditorApp::onUpdate()
     m_imguiLayer.endFrame(m_renderer.getCurrentCommandBuffer(),
                           m_renderer.getImageIndex());
 
+#ifndef __ANDROID__
     // RenderDoc frame capture (wrap the submit+present)
     if (m_captureRequested && m_rdocApi) {
         m_rdocApi->StartFrameCapture(nullptr, nullptr);
     }
+#endif
 
     m_renderer.endFrame();
 
+#ifndef __ANDROID__
     if (m_captureRequested && m_rdocApi) {
         m_rdocApi->EndFrameCapture(nullptr, nullptr);
         m_captureRequested = false;
@@ -150,7 +175,6 @@ void EditorApp::onUpdate()
             }
 
             if (m_captureAndExit) {
-                // Write capture path to output file for analysis script
                 std::string outPath = m_captureOutputPath.empty()
                     ? std::string(ASSETS_DIR) + "/../capture_path.txt"
                     : m_captureOutputPath;
@@ -158,15 +182,15 @@ void EditorApp::onUpdate()
                 out << path;
                 out.close();
                 Log::info("RenderDoc: capture-and-exit mode, shutting down");
-                glfwSetWindowShouldClose(m_window->getNativeWindow(), GLFW_TRUE);
+                m_window->requestClose();
             } else {
-                // Auto-open in RenderDoc UI
                 if (!m_rdocApi->IsTargetControlConnected()) {
                     m_rdocApi->LaunchReplayUI(1, nullptr);
                 }
             }
         }
     }
+#endif
 }
 
 void EditorApp::onShutdown()
@@ -204,6 +228,7 @@ void EditorApp::setupDockingLayout()
     }
 }
 
+#ifndef __ANDROID__
 void EditorApp::setCaptureAndExit(bool enabled, const std::string& outputPath)
 {
     m_captureAndExit = enabled;
@@ -214,7 +239,6 @@ void EditorApp::initRenderDoc()
 {
     HMODULE mod = GetModuleHandleA("renderdoc.dll");
     if (!mod) {
-        // Try to load from default install path
         mod = LoadLibraryA("C:/Program Files/RenderDoc/renderdoc.dll");
     }
     if (!mod) {
@@ -235,12 +259,10 @@ void EditorApp::initRenderDoc()
         return;
     }
 
-    // Disable RenderDoc's own capture key (we use our own F12)
     m_rdocApi->SetCaptureKeys(nullptr, 0);
     m_rdocApi->MaskOverlayBits(~RENDERDOC_OverlayBits::eRENDERDOC_Overlay_None,
                                 RENDERDOC_OverlayBits::eRENDERDOC_Overlay_None);
 
-    // Set capture file path prefix
     std::string capturePath = std::string(ASSETS_DIR) + "/../captures/qymengine";
     m_rdocApi->SetCaptureFilePathTemplate(capturePath.c_str());
 
@@ -261,11 +283,11 @@ void EditorApp::checkExternalCaptureTrigger()
     std::ifstream check(triggerPath);
     if (check.good()) {
         check.close();
-        // Delete trigger file immediately
         std::remove(triggerPath.c_str());
         m_captureRequested = true;
         Log::info("RenderDoc: external capture triggered");
     }
 }
+#endif
 
 } // namespace QymEngine

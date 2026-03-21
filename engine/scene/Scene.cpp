@@ -1,4 +1,5 @@
 #include "Scene.h"
+#include "core/FileUtils.h"
 #include <json.hpp>
 #include <fstream>
 
@@ -105,20 +106,22 @@ void Scene::serialize(const std::string& path) const {
 }
 
 void Scene::deserialize(const std::string& path) {
-    std::ifstream file(path);
-    if (!file.is_open()) return;
+    try {
+        std::string content = readFileAsString(path);
+        json j = json::parse(content, nullptr, false);
+        if (j.is_discarded() || !j.contains("scene")) return;
 
-    json j = json::parse(file, nullptr, false);
-    if (j.is_discarded() || !j.contains("scene")) return;
+        m_selectedNode = nullptr;
+        m_root = std::make_unique<Node>("Root");
 
-    m_selectedNode = nullptr;
-    m_root = std::make_unique<Node>("Root");
-
-    auto& sceneJson = j["scene"];
-    name = sceneJson.value("name", "Untitled");
-    if (sceneJson.contains("nodes")) {
-        for (auto& nodeJson : sceneJson["nodes"])
-            deserializeNode(m_root.get(), nodeJson);
+        auto& sceneJson = j["scene"];
+        name = sceneJson.value("name", "Untitled");
+        if (sceneJson.contains("nodes")) {
+            for (auto& nodeJson : sceneJson["nodes"])
+                deserializeNode(m_root.get(), nodeJson);
+        }
+    } catch (...) {
+        return; // File not found or parse error
     }
 }
 

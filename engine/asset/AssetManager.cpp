@@ -5,18 +5,21 @@
 #include <json.hpp>
 
 #include "asset/AssetManager.h"
+#include "core/FileUtils.h"
 #include "renderer/VulkanContext.h"
 #include "renderer/CommandManager.h"
 #include "renderer/Buffer.h"
 
 #include <array>
-#include <filesystem>
-#include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
 
+#ifndef __ANDROID__
+#include <filesystem>
 namespace fs = std::filesystem;
+#endif
 
 namespace QymEngine {
 
@@ -62,6 +65,7 @@ void AssetManager::shutdown(VkDevice device)
     m_materialCache.clear();
 }
 
+#ifndef __ANDROID__
 void AssetManager::scanAssets(const std::string& assetsDir)
 {
     m_assetsDir = assetsDir;
@@ -95,6 +99,7 @@ void AssetManager::scanAssets(const std::string& assetsDir)
         }
     }
 }
+#endif
 
 const MeshAsset* AssetManager::loadMesh(const std::string& relativePath)
 {
@@ -105,16 +110,24 @@ const MeshAsset* AssetManager::loadMesh(const std::string& relativePath)
 
     if (!m_ctx || !m_cmdMgr) return nullptr;
 
-    std::string fullPath = m_assetsDir + "/" + relativePath;
-    if (!fs::exists(fullPath)) return nullptr;
+    std::string fullPath = m_assetsDir.empty() ? relativePath : (m_assetsDir + "/" + relativePath);
+    if (!fileExists(fullPath)) return nullptr;
 
-    // Parse with tinyobjloader
+    // Load OBJ file into memory and parse with tinyobjloader via stream
+    std::string objContent;
+    try {
+        objContent = readFileAsString(fullPath);
+    } catch (...) {
+        return nullptr;
+    }
+    std::istringstream objStream(objContent);
+
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> materials;
     std::string warn, err;
 
-    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, fullPath.c_str()))
+    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, &objStream))
         return nullptr;
 
     std::vector<Vertex> vertices;
@@ -234,11 +247,13 @@ const TextureAsset* AssetManager::loadTexture(const std::string& relativePath)
 
     if (!m_ctx || !m_cmdMgr) return nullptr;
 
-    std::string fullPath = m_assetsDir + "/" + relativePath;
-    if (!fs::exists(fullPath)) return nullptr;
+    std::string fullPath = m_assetsDir.empty() ? relativePath : (m_assetsDir + "/" + relativePath);
+    auto fileData = readFileAsBytes(fullPath);
+    if (fileData.empty()) return nullptr;
 
     int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load(fullPath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    stbi_uc* pixels = stbi_load_from_memory(fileData.data(), static_cast<int>(fileData.size()),
+                                             &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     if (!pixels) return nullptr;
 
     TextureAsset texAsset{};
@@ -286,19 +301,17 @@ const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
 
     if (!m_ctx) return nullptr;
 
-    std::string fullPath = m_assetsDir + "/" + relativePath;
-    if (!fs::exists(fullPath)) return nullptr;
+    std::string fullPath = m_assetsDir.empty() ? relativePath : (m_assetsDir + "/" + relativePath);
 
-    // Read JSON file
-    std::ifstream file(fullPath);
-    if (!file.is_open()) return nullptr;
-
-    nlohmann::json j;
+    // Read and parse JSON file via SDL_RWops
+    std::string content;
     try {
-        file >> j;
-    } catch (const std::exception&) {
+        content = readFileAsString(fullPath);
+    } catch (...) {
         return nullptr;
     }
+    nlohmann::json j = nlohmann::json::parse(content, nullptr, false);
+    if (j.is_discarded()) return nullptr;
 
     ShaderAsset shader;
     shader.name = j.value("name", "");
@@ -375,19 +388,17 @@ const MaterialAsset* AssetManager::loadMaterial(const std::string& relativePath)
 
     if (!m_ctx) return nullptr;
 
-    std::string fullPath = m_assetsDir + "/" + relativePath;
-    if (!fs::exists(fullPath)) return nullptr;
+    std::string fullPath = m_assetsDir.empty() ? relativePath : (m_assetsDir + "/" + relativePath);
 
-    // Parse JSON
-    std::ifstream file(fullPath);
-    if (!file.is_open()) return nullptr;
-
-    nlohmann::json j;
+    // Read and parse JSON file via SDL_RWops
+    std::string content;
     try {
-        file >> j;
-    } catch (const std::exception&) {
+        content = readFileAsString(fullPath);
+    } catch (...) {
         return nullptr;
     }
+    nlohmann::json j = nlohmann::json::parse(content, nullptr, false);
+    if (j.is_discarded()) return nullptr;
 
     MaterialAsset mat{};
     mat.name = j.value("name", "Unnamed");

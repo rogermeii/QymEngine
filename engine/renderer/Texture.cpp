@@ -5,17 +5,33 @@
 #include "renderer/VulkanContext.h"
 #include "renderer/CommandManager.h"
 #include "renderer/Buffer.h"
+#include <SDL.h>
 #include <stdexcept>
 #include <cstring>
+#include <vector>
 
 namespace QymEngine {
 
 void Texture::createTextureImage(VulkanContext& ctx, CommandManager& cmdMgr)
 {
     int texWidth, texHeight, texChannels;
+#ifdef __ANDROID__
+    // Load via SDL_RWops for APK asset access
+    SDL_RWops* rw = SDL_RWFromFile("textures/texture.jpg", "rb");
+    stbi_uc* pixels = nullptr;
+    if (rw) {
+        Sint64 size = SDL_RWsize(rw);
+        std::vector<unsigned char> fileData(static_cast<size_t>(size));
+        SDL_RWread(rw, fileData.data(), 1, static_cast<size_t>(size));
+        SDL_RWclose(rw);
+        pixels = stbi_load_from_memory(fileData.data(), static_cast<int>(size),
+                                        &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    }
+#else
     stbi_uc* pixels = stbi_load(
         (std::string(ASSETS_DIR) + "/textures/texture.jpg").c_str(),
         &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+#endif
     VkDeviceSize imageSize = texWidth * texHeight * 4;
 
     if (!pixels)

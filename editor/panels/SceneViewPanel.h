@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <SDL.h>
 #include <cstdint>
 #include <imgui.h>
 #include <ImGuizmo.h>
@@ -19,6 +20,9 @@ public:
     /// Called before drawScene() each frame to apply pending resize.
     void applyPendingResize(Renderer& renderer);
 
+    /// Process SDL event for touch gestures. Call from event callback.
+    void processEvent(const SDL_Event& event);
+
 private:
     void recreateDescriptorSet(Renderer& renderer);
 
@@ -33,6 +37,16 @@ private:
     VkImageView     m_cachedImageView = VK_NULL_HANDLE;
 
     ImGuizmo::OPERATION m_gizmoOperation = ImGuizmo::TRANSLATE;
+
+    // Touch gesture state
+    int m_fingerCount = 0;
+    float m_pinchDist = 0.0f;
+    float m_pinchCenterX = 0.0f;
+    float m_pinchCenterY = 0.0f;
+    float m_pendingZoom = 0.0f;
+    float m_pendingPanX = 0.0f;
+    float m_pendingPanY = 0.0f;
+    bool m_hasPinchPrev = false;
 };
 
 } // namespace QymEngine

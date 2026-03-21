@@ -2,7 +2,7 @@
 #include <vulkan/vulkan.h>
 #include <vector>
 
-struct GLFWwindow;
+struct SDL_Window;
 
 namespace QymEngine {
 
@@ -17,7 +17,7 @@ struct SwapChainSupportDetails
 
 class SwapChain {
 public:
-    void create(VulkanContext& ctx, GLFWwindow* window);
+    void create(VulkanContext& ctx, SDL_Window* window);
     void createFramebuffers(VkDevice device, VkRenderPass renderPass);
     void createSyncObjects(VkDevice device, int maxFramesInFlight);
     void cleanup(VkDevice device);
@@ -41,7 +41,7 @@ public:
 private:
     VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
     VkPresentModeKHR   chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes);
-    VkExtent2D         chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, GLFWwindow* window);
+    VkExtent2D         chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, SDL_Window* window);
     VkImageView        createImageView(VkDevice device, VkImage image, VkFormat format);
 
     VkSwapchainKHR           m_swapChain = VK_NULL_HANDLE;

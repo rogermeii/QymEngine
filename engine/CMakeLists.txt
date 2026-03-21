@@ -9,10 +9,11 @@ file(GLOB_RECURSE ENGINE_SOURCES
 )
 add_library(QymEngineLib STATIC ${ENGINE_SOURCES})
 target_include_directories(QymEngineLib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(QymEngineLib PUBLIC Vulkan::Vulkan glfw glm stb nlohmann_json tinyobjloader)
+target_link_libraries(QymEngineLib PUBLIC Vulkan::Vulkan SDL2::SDL2-static glm stb nlohmann_json tinyobjloader)
 target_compile_definitions(QymEngineLib PUBLIC
-    VK_USE_PLATFORM_WIN32_KHR
-    GLFW_INCLUDE_VULKAN
+    $<$<BOOL:${ANDROID}>:VK_USE_PLATFORM_ANDROID_KHR>
+    $<$<NOT:$<BOOL:${ANDROID}>>:VK_USE_PLATFORM_WIN32_KHR>
+    SDL_MAIN_HANDLED
     GLM_FORCE_RADIANS
     GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
     GLM_FORCE_DEPTH_ZERO_TO_ONE

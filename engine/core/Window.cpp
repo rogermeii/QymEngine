@@ -6,51 +6,69 @@ namespace QymEngine {
 Window::Window(const WindowProps& props)
     : m_width(props.width), m_height(props.height)
 {
-    glfwInit();
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0)
+        throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
+
+    Uint32 flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
     if (props.maximized)
-        glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
+        flags |= SDL_WINDOW_MAXIMIZED;
 
-    m_window = glfwCreateWindow(m_width, m_height, props.title.c_str(), nullptr, nullptr);
+    m_window = SDL_CreateWindow(
+        props.title.c_str(),
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        m_width, m_height, flags);
+
     if (!m_window)
-        throw std::runtime_error("Failed to create GLFW window!");
+        throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
 
-    // Update actual size (may differ from requested when maximized)
+    // Update actual size when maximized
     if (props.maximized) {
         int w, h;
-        glfwGetFramebufferSize(m_window, &w, &h);
+        SDL_Vulkan_GetDrawableSize(m_window, &w, &h);
         m_width = static_cast<uint32_t>(w);
         m_height = static_cast<uint32_t>(h);
     }
-
-    glfwSetWindowUserPointer(m_window, this);
-    glfwSetFramebufferSizeCallback(m_window, framebufferResizeCallback);
 }
 
 Window::~Window()
 {
-    glfwDestroyWindow(m_window);
-    glfwTerminate();
+    SDL_DestroyWindow(m_window);
+    SDL_Quit();
 }
 
 void Window::pollEvents()
 {
-    glfwPollEvents();
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        // Forward to ImGui and other listeners
+        if (m_eventCallback)
+            m_eventCallback(event);
+
+        switch (event.type) {
+        case SDL_QUIT:
+            m_shouldClose = true;
+            break;
+        case SDL_WINDOWEVENT:
+            if (event.window.event == SDL_WINDOWEVENT_RESIZED ||
+                event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                m_width = static_cast<uint32_t>(event.window.data1);
+                m_height = static_cast<uint32_t>(event.window.data2);
+                if (m_resizeCallback)
+                    m_resizeCallback(event.window.data1, event.window.data2);
+            }
+            break;
+        }
+    }
 }
 
 bool Window::shouldClose() const
 {
-    return glfwWindowShouldClose(m_window);
+    return m_shouldClose;
 }
 
-void Window::framebufferResizeCallback(GLFWwindow* window, int width, int height)
+void Window::requestClose()
 {
-    auto* self = reinterpret_cast<Window*>(glfwGetWindowUserPointer(window));
-    self->m_width = width;
-    self->m_height = height;
-    if (self->m_resizeCallback)
-        self->m_resizeCallback(width, height);
+    m_shouldClose = true;
 }
 
 } // namespace QymEngine

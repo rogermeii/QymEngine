@@ -1,5 +1,6 @@
 #include "renderer/VulkanContext.h"
-#include <GLFW/glfw3.h>
+#include <SDL.h>
+#include <SDL_vulkan.h>
 #include <iostream>
 #include <map>
 #include <set>
@@ -39,12 +40,10 @@ const std::vector<const char*> VulkanContext::s_validationLayers = {
 
 const std::vector<const char*> VulkanContext::s_deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-    VK_KHR_PRESENT_ID_EXTENSION_NAME,
-    VK_KHR_PRESENT_WAIT_EXTENSION_NAME
 };
 
 // --- Public API ---
-void VulkanContext::init(GLFWwindow* window)
+void VulkanContext::init(SDL_Window* window)
 {
     m_window = window;
     createInstance();
@@ -116,8 +115,12 @@ uint32_t VulkanContext::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlag
 // --- Private implementation ---
 void VulkanContext::createInstance()
 {
-    if (s_enableValidationLayers && !checkValidationLayerSupport())
-        throw std::runtime_error("validation layers requested, but not available!");
+    // If validation layers are requested but not available, disable them gracefully
+    bool useValidation = s_enableValidationLayers;
+    if (useValidation && !checkValidationLayerSupport()) {
+        SDL_Log("Validation layers requested but not available, continuing without them");
+        useValidation = false;
+    }
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -138,7 +141,7 @@ void VulkanContext::createInstance()
     createInfo.ppEnabledExtensionNames = extensions.data();
 
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
-    if (s_enableValidationLayers)
+    if (useValidation)
     {
         createInfo.enabledLayerCount = static_cast<uint32_t>(s_validationLayers.size());
         createInfo.ppEnabledLayerNames = s_validationLayers.data();
@@ -212,11 +215,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanContext::debugCallback(
 
 std::vector<const char*> VulkanContext::getRequiredExtensions()
 {
-    uint32_t glfwExtensionCount = 0;
-    const char** glfwExtensions;
-    glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-    std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+    unsigned int count = 0;
+    SDL_Vulkan_GetInstanceExtensions(m_window, &count, nullptr);
+    std::vector<const char*> extensions(count);
+    SDL_Vulkan_GetInstanceExtensions(m_window, &count, extensions.data());
 
     if (s_enableValidationLayers)
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -251,8 +253,8 @@ void VulkanContext::setupDebugMessenger()
 
 void VulkanContext::createSurface()
 {
-    if (glfwCreateWindowSurface(m_instance, m_window, nullptr, &m_surface) != VK_SUCCESS)
-        throw std::runtime_error("failed to create window surface!");
+    if (SDL_Vulkan_CreateSurface(m_window, m_instance, &m_surface) != SDL_TRUE)
+        throw std::runtime_error("failed to create Vulkan surface!");
 }
 
 int VulkanContext::rateDeviceSuitability(VkPhysicalDevice device)
@@ -363,8 +365,30 @@ void VulkanContext::createLogicalDevice()
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
-    createInfo.enabledExtensionCount = static_cast<uint32_t>(s_deviceExtensions.size());
-    createInfo.ppEnabledExtensionNames = s_deviceExtensions.data();
+    // Build final extension list: required + available optional
+    std::vector<const char*> enabledExtensions(s_deviceExtensions.begin(), s_deviceExtensions.end());
+
+    static const std::vector<const char*> optionalExtensions = {
+        "VK_KHR_present_id",
+        "VK_KHR_present_wait",
+    };
+
+    uint32_t extCount;
+    vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extCount, nullptr);
+    std::vector<VkExtensionProperties> availableExts(extCount);
+    vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extCount, availableExts.data());
+
+    for (const char* opt : optionalExtensions) {
+        for (const auto& ext : availableExts) {
+            if (strcmp(ext.extensionName, opt) == 0) {
+                enabledExtensions.push_back(opt);
+                break;
+            }
+        }
+    }
+
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+    createInfo.ppEnabledExtensionNames = enabledExtensions.data();
 
     if (s_enableValidationLayers)
     {
