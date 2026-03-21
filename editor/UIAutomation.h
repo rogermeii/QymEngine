@@ -43,9 +43,23 @@ private:
     // Screenshot implementation
     bool saveScreenshot(Renderer& renderer, const std::string& path);
 
+    // Process deferred events (key up, mouse up from previous frame)
+    void processDeferredEvents(SDL_Window* window);
+
     bool m_initialized = false;
     std::string m_commandPath;
     std::string m_resultPath;
+
+    // Deferred SDL events to push next frame (for cross-frame input)
+    struct DeferredEvent {
+        uint32_t type;
+        int x, y;
+        uint32_t button;
+        int32_t keycode;    // SDL_Keycode
+        uint32_t scancode;  // SDL_Scancode
+        uint16_t mod;
+    };
+    std::vector<DeferredEvent> m_deferredEvents;
 
     // Static widget registry (written by panels, read by query command)
     static std::vector<WidgetRect> s_widgets;

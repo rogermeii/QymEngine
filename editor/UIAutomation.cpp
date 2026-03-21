@@ -39,12 +39,43 @@ void UIAutomation::recordPanel(const std::string& name) {
     s_panels[name] = {pos.x, pos.y, size.x, size.y};
 }
 
+void UIAutomation::processDeferredEvents(SDL_Window* window) {
+    uint32_t windowID = SDL_GetWindowID(window);
+    for (auto& de : m_deferredEvents) {
+        SDL_Event ev{};
+        ev.type = de.type;
+        if (de.type == SDL_KEYUP) {
+            ev.key.windowID = windowID;
+            ev.key.keysym.sym = static_cast<SDL_Keycode>(de.keycode);
+            ev.key.keysym.scancode = static_cast<SDL_Scancode>(de.scancode);
+            ev.key.keysym.mod = de.mod;
+            ev.key.state = SDL_RELEASED;
+        } else if (de.type == SDL_MOUSEBUTTONUP) {
+            ev.button.windowID = windowID;
+            ev.button.button = de.button;
+            ev.button.x = de.x;
+            ev.button.y = de.y;
+            ev.button.clicks = 1;
+        } else if (de.type == SDL_MOUSEMOTION) {
+            ev.motion.windowID = windowID;
+            ev.motion.x = de.x;
+            ev.motion.y = de.y;
+            ev.motion.state = de.button;
+        }
+        SDL_PushEvent(&ev);
+    }
+    m_deferredEvents.clear();
+}
+
 void UIAutomation::pollAndExecute(Renderer& renderer, Scene& scene, Camera& camera, SDL_Window* window) {
     if (!m_initialized) {
         m_commandPath = std::string(ASSETS_DIR) + "/../captures/command.json";
         m_resultPath = std::string(ASSETS_DIR) + "/../captures/command_result.json";
         m_initialized = true;
     }
+
+    // Process deferred events from previous frame (key up, mouse up)
+    processDeferredEvents(window);
 
     // Check if command file exists
     std::ifstream file(m_commandPath);
@@ -96,6 +127,66 @@ void UIAutomation::executeCommand(const std::string& jsonStr, Renderer& renderer
             int y = params.value("y", 0);
             injectMouseDoubleClick(x, y, window);
             writeResult("{\"status\":\"ok\",\"command\":\"mouse_double_click\"}");
+
+        } else if (command == "mouse_down") {
+            int x = params.value("x", 0);
+            int y = params.value("y", 0);
+            std::string buttonStr = params.value("button", "left");
+            uint32_t sdlButton = (buttonStr == "right") ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
+            uint32_t windowID = SDL_GetWindowID(window);
+
+            SDL_Event move{};
+            move.type = SDL_MOUSEMOTION;
+            move.motion.windowID = windowID;
+            move.motion.x = x;
+            move.motion.y = y;
+            SDL_PushEvent(&move);
+
+            SDL_Event down{};
+            down.type = SDL_MOUSEBUTTONDOWN;
+            down.button.windowID = windowID;
+            down.button.button = static_cast<uint8_t>(sdlButton);
+            down.button.clicks = 1;
+            down.button.x = x;
+            down.button.y = y;
+            SDL_PushEvent(&down);
+            writeResult("{\"status\":\"ok\",\"command\":\"mouse_down\"}");
+
+        } else if (command == "mouse_move") {
+            int x = params.value("x", 0);
+            int y = params.value("y", 0);
+            uint32_t buttonState = 0;
+            std::string buttonStr = params.value("button", "");
+            if (buttonStr == "left") buttonState = SDL_BUTTON(SDL_BUTTON_LEFT);
+            else if (buttonStr == "right") buttonState = SDL_BUTTON(SDL_BUTTON_RIGHT);
+            uint32_t windowID = SDL_GetWindowID(window);
+
+            SDL_Event move{};
+            move.type = SDL_MOUSEMOTION;
+            move.motion.windowID = windowID;
+            move.motion.x = x;
+            move.motion.y = y;
+            move.motion.state = buttonState;
+            move.motion.xrel = params.value("dx", 0);
+            move.motion.yrel = params.value("dy", 0);
+            SDL_PushEvent(&move);
+            writeResult("{\"status\":\"ok\",\"command\":\"mouse_move\"}");
+
+        } else if (command == "mouse_up") {
+            int x = params.value("x", 0);
+            int y = params.value("y", 0);
+            std::string buttonStr = params.value("button", "left");
+            uint32_t sdlButton = (buttonStr == "right") ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
+            uint32_t windowID = SDL_GetWindowID(window);
+
+            SDL_Event up{};
+            up.type = SDL_MOUSEBUTTONUP;
+            up.button.windowID = windowID;
+            up.button.button = static_cast<uint8_t>(sdlButton);
+            up.button.x = x;
+            up.button.y = y;
+            SDL_PushEvent(&up);
+            writeResult("{\"status\":\"ok\",\"command\":\"mouse_up\"}");
 
         } else if (command == "mouse_drag") {
             auto from = params.value("from", std::vector<int>{0, 0});
@@ -365,14 +456,13 @@ void UIAutomation::injectMouseDrag(int fromX, int fromY, int toX, int toY, int b
     drag.motion.state = SDL_BUTTON(sdlButton);
     SDL_PushEvent(&drag);
 
-    // Release
-    SDL_Event up{};
-    up.type = SDL_MOUSEBUTTONUP;
-    up.button.windowID = windowID;
-    up.button.button = static_cast<uint8_t>(sdlButton);
-    up.button.x = toX;
-    up.button.y = toY;
-    SDL_PushEvent(&up);
+    // Defer mouse release to next frame so ImGui sees the drag
+    DeferredEvent de{};
+    de.type = SDL_MOUSEBUTTONUP;
+    de.button = sdlButton;
+    de.x = toX;
+    de.y = toY;
+    m_deferredEvents.push_back(de);
 }
 
 void UIAutomation::injectMouseScroll(int x, int y, int delta, SDL_Window* window) {
@@ -455,15 +545,13 @@ void UIAutomation::injectKeyPress(const std::string& key, bool ctrl, bool shift,
     down.key.state = SDL_PRESSED;
     SDL_PushEvent(&down);
 
-    // Key up
-    SDL_Event up{};
-    up.type = SDL_KEYUP;
-    up.key.windowID = windowID;
-    up.key.keysym.sym = keycode;
-    up.key.keysym.scancode = scancode;
-    up.key.keysym.mod = mod;
-    up.key.state = SDL_RELEASED;
-    SDL_PushEvent(&up);
+    // Defer key up to next frame so ImGui sees the key as pressed for one full frame
+    DeferredEvent de{};
+    de.type = SDL_KEYUP;
+    de.keycode = keycode;
+    de.scancode = scancode;
+    de.mod = mod;
+    m_deferredEvents.push_back(de);
 }
 
 void UIAutomation::injectTextInput(const std::string& text, SDL_Window* window) {
