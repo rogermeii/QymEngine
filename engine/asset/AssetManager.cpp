@@ -2,6 +2,7 @@
 #include <tiny_obj_loader.h>
 
 #include <stb_image.h>
+#include <json.hpp>
 
 #include "asset/AssetManager.h"
 #include "renderer/VulkanContext.h"
@@ -9,6 +10,7 @@
 #include "renderer/Buffer.h"
 
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
@@ -49,6 +51,11 @@ void AssetManager::shutdown(VkDevice device)
         // descriptorSet is freed when the pool is destroyed
     }
     m_textureCache.clear();
+
+    for (auto& [key, shader] : m_shaderCache) {
+        shader.pipeline.cleanup(device);
+    }
+    m_shaderCache.clear();
 }
 
 void AssetManager::scanAssets(const std::string& assetsDir)
@@ -56,6 +63,7 @@ void AssetManager::scanAssets(const std::string& assetsDir)
     m_assetsDir = assetsDir;
     m_meshFiles.clear();
     m_textureFiles.clear();
+    m_shaderFiles.clear();
 
     if (!fs::exists(assetsDir)) return;
 
@@ -70,7 +78,10 @@ void AssetManager::scanAssets(const std::string& assetsDir)
         std::transform(ext.begin(), ext.end(), ext.begin(),
             [](unsigned char c){ return std::tolower(c); });
 
-        if (ext == ".obj") {
+        // Check for .shader.json files first (before simple extension check)
+        if (relPath.find(".shader.json") != std::string::npos) {
+            m_shaderFiles.push_back(relPath);
+        } else if (ext == ".obj") {
             m_meshFiles.push_back(relPath);
         } else if (ext == ".jpg" || ext == ".jpeg" || ext == ".png") {
             m_textureFiles.push_back(relPath);
@@ -133,6 +144,14 @@ const MeshAsset* AssetManager::loadMesh(const std::string& relativePath)
 
     MeshAsset mesh{};
     mesh.indexCount = static_cast<uint32_t>(indices.size());
+
+    // Compute AABB
+    mesh.boundsMin = vertices[0].pos;
+    mesh.boundsMax = vertices[0].pos;
+    for (const auto& v : vertices) {
+        mesh.boundsMin = glm::min(mesh.boundsMin, v.pos);
+        mesh.boundsMax = glm::max(mesh.boundsMax, v.pos);
+    }
     VkDevice device = m_ctx->getDevice();
 
     // --- Vertex buffer (staging upload) ---
@@ -249,6 +268,95 @@ const TextureAsset* AssetManager::loadTexture(const std::string& relativePath)
 
     m_textureCache[relativePath] = texAsset;
     return &m_textureCache[relativePath];
+}
+
+const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
+{
+    // Check cache
+    auto it = m_shaderCache.find(relativePath);
+    if (it != m_shaderCache.end())
+        return &it->second;
+
+    if (!m_ctx) return nullptr;
+
+    std::string fullPath = m_assetsDir + "/" + relativePath;
+    if (!fs::exists(fullPath)) return nullptr;
+
+    // Read JSON file
+    std::ifstream file(fullPath);
+    if (!file.is_open()) return nullptr;
+
+    nlohmann::json j;
+    try {
+        file >> j;
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+
+    ShaderAsset shader;
+    shader.name = j.value("name", "");
+    shader.vertPath = j.value("vert", "");
+    shader.fragPath = j.value("frag", "");
+
+    // Parse properties
+    if (j.contains("properties") && j["properties"].is_array()) {
+        for (auto& prop : j["properties"]) {
+            ShaderProperty sp;
+            sp.name = prop.value("name", "");
+            sp.type = prop.value("type", "");
+
+            if (sp.type == "color4") {
+                if (prop.contains("default") && prop["default"].is_array()) {
+                    auto& arr = prop["default"];
+                    sp.defaultVec = glm::vec4(
+                        arr.size() > 0 ? arr[0].get<float>() : 1.0f,
+                        arr.size() > 1 ? arr[1].get<float>() : 1.0f,
+                        arr.size() > 2 ? arr[2].get<float>() : 1.0f,
+                        arr.size() > 3 ? arr[3].get<float>() : 1.0f
+                    );
+                }
+            } else if (sp.type == "float") {
+                sp.defaultFloat = prop.value("default", 0.0f);
+                if (prop.contains("range") && prop["range"].is_array()) {
+                    auto& range = prop["range"];
+                    sp.rangeMin = range.size() > 0 ? range[0].get<float>() : 0.0f;
+                    sp.rangeMax = range.size() > 1 ? range[1].get<float>() : 1.0f;
+                }
+            } else if (sp.type == "texture2D") {
+                sp.defaultTex = prop.value("default", "white");
+            }
+
+            shader.properties.push_back(sp);
+        }
+    }
+
+    // Create pipeline using the offscreen render pass and descriptor set layouts
+    if (m_offscreenRenderPass != VK_NULL_HANDLE &&
+        m_uboLayout != VK_NULL_HANDLE &&
+        m_texLayout != VK_NULL_HANDLE)
+    {
+        VkPushConstantRange pcRange{};
+        pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        pcRange.offset = 0;
+        pcRange.size = sizeof(PushConstantData);
+
+        std::vector<VkDescriptorSetLayout> setLayouts = { m_uboLayout, m_texLayout };
+        std::vector<VkPushConstantRange> pcRanges = { pcRange };
+
+        shader.pipeline.create(
+            m_ctx->getDevice(),
+            m_offscreenRenderPass,
+            setLayouts,
+            m_offscreenExtent,
+            pcRanges,
+            VK_POLYGON_MODE_FILL,
+            shader.vertPath,
+            shader.fragPath
+        );
+    }
+
+    m_shaderCache[relativePath] = std::move(shader);
+    return &m_shaderCache[relativePath];
 }
 
 // ---------------------------------------------------------------------------

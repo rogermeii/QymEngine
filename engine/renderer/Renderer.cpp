@@ -734,6 +734,11 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
             vkDestroyShaderModule(device, gridFrag, nullptr);
             vkDestroyShaderModule(device, gridVert, nullptr);
         }
+
+        // Pass render pass and layout info to AssetManager for shader pipeline creation
+        m_assetManager.setOffscreenRenderPass(m_offscreenRenderPass);
+        m_assetManager.setDescriptorSetLayouts(m_descriptor.getUboLayout(), m_descriptor.getTextureLayout());
+        m_assetManager.setOffscreenExtent({width, height});
     }
 
     // --- 5. Create framebuffer (color + depth) ---

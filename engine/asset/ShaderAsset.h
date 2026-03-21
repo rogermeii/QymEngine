@@ -1,8 +1,8 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
+#include "renderer/Pipeline.h"
 
 namespace QymEngine {
 
@@ -21,7 +21,7 @@ struct ShaderAsset {
     std::string vertPath;       // relative to ASSETS_DIR
     std::string fragPath;
     std::vector<ShaderProperty> properties;
-    VkPipeline pipeline = VK_NULL_HANDLE;
+    Pipeline pipeline;          // owns VkPipeline + VkPipelineLayout
 };
 
 } // namespace QymEngine

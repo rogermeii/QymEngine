@@ -3,6 +3,8 @@
 #include <vector>
 #include <unordered_map>
 #include <vulkan/vulkan.h>
+#include <glm/glm.hpp>
+#include "asset/ShaderAsset.h"
 
 namespace QymEngine {
 
@@ -15,6 +17,10 @@ struct MeshAsset {
     VkBuffer indexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory indexMemory = VK_NULL_HANDLE;
     uint32_t indexCount = 0;
+
+    // Bounding box
+    glm::vec3 boundsMin = glm::vec3(0.0f);
+    glm::vec3 boundsMax = glm::vec3(0.0f);
 };
 
 struct TextureAsset {
@@ -34,13 +40,22 @@ public:
 
     const MeshAsset* loadMesh(const std::string& relativePath);
     const TextureAsset* loadTexture(const std::string& relativePath);
+    const ShaderAsset* loadShader(const std::string& relativePath);
 
     const std::vector<std::string>& getMeshFiles() const { return m_meshFiles; }
     const std::vector<std::string>& getTextureFiles() const { return m_textureFiles; }
+    const std::vector<std::string>& getShaderFiles() const { return m_shaderFiles; }
 
     // For per-texture descriptor set creation
     void setTextureDescriptorSetLayout(VkDescriptorSetLayout layout) { m_textureSetLayout = layout; }
     void setTextureDescriptorPool(VkDescriptorPool pool) { m_textureDescriptorPool = pool; }
+
+    // For shader pipeline creation - called by Renderer after offscreen setup
+    void setOffscreenRenderPass(VkRenderPass rp) { m_offscreenRenderPass = rp; }
+    void setOffscreenExtent(VkExtent2D ext) { m_offscreenExtent = ext; }
+    void setDescriptorSetLayouts(VkDescriptorSetLayout ubo, VkDescriptorSetLayout tex) {
+        m_uboLayout = ubo; m_texLayout = tex;
+    }
 
 private:
     VulkanContext* m_ctx = nullptr;
@@ -49,12 +64,20 @@ private:
 
     std::vector<std::string> m_meshFiles;    // relative paths like "models/cube.obj"
     std::vector<std::string> m_textureFiles; // relative paths like "textures/wall.jpg"
+    std::vector<std::string> m_shaderFiles;  // relative paths like "shaders/standard_lit.shader.json"
 
     std::unordered_map<std::string, MeshAsset> m_meshCache;
     std::unordered_map<std::string, TextureAsset> m_textureCache;
+    std::unordered_map<std::string, ShaderAsset> m_shaderCache;
 
     VkDescriptorSetLayout m_textureSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_textureDescriptorPool = VK_NULL_HANDLE;
+
+    // For shader pipeline creation
+    VkRenderPass m_offscreenRenderPass = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_uboLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_texLayout = VK_NULL_HANDLE;
+    VkExtent2D m_offscreenExtent = {0, 0};
 
     // Helper: create VkImage + memory + view + sampler from pixel data
     void createTextureFromPixels(const unsigned char* pixels, int width, int height,

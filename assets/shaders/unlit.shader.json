@@ -1,0 +1,9 @@
+{
+  "name": "Unlit",
+  "vert": "shaders/unlit_vert.spv",
+  "frag": "shaders/unlit_frag.spv",
+  "properties": [
+    { "name": "baseColor",  "type": "color4",    "default": [1,1,1,1] },
+    { "name": "albedoMap",  "type": "texture2D", "default": "white" }
+  ]
+}
