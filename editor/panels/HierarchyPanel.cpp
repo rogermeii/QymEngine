@@ -1,11 +1,14 @@
 #include "HierarchyPanel.h"
+#include "ProjectPanel.h"
 #include "UndoManager.h"
 #include "Clipboard.h"
 #include <imgui.h>
 
 namespace QymEngine {
 
-void HierarchyPanel::onImGuiRender(Scene& scene, UndoManager* undo, Clipboard* clipboard) {
+void HierarchyPanel::onImGuiRender(Scene& scene, UndoManager* undo, Clipboard* clipboard,
+                                    ProjectPanel* projectPanel) {
+    m_projectPanel = projectPanel;
     ImGui::Begin("Hierarchy");
 
     if (ImGui::Button("Add..."))
@@ -152,6 +155,10 @@ void HierarchyPanel::drawNodeTree(Node* node, Scene& scene, int childIndex) {
 
     // Selection: click, ctrl+click, shift+click
     if (ImGui::IsItemClicked()) {
+        // Clear project panel file selection so Inspector shows node properties
+        if (m_projectPanel)
+            m_projectPanel->clearSelectedFile();
+
         ImGuiIO& io = ImGui::GetIO();
         if (io.KeyCtrl) {
             if (scene.isNodeSelected(node))

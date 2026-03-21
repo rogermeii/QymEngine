@@ -5,8 +5,6 @@
 #include <json.hpp>
 #include <cstring>
 #include <fstream>
-#include <filesystem>
-namespace fs = std::filesystem;
 
 namespace QymEngine {
 
@@ -315,40 +313,6 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                 }
             }
             ImGui::EndCombo();
-        }
-        // New material button
-        ImGui::SameLine();
-        if (ImGui::SmallButton("New")) {
-            std::string newName = "new_material";
-            std::string newPath = "materials/" + newName + ".mat.json";
-
-            // Find a unique name
-            int counter = 1;
-            while (assetManager.materialFileExists(newPath)) {
-                newPath = "materials/" + newName + "_" + std::to_string(counter++) + ".mat.json";
-            }
-
-            // Write default material JSON
-            nlohmann::json j;
-            j["name"] = newName;
-            j["shader"] = "shaders/standard_lit.shader.json";
-            j["properties"] = {
-                {"baseColor", {1.0, 1.0, 1.0, 1.0}},
-                {"metallic", 0.0},
-                {"roughness", 0.5}
-            };
-
-            std::string fullPath = std::string(ASSETS_DIR) + "/" + newPath;
-            fs::create_directories(fs::path(fullPath).parent_path());
-            std::ofstream outFile(fullPath);
-            if (outFile.is_open()) {
-                outFile << j.dump(2);
-                outFile.close();
-                // Assign to current node
-                selected->materialPath = newPath;
-                // Rescan assets to pick up new file
-                assetManager.scanAssets(std::string(ASSETS_DIR));
-            }
         }
         // Go to material file
         if (!selected->materialPath.empty()) {

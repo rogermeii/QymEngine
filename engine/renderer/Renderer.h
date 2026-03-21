@@ -143,6 +143,12 @@ private:
     VkBuffer         m_defaultMaterialParamBuffer = VK_NULL_HANDLE;
     VkDeviceMemory   m_defaultMaterialParamMemory = VK_NULL_HANDLE;
     void*            m_defaultMaterialParamMapped = nullptr;
+
+    // Wireframe highlight material (orange baseColor)
+    VkDescriptorSet  m_wireframeMaterialSet   = VK_NULL_HANDLE;
+    VkBuffer         m_wireframeMaterialParamBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory   m_wireframeMaterialParamMemory = VK_NULL_HANDLE;
+    void*            m_wireframeMaterialParamMapped = nullptr;
 };
 
 } // namespace QymEngine

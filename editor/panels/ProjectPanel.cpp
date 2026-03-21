@@ -1,7 +1,9 @@
 #include "ProjectPanel.h"
 #include <imgui.h>
+#include <json.hpp>
 #include <filesystem>
 #include <algorithm>
+#include <fstream>
 
 namespace fs = std::filesystem;
 
@@ -208,6 +210,39 @@ void ProjectPanel::onImGuiRender()
     // Click empty space to deselect
     if (ImGui::IsMouseClicked(0) && ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered())
         m_selectedFile.clear();
+
+    // Right-click context menu
+    if (ImGui::BeginPopupContextWindow("ProjectContextMenu")) {
+        if (ImGui::MenuItem("New Material")) {
+            std::string dir = m_currentDir.empty() ? "materials" : m_currentDir;
+            std::string newName = "new_material";
+            std::string newPath = dir + "/" + newName + ".mat.json";
+
+            int counter = 1;
+            while (fs::exists(m_assetsDir + "/" + newPath)) {
+                newPath = dir + "/" + newName + "_" + std::to_string(counter++) + ".mat.json";
+            }
+
+            nlohmann::json j;
+            j["name"] = newName;
+            j["shader"] = "shaders/standard_lit.shader.json";
+            j["properties"] = {
+                {"baseColor", {1.0, 1.0, 1.0, 1.0}},
+                {"metallic", 0.0},
+                {"roughness", 0.5}
+            };
+
+            std::string fullPath = m_assetsDir + "/" + newPath;
+            fs::create_directories(fs::path(fullPath).parent_path());
+            std::ofstream outFile(fullPath);
+            if (outFile.is_open()) {
+                outFile << j.dump(2);
+                outFile.close();
+                m_selectedFile = newPath;
+            }
+        }
+        ImGui::EndPopup();
+    }
 
     ImGui::End();
 }

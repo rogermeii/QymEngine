@@ -17,6 +17,8 @@ public:
 
     // Navigate to a file's directory and highlight it (does NOT change Inspector)
     void navigateToFile(const std::string& relativePath);
+    // Clear selection (when user clicks in another panel)
+    void clearSelectedFile() { m_selectedFile.clear(); }
     // Clear highlight
     void clearHighlight() { m_highlightedFile.clear(); }
     const std::string& getHighlightedFile() const { return m_highlightedFile; }

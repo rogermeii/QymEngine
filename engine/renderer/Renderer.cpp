@@ -431,6 +431,15 @@ void Renderer::shutdown()
         vkFreeMemory(device, m_defaultMaterialParamMemory, nullptr);
     }
 
+    // Destroy wireframe material param buffer
+    if (m_wireframeMaterialParamBuffer != VK_NULL_HANDLE)
+        vkDestroyBuffer(device, m_wireframeMaterialParamBuffer, nullptr);
+    if (m_wireframeMaterialParamMemory != VK_NULL_HANDLE) {
+        if (m_wireframeMaterialParamMapped)
+            vkUnmapMemory(device, m_wireframeMaterialParamMemory);
+        vkFreeMemory(device, m_wireframeMaterialParamMemory, nullptr);
+    }
+
     m_assetManager.shutdown(device);
     m_swapChain.cleanup(device);
     m_texture.cleanup(device);
@@ -896,6 +905,67 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
             }
         }
 
+        // Create wireframe material set (orange baseColor for selection highlight)
+        const auto& wfLayouts = m_offscreenPipeline.getDescriptorSetLayouts();
+        if (m_wireframeMaterialSet == VK_NULL_HANDLE && wfLayouts.size() >= 2) {
+            VkDescriptorSetLayout set1Layout = wfLayouts[1];
+            m_wireframeMaterialSet = m_descriptor.allocateSet(device, set1Layout);
+
+            uint32_t wfParamSize = 32;
+            Buffer::createBuffer(m_context, wfParamSize,
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                m_wireframeMaterialParamBuffer, m_wireframeMaterialParamMemory);
+            vkMapMemory(device, m_wireframeMaterialParamMemory, 0, wfParamSize, 0, &m_wireframeMaterialParamMapped);
+
+            struct { glm::vec4 baseColor; float metallic; float roughness; float _pad[2]; } wfParams;
+            wfParams.baseColor = glm::vec4(1.0f, 0.5f, 0.0f, 1.0f); // orange
+            wfParams.metallic = 0.0f;
+            wfParams.roughness = 1.0f;
+            wfParams._pad[0] = 0.0f;
+            wfParams._pad[1] = 0.0f;
+            memcpy(m_wireframeMaterialParamMapped, &wfParams, sizeof(wfParams));
+
+            VkDescriptorBufferInfo wfBufInfo{};
+            wfBufInfo.buffer = m_wireframeMaterialParamBuffer;
+            wfBufInfo.offset = 0;
+            wfBufInfo.range = wfParamSize;
+
+            VkWriteDescriptorSet wfUboWrite{};
+            wfUboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wfUboWrite.dstSet = m_wireframeMaterialSet;
+            wfUboWrite.dstBinding = 0;
+            wfUboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            wfUboWrite.descriptorCount = 1;
+            wfUboWrite.pBufferInfo = &wfBufInfo;
+            vkUpdateDescriptorSets(device, 1, &wfUboWrite, 0, nullptr);
+
+            // Bind fallback textures for wireframe material
+            VkDescriptorImageInfo wfAlbedo{};
+            wfAlbedo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            wfAlbedo.imageView = m_whiteFallbackView;
+            wfAlbedo.sampler = m_fallbackSampler;
+            VkDescriptorImageInfo wfNormal{};
+            wfNormal.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            wfNormal.imageView = m_normalFallbackView;
+            wfNormal.sampler = m_fallbackSampler;
+
+            std::array<VkWriteDescriptorSet, 2> wfSamplerWrites{};
+            wfSamplerWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wfSamplerWrites[0].dstSet = m_wireframeMaterialSet;
+            wfSamplerWrites[0].dstBinding = 1;
+            wfSamplerWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wfSamplerWrites[0].descriptorCount = 1;
+            wfSamplerWrites[0].pImageInfo = &wfAlbedo;
+            wfSamplerWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wfSamplerWrites[1].dstSet = m_wireframeMaterialSet;
+            wfSamplerWrites[1].dstBinding = 2;
+            wfSamplerWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wfSamplerWrites[1].descriptorCount = 1;
+            wfSamplerWrites[1].pImageInfo = &wfNormal;
+            vkUpdateDescriptorSets(device, 2, wfSamplerWrites.data(), 0, nullptr);
+        }
+
         // Pass render pass and layout info to AssetManager for shader pipeline creation
         m_assetManager.setOffscreenRenderPass(m_offscreenRenderPass);
         m_assetManager.setOffscreenExtent({width, height});
@@ -1143,13 +1213,10 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_wireframePipeline.getPipelineLayout(), 0, 1,
                                 &frameSet, 0, nullptr);
-        // Bind default material set 1
+        // Bind wireframe material set 1 (orange baseColor)
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_wireframePipeline.getPipelineLayout(), 1, 1,
-                                &m_defaultMaterialSet, 0, nullptr);
-
-        // For wireframe highlight, we need to set baseColor in the default material UBO temporarily
-        // But since it's a shared buffer, instead we just push highlighted=1 and the shader returns baseColor
+                                &m_wireframeMaterialSet, 0, nullptr);
         PushConstantData pc{};
         pc.model = glm::transpose(selected->getWorldMatrix());
         pc.highlighted = 1;
@@ -1184,7 +1251,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
                                 &frameSet, 0, nullptr);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_wireframePipeline.getPipelineLayout(), 1, 1,
-                                &m_defaultMaterialSet, 0, nullptr);
+                                &m_wireframeMaterialSet, 0, nullptr);
 
         // Light gizmo: sphere at position + single arrow showing direction
         glm::vec3 pos = node->transform.position;

@@ -8,12 +8,14 @@ namespace QymEngine {
 
 class UndoManager;
 class Clipboard;
+class ProjectPanel;
 
 class HierarchyPanel {
 public:
     using SaveStateFn = std::function<void()>;
 
-    void onImGuiRender(Scene& scene, UndoManager* undo = nullptr, Clipboard* clipboard = nullptr);
+    void onImGuiRender(Scene& scene, UndoManager* undo = nullptr, Clipboard* clipboard = nullptr,
+                       ProjectPanel* projectPanel = nullptr);
     void setSaveStateFn(SaveStateFn fn) { m_saveState = fn; }
 
 private:
@@ -28,6 +30,7 @@ private:
     Node* m_reparentTarget = nullptr;
     int m_reparentIndex = -1;  // -1 = append, >= 0 = insert at index
 
+    ProjectPanel* m_projectPanel = nullptr;
     SaveStateFn m_saveState;
 };
 
