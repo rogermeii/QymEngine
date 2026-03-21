@@ -64,6 +64,7 @@ private:
 #ifndef __ANDROID__
     RENDERDOC_API_1_6_0* m_rdocApi = nullptr;
     bool m_captureRequested = false;
+    bool m_capturingThisFrame = false;
     int m_frameCount = 0;
     bool m_autoCaptureDone = false;
     bool m_captureAndExit = false;

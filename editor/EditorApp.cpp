@@ -6,6 +6,9 @@
 #include <imgui_impl_sdl2.h>
 #include <SDL.h>
 #include <fstream>
+#include <filesystem>
+#include <algorithm>
+#include <chrono>
 
 #ifndef __ANDROID__
 #define WIN32_LEAN_AND_MEAN
@@ -106,6 +109,40 @@ void EditorApp::onInit()
 
 void EditorApp::onUpdate()
 {
+#ifndef __ANDROID__
+    // Check file-based capture trigger and F12 BEFORE starting capture
+    checkExternalCaptureTrigger();
+
+    // Start RenderDoc capture BEFORE beginFrame so entire frame is captured
+    m_capturingThisFrame = m_captureRequested && m_rdocApi;
+    if (m_capturingThisFrame) {
+        m_captureRequested = false;
+        // Clean old captures (keep last 5)
+        {
+            std::vector<std::string> rdcFiles;
+            std::string captureDir = std::string(ASSETS_DIR) + "/../captures";
+            for (auto& entry : std::filesystem::directory_iterator(captureDir)) {
+                if (entry.path().extension() == ".rdc")
+                    rdcFiles.push_back(entry.path().string());
+            }
+            std::sort(rdcFiles.begin(), rdcFiles.end());
+            while (rdcFiles.size() > 5) {
+                std::filesystem::remove(rdcFiles.front());
+                rdcFiles.erase(rdcFiles.begin());
+            }
+        }
+        // Set unique capture path with timestamp
+        {
+            auto now = std::chrono::system_clock::now();
+            auto epoch = now.time_since_epoch();
+            auto secs = std::chrono::duration_cast<std::chrono::seconds>(epoch).count();
+            std::string capturePath = std::string(ASSETS_DIR) + "/../captures/qymengine_" + std::to_string(secs);
+            m_rdocApi->SetCaptureFilePathTemplate(capturePath.c_str());
+        }
+        m_rdocApi->StartFrameCapture(nullptr, nullptr);
+    }
+#endif
+
     if (!m_renderer.beginFrame())
         return;
 
@@ -250,9 +287,6 @@ void EditorApp::onUpdate()
     if (ImGui::IsKeyPressed(ImGuiKey_F12) && m_rdocApi)
         m_captureRequested = true;
 
-    // File-based external trigger: captures/trigger
-    checkExternalCaptureTrigger();
-
     // Auto-capture for --capture-and-exit mode
     m_frameCount++;
     if (m_captureAndExit && !m_autoCaptureDone && m_rdocApi && m_frameCount == 5) {
@@ -271,19 +305,12 @@ void EditorApp::onUpdate()
     m_imguiLayer.endFrame(m_renderer.getCurrentCommandBuffer(),
                           m_renderer.getImageIndex());
 
-#ifndef __ANDROID__
-    // RenderDoc frame capture (wrap the submit+present)
-    if (m_captureRequested && m_rdocApi) {
-        m_rdocApi->StartFrameCapture(nullptr, nullptr);
-    }
-#endif
-
     m_renderer.endFrame();
 
 #ifndef __ANDROID__
-    if (m_captureRequested && m_rdocApi) {
+    if (m_capturingThisFrame) {
         m_rdocApi->EndFrameCapture(nullptr, nullptr);
-        m_captureRequested = false;
+        m_capturingThisFrame = false;
 
         uint32_t numCaptures = m_rdocApi->GetNumCaptures();
         if (numCaptures > 0) {
@@ -308,10 +335,6 @@ void EditorApp::onUpdate()
                 out.close();
                 Log::info("RenderDoc: capture-and-exit mode, shutting down");
                 m_window->requestClose();
-            } else {
-                if (!m_rdocApi->IsTargetControlConnected()) {
-                    m_rdocApi->LaunchReplayUI(1, nullptr);
-                }
             }
         }
     }
