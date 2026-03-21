@@ -189,10 +189,12 @@ static json reflectSpirv(const std::vector<uint8_t>& vertSpv, const std::vector<
     return result;
 }
 
-bool compileShader(const std::string& inputPath, const std::string& outputDir) {
-    std::string baseName = fs::path(inputPath).stem().string();
-    std::cout << "Compiling: " << baseName << ".slang" << std::endl;
-
+// Compile a single shader with optional preprocessor defines
+// outputSuffix: "" for normal, "_bindless" for bindless variant
+static bool compileShaderVariant(const std::string& inputPath, const std::string& outputDir,
+                                  const std::string& baseName,
+                                  const std::vector<slang::PreprocessorMacroDesc>& macros,
+                                  const std::string& outputSuffix) {
     Slang::ComPtr<slang::IGlobalSession> globalSession;
     slang_createGlobalSession(SLANG_API_VERSION, globalSession.writeRef());
     if (!globalSession) {
@@ -207,6 +209,10 @@ bool compileShader(const std::string& inputPath, const std::string& outputDir) {
 
     sessionDesc.targetCount = 1;
     sessionDesc.targets = &targetDesc;
+
+    // Set preprocessor macros
+    sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(macros.size());
+    sessionDesc.preprocessorMacros = macros.empty() ? nullptr : macros.data();
 
     Slang::ComPtr<slang::ISession> session;
     globalSession->createSession(sessionDesc, session.writeRef());
@@ -288,12 +294,12 @@ bool compileShader(const std::string& inputPath, const std::string& outputDir) {
 
         // Write .spv file
         std::string spvPath;
-        if (baseName == "Triangle") {
+        if (baseName == "Triangle" && outputSuffix.empty()) {
             spvPath = outputDir + "/" + (entry.suffix == "_vert" ? "vert.spv" : "frag.spv");
         } else {
             std::string lower = baseName;
             lower[0] = tolower(lower[0]);
-            spvPath = outputDir + "/" + lower + entry.suffix + ".spv";
+            spvPath = outputDir + "/" + lower + entry.suffix + outputSuffix + ".spv";
         }
 
         std::ofstream spvFile(spvPath, std::ios::binary);
@@ -306,11 +312,36 @@ bool compileShader(const std::string& inputPath, const std::string& outputDir) {
     // Reflect using SPIRV-Reflect on the generated SPIR-V
     if (spvOutputs.count("_vert") && spvOutputs.count("_frag")) {
         json reflectJson = reflectSpirv(spvOutputs["_vert"], spvOutputs["_frag"]);
-        std::string jsonPath = outputDir + "/" + baseName + ".reflect.json";
+        std::string jsonPath = outputDir + "/" + baseName + outputSuffix + ".reflect.json";
         std::ofstream jsonFile(jsonPath);
         jsonFile << reflectJson.dump(2);
         jsonFile.close();
-        std::cout << "  -> " << baseName << ".reflect.json" << std::endl;
+        std::cout << "  -> " << baseName + outputSuffix << ".reflect.json" << std::endl;
+    }
+
+    return true;
+}
+
+bool compileShader(const std::string& inputPath, const std::string& outputDir) {
+    std::string baseName = fs::path(inputPath).stem().string();
+    std::cout << "Compiling: " << baseName << ".slang" << std::endl;
+
+    // 1. Normal compilation (no defines)
+    bool ok = compileShaderVariant(inputPath, outputDir, baseName, {}, "");
+    if (!ok) return false;
+
+    // 2. Bindless compilation (USE_BINDLESS=1) -- skip Grid.slang (no set 1)
+    if (baseName != "Grid") {
+        std::cout << "  [bindless variant]" << std::endl;
+        slang::PreprocessorMacroDesc bindlessMacro;
+        bindlessMacro.name = "USE_BINDLESS";
+        bindlessMacro.value = "1";
+        std::vector<slang::PreprocessorMacroDesc> macros = { bindlessMacro };
+        bool bindlessOk = compileShaderVariant(inputPath, outputDir, baseName, macros, "_bindless");
+        if (!bindlessOk) {
+            std::cerr << "  WARNING: Bindless variant failed for " << baseName << ", continuing..." << std::endl;
+            // Not fatal - non-bindless path still works
+        }
     }
 
     return true;

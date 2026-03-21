@@ -30,6 +30,9 @@ public:
     VkQueue          getPresentQueue()   const { return m_presentQueue; }
     VkSurfaceKHR     getSurface()        const { return m_surface; }
 
+    // Bindless descriptor indexing support (PC only)
+    bool supportsBindless() const { return m_bindlessSupported; }
+
     QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) const;
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
 
@@ -62,6 +65,9 @@ private:
     VkQueue                  m_graphicsQueue  = VK_NULL_HANDLE;
     VkQueue                  m_presentQueue   = VK_NULL_HANDLE;
     VkSurfaceKHR             m_surface        = VK_NULL_HANDLE;
+
+    // Bindless support flag (set during createLogicalDevice)
+    bool m_bindlessSupported = false;
 
     static const std::vector<const char*> s_validationLayers;
     static const std::vector<const char*> s_deviceExtensions;

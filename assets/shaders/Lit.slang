@@ -13,6 +13,37 @@ struct FrameData
 
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 
+#ifdef USE_BINDLESS
+// --- Bindless path (PC) ---
+// Set 1 binding 0: Sampler array
+[[vk::binding(0, 1)]] SamplerState bindlessSamplers[256];
+// Set 1 binding 1: Texture2D array (unbounded)
+[[vk::binding(1, 1)]] Texture2D bindlessTextures[];
+// Set 1 binding 2: Material entries SSBO
+struct MaterialEntry
+{
+    float4 baseColor;
+    float metallic;
+    float roughness;
+    uint albedoTexIndex;
+    uint normalTexIndex;
+    uint samplerIndex;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+};
+[[vk::binding(2, 1)]] StructuredBuffer<MaterialEntry> materialEntries;
+
+// Push constant: per-object (with materialIndex)
+struct PushConstants
+{
+    float4x4 model;
+    int highlighted;
+    uint materialIndex;
+};
+
+#else
+// --- Non-bindless path (current) ---
 // Set 1: per-material (shader-specific)
 struct LitMaterialParams
 {
@@ -31,6 +62,7 @@ struct PushConstants
     float4x4 model;
     int highlighted;
 };
+#endif
 
 [[vk::push_constant]] PushConstants pc;
 
@@ -70,9 +102,16 @@ VSOutput vertexMain(VSInput input)
     float3x3 modelMat3 = (float3x3)pc.model;
     output.normal = mul(modelMat3, input.normal);
     output.worldPos = worldPos.xyz;
+#ifdef USE_BINDLESS
+    MaterialEntry entry = materialEntries[pc.materialIndex];
+    output.baseColor = entry.baseColor;
+    output.metallic = entry.metallic;
+    output.roughness = entry.roughness;
+#else
     output.baseColor = materialParams.baseColor;
     output.metallic = materialParams.metallic;
     output.roughness = materialParams.roughness;
+#endif
     return output;
 }
 
@@ -110,9 +149,20 @@ float4 fragmentMain(VSOutput input) : SV_Target
     if (input.highlighted == 1)
         return input.baseColor;
 
+#ifdef USE_BINDLESS
+    MaterialEntry entry = materialEntries[pc.materialIndex];
+    float3 normalSample = bindlessTextures[NonUniformResourceIndex(entry.normalTexIndex)]
+                          .Sample(bindlessSamplers[NonUniformResourceIndex(entry.samplerIndex)], input.texCoord).rgb;
+    float3 albedoSample = bindlessTextures[NonUniformResourceIndex(entry.albedoTexIndex)]
+                          .Sample(bindlessSamplers[NonUniformResourceIndex(entry.samplerIndex)], input.texCoord).rgb;
+#else
+    float3 normalSample = normalMap.Sample(input.texCoord).rgb;
+    float3 albedoSample = albedoMap.Sample(input.texCoord).rgb;
+#endif
+
     // Normal mapping via screen-space derivatives
     float3 N = normalize(input.normal);
-    float3 mapN = normalMap.Sample(input.texCoord).rgb * 2.0 - 1.0;
+    float3 mapN = normalSample * 2.0 - 1.0;
     float3 Q1 = ddx(input.worldPos);
     float3 Q2 = ddy(input.worldPos);
     float2 st1 = ddx(input.texCoord);
@@ -122,7 +172,7 @@ float4 fragmentMain(VSOutput input) : SV_Target
     float3x3 TBN = float3x3(T, B, N);
     N = normalize(mul(mapN, TBN));
 
-    float3 albedo = albedoMap.Sample(input.texCoord).rgb * input.baseColor.rgb;
+    float3 albedo = albedoSample * input.baseColor.rgb;
     float metallic = input.metallic;
     float roughness = max(input.roughness, 0.04);
 

@@ -357,6 +357,32 @@ void VulkanContext::createLogicalDevice()
         queueCreateInfos.push_back(queueCreateInfo);
     }
 
+    // Query extended features for bindless support (PC only)
+#ifndef __ANDROID__
+    VkPhysicalDeviceFeatures2 features2{};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+    VkPhysicalDeviceDescriptorIndexingFeatures diFeatures{};
+    diFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+
+    VkPhysicalDeviceBufferDeviceAddressFeatures bdaFeatures{};
+    bdaFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+
+    features2.pNext = &diFeatures;
+    diFeatures.pNext = &bdaFeatures;
+
+    vkGetPhysicalDeviceFeatures2(m_physicalDevice, &features2);
+
+    m_bindlessSupported =
+        diFeatures.descriptorBindingPartiallyBound &&
+        diFeatures.runtimeDescriptorArray &&
+        diFeatures.shaderSampledImageArrayNonUniformIndexing &&
+        diFeatures.descriptorBindingVariableDescriptorCount &&
+        bdaFeatures.bufferDeviceAddress;
+
+    std::cout << "Bindless support: " << (m_bindlessSupported ? "YES" : "NO") << std::endl;
+#endif
+
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
     deviceFeatures.fillModeNonSolid = VK_TRUE;
@@ -365,7 +391,7 @@ void VulkanContext::createLogicalDevice()
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
-    createInfo.pEnabledFeatures = &deviceFeatures;
+
     // Build final extension list: required + available optional
     std::vector<const char*> enabledExtensions(s_deviceExtensions.begin(), s_deviceExtensions.end());
 
@@ -390,6 +416,38 @@ void VulkanContext::createLogicalDevice()
 
     createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
     createInfo.ppEnabledExtensionNames = enabledExtensions.data();
+
+#ifndef __ANDROID__
+    // Enable bindless features via pNext chain when supported
+    VkPhysicalDeviceDescriptorIndexingFeatures enableDI{};
+    VkPhysicalDeviceBufferDeviceAddressFeatures enableBDA{};
+    VkPhysicalDeviceFeatures2 enableFeatures2{};
+
+    if (m_bindlessSupported) {
+        enableDI.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        enableDI.descriptorBindingPartiallyBound = VK_TRUE;
+        enableDI.runtimeDescriptorArray = VK_TRUE;
+        enableDI.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+        enableDI.descriptorBindingVariableDescriptorCount = VK_TRUE;
+        enableDI.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+
+        enableBDA.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+        enableBDA.bufferDeviceAddress = VK_TRUE;
+
+        enableDI.pNext = &enableBDA;
+
+        enableFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        enableFeatures2.features = deviceFeatures;
+        enableFeatures2.pNext = &enableDI;
+
+        createInfo.pEnabledFeatures = nullptr;  // Must be null when using pNext
+        createInfo.pNext = &enableFeatures2;
+    } else {
+        createInfo.pEnabledFeatures = &deviceFeatures;
+    }
+#else
+    createInfo.pEnabledFeatures = &deviceFeatures;
+#endif
 
     if (s_enableValidationLayers)
     {

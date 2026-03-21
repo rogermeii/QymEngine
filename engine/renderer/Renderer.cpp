@@ -6,6 +6,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <array>
+#include <iostream>
 #include <stdexcept>
 #include <cstring>
 
@@ -66,12 +67,16 @@ void Renderer::init(Window& window)
     // Create fallback textures for the material system
     createFallbackTextures();
 
+    // Create bindless descriptor resources (PC only, after fallback textures)
+    createBindlessResources();
+
     // Initialize AssetManager with layout cache and descriptor allocator
     m_assetManager.init(m_context, m_commandManager);
     m_assetManager.setLayoutCache(&m_layoutCache);
     m_assetManager.setDescriptorAllocator(&m_descriptor);
     m_assetManager.setFallbackAlbedo(m_whiteFallbackView, m_fallbackSampler);
     m_assetManager.setFallbackNormal(m_normalFallbackView, m_fallbackSampler);
+    m_assetManager.setRenderer(this);
 
     // For texture preview in Inspector (single-sampler layout)
     {
@@ -399,6 +404,290 @@ void Renderer::createFallbackTextures()
         throw std::runtime_error("failed to create fallback sampler!");
 }
 
+// ---------------------------------------------------------------------------
+// Bindless descriptor resources (PC only)
+// ---------------------------------------------------------------------------
+
+void Renderer::createBindlessResources()
+{
+#ifndef __ANDROID__
+    if (!m_context.supportsBindless()) {
+        m_bindlessEnabled = false;
+        std::cout << "Bindless: disabled (GPU does not support required features)" << std::endl;
+        return;
+    }
+
+    m_bindlessEnabled = true;
+    VkDevice device = m_context.getDevice();
+
+    // --- 1. Create separate descriptor pool with UPDATE_AFTER_BIND ---
+    {
+        std::array<VkDescriptorPoolSize, 3> poolSizes{};
+        poolSizes[0].type = VK_DESCRIPTOR_TYPE_SAMPLER;
+        poolSizes[0].descriptorCount = MAX_BINDLESS_SAMPLERS;
+        poolSizes[1].type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        poolSizes[1].descriptorCount = MAX_BINDLESS_TEXTURES;
+        poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        poolSizes[2].descriptorCount = 1;
+
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+        poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        poolInfo.pPoolSizes = poolSizes.data();
+        poolInfo.maxSets = 1;
+
+        if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_bindlessPool) != VK_SUCCESS)
+            throw std::runtime_error("failed to create bindless descriptor pool!");
+    }
+
+    // --- 2. Create bindless set layout ---
+    {
+        std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+        // binding 0: sampler array
+        bindings[0].binding = 0;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+        bindings[0].descriptorCount = MAX_BINDLESS_SAMPLERS;
+        bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[0].pImmutableSamplers = nullptr;
+
+        // binding 1: texture array (variable count)
+        bindings[1].binding = 1;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        bindings[1].descriptorCount = MAX_BINDLESS_TEXTURES;
+        bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[1].pImmutableSamplers = nullptr;
+
+        // binding 2: material SSBO
+        bindings[2].binding = 2;
+        bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[2].descriptorCount = 1;
+        bindings[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[2].pImmutableSamplers = nullptr;
+
+        // Binding flags for bindless
+        std::array<VkDescriptorBindingFlags, 3> bindingFlags{};
+        bindingFlags[0] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                          VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+        bindingFlags[1] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                          VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
+                          VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+        bindingFlags[2] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+
+        VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+        bindingFlagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+        bindingFlagsInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        bindingFlagsInfo.pBindingFlags = bindingFlags.data();
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
+        layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+        layoutInfo.pNext = &bindingFlagsInfo;
+
+        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_bindlessSetLayout) != VK_SUCCESS)
+            throw std::runtime_error("failed to create bindless descriptor set layout!");
+    }
+
+    // --- 3. Allocate the bindless descriptor set with variable count ---
+    {
+        uint32_t variableCount = MAX_BINDLESS_TEXTURES;
+        VkDescriptorSetVariableDescriptorCountAllocateInfo varCountInfo{};
+        varCountInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
+        varCountInfo.descriptorSetCount = 1;
+        varCountInfo.pDescriptorCounts = &variableCount;
+
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_bindlessPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &m_bindlessSetLayout;
+        allocInfo.pNext = &varCountInfo;
+
+        if (vkAllocateDescriptorSets(device, &allocInfo, &m_bindlessSet) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate bindless descriptor set!");
+    }
+
+    // --- 4. Create material SSBO (host visible, persistently mapped) ---
+    {
+        VkDeviceSize ssboSize = sizeof(BindlessMaterialEntry) * MAX_MATERIALS;
+        Buffer::createBuffer(m_context, ssboSize,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            m_materialSSBO, m_materialSSBOMemory);
+
+        vkMapMemory(device, m_materialSSBOMemory, 0, ssboSize, 0, &m_materialSSBOMapped);
+        memset(m_materialSSBOMapped, 0, ssboSize);
+
+        // Write SSBO to descriptor set (binding 2)
+        VkDescriptorBufferInfo ssboInfo{};
+        ssboInfo.buffer = m_materialSSBO;
+        ssboInfo.offset = 0;
+        ssboInfo.range = ssboSize;
+
+        VkWriteDescriptorSet ssboWrite{};
+        ssboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        ssboWrite.dstSet = m_bindlessSet;
+        ssboWrite.dstBinding = 2;
+        ssboWrite.dstArrayElement = 0;
+        ssboWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        ssboWrite.descriptorCount = 1;
+        ssboWrite.pBufferInfo = &ssboInfo;
+
+        vkUpdateDescriptorSets(device, 1, &ssboWrite, 0, nullptr);
+    }
+
+    // --- 5. Register default sampler and fallback textures ---
+    m_nextSamplerIndex = 0;
+    m_nextTextureIndex = 0;
+    m_nextMaterialIndex = 0;
+
+    // Register fallback sampler at index 0
+    registerBindlessSampler(m_fallbackSampler);
+
+    // Register fallback textures (white=0, normal=1)
+    uint32_t whiteFallbackIdx = registerBindlessTexture(m_whiteFallbackView);
+    uint32_t normalFallbackIdx = registerBindlessTexture(m_normalFallbackView);
+
+    // --- 6. Create default bindless material entry (index 0) ---
+    m_defaultBindlessMaterialIndex = allocateBindlessMaterialIndex();
+    {
+        BindlessMaterialEntry defaultEntry{};
+        defaultEntry.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        defaultEntry.metallic = 0.0f;
+        defaultEntry.roughness = 0.5f;
+        defaultEntry.albedoTexIndex = whiteFallbackIdx;
+        defaultEntry.normalTexIndex = normalFallbackIdx;
+        defaultEntry.samplerIndex = 0;
+        updateBindlessMaterialEntry(m_defaultBindlessMaterialIndex, defaultEntry);
+    }
+
+    // --- 7. Create wireframe bindless material entry ---
+    m_wireframeBindlessMaterialIndex = allocateBindlessMaterialIndex();
+    {
+        BindlessMaterialEntry wireframeEntry{};
+        wireframeEntry.baseColor = glm::vec4(1.0f, 0.5f, 0.0f, 1.0f);
+        wireframeEntry.metallic = 0.0f;
+        wireframeEntry.roughness = 1.0f;
+        wireframeEntry.albedoTexIndex = whiteFallbackIdx;
+        wireframeEntry.normalTexIndex = normalFallbackIdx;
+        wireframeEntry.samplerIndex = 0;
+        updateBindlessMaterialEntry(m_wireframeBindlessMaterialIndex, wireframeEntry);
+    }
+
+    std::cout << "Bindless: enabled (samplers=" << m_nextSamplerIndex
+              << ", textures=" << m_nextTextureIndex
+              << ", materials=" << m_nextMaterialIndex << ")" << std::endl;
+#else
+    m_bindlessEnabled = false;
+#endif
+}
+
+void Renderer::destroyBindlessResources()
+{
+    VkDevice device = m_context.getDevice();
+
+    m_bindlessOffscreenPipeline.cleanup(device);
+    m_bindlessWireframePipeline.cleanup(device);
+
+    if (m_materialSSBO != VK_NULL_HANDLE) {
+        if (m_materialSSBOMapped) {
+            vkUnmapMemory(device, m_materialSSBOMemory);
+            m_materialSSBOMapped = nullptr;
+        }
+        vkDestroyBuffer(device, m_materialSSBO, nullptr);
+        m_materialSSBO = VK_NULL_HANDLE;
+    }
+    if (m_materialSSBOMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_materialSSBOMemory, nullptr);
+        m_materialSSBOMemory = VK_NULL_HANDLE;
+    }
+
+    if (m_bindlessSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_bindlessSetLayout, nullptr);
+        m_bindlessSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_bindlessPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, m_bindlessPool, nullptr);
+        m_bindlessPool = VK_NULL_HANDLE;
+    }
+
+    m_bindlessSet = VK_NULL_HANDLE;
+    m_bindlessEnabled = false;
+    m_nextTextureIndex = 0;
+    m_nextSamplerIndex = 0;
+    m_nextMaterialIndex = 0;
+}
+
+uint32_t Renderer::registerBindlessTexture(VkImageView view)
+{
+    if (!m_bindlessEnabled || m_nextTextureIndex >= MAX_BINDLESS_TEXTURES) {
+        std::cerr << "Bindless: cannot register texture (disabled or limit reached)" << std::endl;
+        return 0;
+    }
+
+    uint32_t index = m_nextTextureIndex++;
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageView = view;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_bindlessSet;
+    write.dstBinding = 1;
+    write.dstArrayElement = index;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    write.descriptorCount = 1;
+    write.pImageInfo = &imageInfo;
+
+    vkUpdateDescriptorSets(m_context.getDevice(), 1, &write, 0, nullptr);
+    return index;
+}
+
+uint32_t Renderer::registerBindlessSampler(VkSampler sampler)
+{
+    if (!m_bindlessEnabled || m_nextSamplerIndex >= MAX_BINDLESS_SAMPLERS) {
+        std::cerr << "Bindless: cannot register sampler (disabled or limit reached)" << std::endl;
+        return 0;
+    }
+
+    uint32_t index = m_nextSamplerIndex++;
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = sampler;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_bindlessSet;
+    write.dstBinding = 0;
+    write.dstArrayElement = index;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &imageInfo;
+
+    vkUpdateDescriptorSets(m_context.getDevice(), 1, &write, 0, nullptr);
+    return index;
+}
+
+void Renderer::updateBindlessMaterialEntry(uint32_t index, const BindlessMaterialEntry& entry)
+{
+    if (!m_bindlessEnabled || !m_materialSSBOMapped || index >= MAX_MATERIALS) return;
+
+    auto* entries = static_cast<BindlessMaterialEntry*>(m_materialSSBOMapped);
+    entries[index] = entry;
+}
+
+uint32_t Renderer::allocateBindlessMaterialIndex()
+{
+    if (!m_bindlessEnabled || m_nextMaterialIndex >= MAX_MATERIALS) {
+        std::cerr << "Bindless: cannot allocate material index (disabled or limit reached)" << std::endl;
+        return 0;
+    }
+    return m_nextMaterialIndex++;
+}
+
 void Renderer::shutdown()
 {
     vkDeviceWaitIdle(m_context.getDevice());
@@ -406,6 +695,9 @@ void Renderer::shutdown()
     VkDevice device = m_context.getDevice();
 
     destroyOffscreen();
+
+    // Cleanup bindless resources (before fallback textures they reference)
+    destroyBindlessResources();
 
     // Cleanup fallback textures
     if (m_fallbackSampler != VK_NULL_HANDLE)
@@ -676,6 +968,38 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         // Create wireframe pipeline using layout cache (same shader, different polygon mode)
         m_wireframePipeline.create(device, m_offscreenRenderPass,
             {width, height}, m_layoutCache, VK_POLYGON_MODE_LINE);
+
+        // Create bindless pipelines (if enabled)
+        if (m_bindlessEnabled && m_bindlessSetLayout != VK_NULL_HANDLE) {
+            // Build layouts: set 0 = per-frame (same), set 1 = bindless layout
+            std::vector<VkDescriptorSetLayout> bindlessLayouts = {
+                m_perFrameLayout,
+                m_bindlessSetLayout
+            };
+
+            // Use the bindless reflection JSON for push constant ranges
+            // Load it to get the correct push constant data
+            ShaderReflectionData bindlessReflection;
+            std::string bindlessReflectPath = std::string(ASSETS_DIR) + "/shaders/Triangle_bindless.reflect.json";
+            if (bindlessReflection.loadFromJson(bindlessReflectPath)) {
+                auto pcRanges = bindlessReflection.createPushConstantRanges();
+
+                m_bindlessOffscreenPipeline.createWithLayouts(
+                    device, m_offscreenRenderPass, bindlessLayouts,
+                    {width, height}, pcRanges, VK_POLYGON_MODE_FILL,
+                    "shaders/triangle_vert_bindless.spv",
+                    "shaders/triangle_frag_bindless.spv");
+
+                m_bindlessWireframePipeline.createWithLayouts(
+                    device, m_offscreenRenderPass, bindlessLayouts,
+                    {width, height}, pcRanges, VK_POLYGON_MODE_LINE,
+                    "shaders/triangle_vert_bindless.spv",
+                    "shaders/triangle_frag_bindless.spv");
+            } else {
+                std::cerr << "Bindless: failed to load reflection JSON, disabling bindless pipelines" << std::endl;
+                m_bindlessEnabled = false;
+            }
+        }
 
         // --- Create grid pipeline (no vertex input, alpha blending, UBO-only) ---
         {
@@ -1016,6 +1340,35 @@ void Renderer::reloadShaders()
     m_wireframePipeline.create(device, m_offscreenRenderPass,
         {m_offscreenWidth, m_offscreenHeight}, m_layoutCache, VK_POLYGON_MODE_LINE);
 
+    // 3b. Rebuild bindless pipelines
+    if (m_bindlessEnabled && m_bindlessSetLayout != VK_NULL_HANDLE) {
+        m_bindlessOffscreenPipeline.cleanup(device);
+        m_bindlessWireframePipeline.cleanup(device);
+
+        std::vector<VkDescriptorSetLayout> bindlessLayouts = {
+            m_perFrameLayout,
+            m_bindlessSetLayout
+        };
+
+        ShaderReflectionData bindlessReflection;
+        std::string bindlessReflectPath = std::string(ASSETS_DIR) + "/shaders/Triangle_bindless.reflect.json";
+        if (bindlessReflection.loadFromJson(bindlessReflectPath)) {
+            auto pcRanges = bindlessReflection.createPushConstantRanges();
+
+            m_bindlessOffscreenPipeline.createWithLayouts(
+                device, m_offscreenRenderPass, bindlessLayouts,
+                {m_offscreenWidth, m_offscreenHeight}, pcRanges, VK_POLYGON_MODE_FILL,
+                "shaders/triangle_vert_bindless.spv",
+                "shaders/triangle_frag_bindless.spv");
+
+            m_bindlessWireframePipeline.createWithLayouts(
+                device, m_offscreenRenderPass, bindlessLayouts,
+                {m_offscreenWidth, m_offscreenHeight}, pcRanges, VK_POLYGON_MODE_LINE,
+                "shaders/triangle_vert_bindless.spv",
+                "shaders/triangle_frag_bindless.spv");
+        }
+    }
+
     // 4. Rebuild main pipeline
     m_pipeline.cleanup(device);
     m_pipeline.create(device, m_renderPass.get(), m_swapChain.getExtent(), m_layoutCache);
@@ -1190,108 +1543,181 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         frustum.update(vp);
     }
 
-    // Render each scene node with its own material, pipeline, and mesh
-    scene.traverseNodes([&](Node* node) {
-        // Skip light nodes during mesh rendering
-        if (node->nodeType == NodeType::DirectionalLight) return;
+    // --- Bindless path: bind pipeline + set 1 once for all objects ---
+    if (m_bindlessEnabled && m_bindlessOffscreenPipeline.getPipeline() != VK_NULL_HANDLE) {
+        VkPipelineLayout bindlessLayout = m_bindlessOffscreenPipeline.getPipelineLayout();
 
-        // Frustum culling: get local AABB and test visibility
-        AABB localAABB;
-        if (!node->meshPath.empty()) {
-            auto* mesh = m_assetManager.loadMesh(node->meshPath);
-            if (mesh) {
-                localAABB.min = mesh->boundsMin;
-                localAABB.max = mesh->boundsMax;
-            }
-        } else if (node->meshType != MeshType::None) {
-            localAABB = m_meshLibrary.getAABB(node->meshType);
-        } else {
-            return; // no mesh, skip
-        }
-
-        // Use original GLM matrix (NOT transposed) for frustum test
-        if (!frustum.isVisible(localAABB, node->getWorldMatrix()))
-            return; // culled
-
-        // Load material (or use defaults)
-        const MaterialInstance* mat = nullptr;
-        if (!node->materialPath.empty())
-            mat = m_assetManager.loadMaterial(node->materialPath);
-
-        // Bind shader pipeline -- different nodes may use different shaders
-        VkPipeline shaderPipeline;
-        VkPipelineLayout pipelineLayout;
-        VkDescriptorSet matSet;
-
-        if (mat && mat->shader &&
-            mat->shader->pipeline.getPipeline() != VK_NULL_HANDLE &&
-            mat->descriptorSet != VK_NULL_HANDLE) {
-            shaderPipeline = mat->shader->pipeline.getPipeline();
-            pipelineLayout = mat->shader->pipeline.getPipelineLayout();
-            matSet = mat->descriptorSet;
-        } else {
-            shaderPipeline = m_offscreenPipeline.getPipeline();
-            pipelineLayout = m_offscreenPipeline.getPipelineLayout();
-            matSet = m_defaultMaterialSet;
-        }
-
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shaderPipeline);
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          m_bindlessOffscreenPipeline.getPipeline());
 
         // Bind set 0 (per-frame)
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipelineLayout, 0, 1, &frameSet, 0, nullptr);
+                                bindlessLayout, 0, 1, &frameSet, 0, nullptr);
 
-        // Bind set 1 (per-material)
+        // Bind set 1 (bindless) ONCE for the entire pass
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipelineLayout, 1, 1, &matSet, 0, nullptr);
+                                bindlessLayout, 1, 1, &m_bindlessSet, 0, nullptr);
 
-        // Push constants (per-object): model + highlighted only
-        PushConstantData pc{};
-        pc.model = glm::transpose(node->getWorldMatrix());
-        pc.highlighted = 0;
-        vkCmdPushConstants(commandBuffer, pipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT,
-            0, sizeof(PushConstantData), &pc);
+        scene.traverseNodes([&](Node* node) {
+            if (node->nodeType == NodeType::DirectionalLight) return;
 
-        // Determine mesh and draw
-        if (!node->meshPath.empty()) {
-            auto* mesh = m_assetManager.loadMesh(node->meshPath);
-            if (mesh) {
-                VkBuffer buffers[] = {mesh->vertexBuffer};
-                VkDeviceSize offsets[] = {0};
-                vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
-                vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(commandBuffer, mesh->indexCount, 1, 0, 0, 0);
-                m_lastDrawCallCount++;
-                m_lastTriangleCount += mesh->indexCount / 3;
+            AABB localAABB;
+            if (!node->meshPath.empty()) {
+                auto* mesh = m_assetManager.loadMesh(node->meshPath);
+                if (mesh) {
+                    localAABB.min = mesh->boundsMin;
+                    localAABB.max = mesh->boundsMax;
+                }
+            } else if (node->meshType != MeshType::None) {
+                localAABB = m_meshLibrary.getAABB(node->meshType);
+            } else {
+                return;
             }
-        } else if (node->meshType != MeshType::None) {
-            m_meshLibrary.bind(commandBuffer, node->meshType);
-            uint32_t idxCount = m_meshLibrary.getIndexCount(node->meshType);
-            vkCmdDrawIndexed(commandBuffer, idxCount, 1, 0, 0, 0);
-            m_lastDrawCallCount++;
-            m_lastTriangleCount += idxCount / 3;
-        }
-    });
+
+            if (!frustum.isVisible(localAABB, node->getWorldMatrix()))
+                return;
+
+            const MaterialInstance* mat = nullptr;
+            if (!node->materialPath.empty())
+                mat = m_assetManager.loadMaterial(node->materialPath);
+
+            PushConstantData pc{};
+            pc.model = glm::transpose(node->getWorldMatrix());
+            pc.highlighted = 0;
+            pc.materialIndex = mat ? mat->bindlessIndex : m_defaultBindlessMaterialIndex;
+
+            vkCmdPushConstants(commandBuffer, bindlessLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(PushConstantData), &pc);
+
+            if (!node->meshPath.empty()) {
+                auto* mesh = m_assetManager.loadMesh(node->meshPath);
+                if (mesh) {
+                    VkBuffer buffers[] = {mesh->vertexBuffer};
+                    VkDeviceSize offsets[] = {0};
+                    vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
+                    vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                    vkCmdDrawIndexed(commandBuffer, mesh->indexCount, 1, 0, 0, 0);
+                    m_lastDrawCallCount++;
+                    m_lastTriangleCount += mesh->indexCount / 3;
+                }
+            } else if (node->meshType != MeshType::None) {
+                m_meshLibrary.bind(commandBuffer, node->meshType);
+                uint32_t idxCount = m_meshLibrary.getIndexCount(node->meshType);
+                vkCmdDrawIndexed(commandBuffer, idxCount, 1, 0, 0, 0);
+                m_lastDrawCallCount++;
+                m_lastTriangleCount += idxCount / 3;
+            }
+        });
+    } else {
+        // --- Non-bindless path (fallback / Android) ---
+        scene.traverseNodes([&](Node* node) {
+            if (node->nodeType == NodeType::DirectionalLight) return;
+
+            AABB localAABB;
+            if (!node->meshPath.empty()) {
+                auto* mesh = m_assetManager.loadMesh(node->meshPath);
+                if (mesh) {
+                    localAABB.min = mesh->boundsMin;
+                    localAABB.max = mesh->boundsMax;
+                }
+            } else if (node->meshType != MeshType::None) {
+                localAABB = m_meshLibrary.getAABB(node->meshType);
+            } else {
+                return;
+            }
+
+            if (!frustum.isVisible(localAABB, node->getWorldMatrix()))
+                return;
+
+            const MaterialInstance* mat = nullptr;
+            if (!node->materialPath.empty())
+                mat = m_assetManager.loadMaterial(node->materialPath);
+
+            VkPipeline shaderPipeline;
+            VkPipelineLayout pipelineLayout;
+            VkDescriptorSet matSet;
+
+            if (mat && mat->shader &&
+                mat->shader->pipeline.getPipeline() != VK_NULL_HANDLE &&
+                mat->descriptorSet != VK_NULL_HANDLE) {
+                shaderPipeline = mat->shader->pipeline.getPipeline();
+                pipelineLayout = mat->shader->pipeline.getPipelineLayout();
+                matSet = mat->descriptorSet;
+            } else {
+                shaderPipeline = m_offscreenPipeline.getPipeline();
+                pipelineLayout = m_offscreenPipeline.getPipelineLayout();
+                matSet = m_defaultMaterialSet;
+            }
+
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shaderPipeline);
+
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout, 0, 1, &frameSet, 0, nullptr);
+
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout, 1, 1, &matSet, 0, nullptr);
+
+            PushConstantData pc{};
+            pc.model = glm::transpose(node->getWorldMatrix());
+            pc.highlighted = 0;
+            vkCmdPushConstants(commandBuffer, pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT,
+                0, sizeof(PushConstantData), &pc);
+
+            if (!node->meshPath.empty()) {
+                auto* mesh = m_assetManager.loadMesh(node->meshPath);
+                if (mesh) {
+                    VkBuffer buffers[] = {mesh->vertexBuffer};
+                    VkDeviceSize offsets[] = {0};
+                    vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
+                    vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                    vkCmdDrawIndexed(commandBuffer, mesh->indexCount, 1, 0, 0, 0);
+                    m_lastDrawCallCount++;
+                    m_lastTriangleCount += mesh->indexCount / 3;
+                }
+            } else if (node->meshType != MeshType::None) {
+                m_meshLibrary.bind(commandBuffer, node->meshType);
+                uint32_t idxCount = m_meshLibrary.getIndexCount(node->meshType);
+                vkCmdDrawIndexed(commandBuffer, idxCount, 1, 0, 0, 0);
+                m_lastDrawCallCount++;
+                m_lastTriangleCount += idxCount / 3;
+            }
+        });
+    }
 
     // Draw wireframe outline for selected node
     Node* selected = scene.getSelectedNode();
     if (selected && (selected->meshType != MeshType::None || !selected->meshPath.empty())) {
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_wireframePipeline.getPipeline());
+        // Choose wireframe pipeline based on bindless mode
+        Pipeline& wfPipe = (m_bindlessEnabled && m_bindlessWireframePipeline.getPipeline() != VK_NULL_HANDLE)
+                           ? m_bindlessWireframePipeline : m_wireframePipeline;
+        VkPipelineLayout wfLayout = wfPipe.getPipelineLayout();
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, wfPipe.getPipeline());
 
         // Re-bind set 0 after pipeline change
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_wireframePipeline.getPipelineLayout(), 0, 1,
-                                &frameSet, 0, nullptr);
-        // Bind wireframe material set 1 (orange baseColor)
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_wireframePipeline.getPipelineLayout(), 1, 1,
-                                &m_wireframeMaterialSet, 0, nullptr);
+                                wfLayout, 0, 1, &frameSet, 0, nullptr);
+
+        if (m_bindlessEnabled && m_bindlessWireframePipeline.getPipeline() != VK_NULL_HANDLE) {
+            // Bind bindless set 1
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    wfLayout, 1, 1, &m_bindlessSet, 0, nullptr);
+        } else {
+            // Bind wireframe material set 1 (orange baseColor)
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    wfLayout, 1, 1, &m_wireframeMaterialSet, 0, nullptr);
+        }
+
         PushConstantData pc{};
         pc.model = glm::transpose(selected->getWorldMatrix());
         pc.highlighted = 1;
-        vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT,
+        pc.materialIndex = m_wireframeBindlessMaterialIndex;
+        VkShaderStageFlags wfPcStages = (m_bindlessEnabled && m_bindlessWireframePipeline.getPipeline() != VK_NULL_HANDLE)
+            ? (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+            : VK_SHADER_STAGE_VERTEX_BIT;
+        vkCmdPushConstants(commandBuffer, wfLayout, wfPcStages,
             0, sizeof(PushConstantData), &pc);
 
         if (!selected->meshPath.empty()) {
@@ -1313,27 +1739,38 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     scene.traverseNodes([&](Node* node) {
         if (node->nodeType != NodeType::DirectionalLight) return;
 
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          m_wireframePipeline.getPipeline());
+        Pipeline& wfPipe = (m_bindlessEnabled && m_bindlessWireframePipeline.getPipeline() != VK_NULL_HANDLE)
+                           ? m_bindlessWireframePipeline : m_wireframePipeline;
+        VkPipelineLayout wfLayout = wfPipe.getPipelineLayout();
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, wfPipe.getPipeline());
 
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_wireframePipeline.getPipelineLayout(), 0, 1,
-                                &frameSet, 0, nullptr);
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_wireframePipeline.getPipelineLayout(), 1, 1,
-                                &m_wireframeMaterialSet, 0, nullptr);
+                                wfLayout, 0, 1, &frameSet, 0, nullptr);
+
+        if (m_bindlessEnabled && m_bindlessWireframePipeline.getPipeline() != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    wfLayout, 1, 1, &m_bindlessSet, 0, nullptr);
+        } else {
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    wfLayout, 1, 1, &m_wireframeMaterialSet, 0, nullptr);
+        }
 
         // Light gizmo: sphere at position + single arrow showing direction
         glm::vec3 pos = node->transform.position;
         glm::vec3 dir = node->getLightDirection();
 
+        VkShaderStageFlags gizmoPcStages = (m_bindlessEnabled && m_bindlessWireframePipeline.getPipeline() != VK_NULL_HANDLE)
+            ? (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+            : VK_SHADER_STAGE_VERTEX_BIT;
+
         PushConstantData pc{};
         pc.highlighted = 1;
+        pc.materialIndex = m_wireframeBindlessMaterialIndex;
 
         // Sphere at light position
         pc.model = glm::transpose(glm::scale(glm::translate(glm::mat4(1.0f), pos), glm::vec3(0.15f)));
-        vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT,
+        vkCmdPushConstants(commandBuffer, wfLayout, gizmoPcStages,
             0, sizeof(PushConstantData), &pc);
         m_meshLibrary.bind(commandBuffer, MeshType::Sphere);
         vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(MeshType::Sphere), 1, 0, 0, 0);
@@ -1358,8 +1795,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         pc.model = glm::transpose(glm::translate(glm::mat4(1.0f), arrowCenter)
                  * rotMat
                  * glm::scale(glm::mat4(1.0f), glm::vec3(0.03f, arrowLen, 0.03f)));
-        vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT,
+        vkCmdPushConstants(commandBuffer, wfLayout, gizmoPcStages,
             0, sizeof(PushConstantData), &pc);
         m_meshLibrary.bind(commandBuffer, MeshType::Cube);
         vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(MeshType::Cube), 1, 0, 0, 0);

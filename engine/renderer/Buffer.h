@@ -66,8 +66,23 @@ struct PushConstantData
 {
     glm::mat4 model;         // 64 bytes
     int highlighted;         // 4 bytes
-    int _pad[3];             // 12 bytes padding → total 80 bytes
+    uint32_t materialIndex;  // 4 bytes (bindless only, ignored in non-bindless)
+    int _pad[2];             // 8 bytes padding → total 80 bytes
 };
+
+// Must match the MaterialEntry struct in the bindless shader path exactly
+struct BindlessMaterialEntry
+{
+    glm::vec4 baseColor;     // 16 bytes
+    float metallic;          // 4 bytes
+    float roughness;         // 4 bytes
+    uint32_t albedoTexIndex; // 4 bytes
+    uint32_t normalTexIndex; // 4 bytes
+    uint32_t samplerIndex;   // 4 bytes
+    uint32_t _pad0;          // 4 bytes
+    uint32_t _pad1;          // 4 bytes
+    uint32_t _pad2;          // 4 bytes
+};                           // total: 48 bytes
 
 class Buffer {
 public:

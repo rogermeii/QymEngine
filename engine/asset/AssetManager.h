@@ -13,6 +13,7 @@ namespace QymEngine {
 class VulkanContext;
 class CommandManager;
 class Descriptor;
+class Renderer;
 
 struct MeshAsset {
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
@@ -78,9 +79,13 @@ public:
     void setTextureDescriptorSetLayout(VkDescriptorSetLayout layout) { m_textureSetLayout = layout; }
     void setTextureDescriptorPool(VkDescriptorPool pool) { m_textureDescriptorPool = pool; }
 
+    // For bindless material system
+    void setRenderer(Renderer* renderer) { m_renderer = renderer; }
+
 private:
     VulkanContext* m_ctx = nullptr;
     CommandManager* m_cmdMgr = nullptr;
+    Renderer* m_renderer = nullptr;
     std::string m_assetsDir;
     DescriptorLayoutCache* m_layoutCache = nullptr;
     Descriptor* m_descriptor = nullptr;

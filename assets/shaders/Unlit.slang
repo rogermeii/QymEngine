@@ -13,6 +13,33 @@ struct FrameData
 
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 
+#ifdef USE_BINDLESS
+// --- Bindless path (PC) ---
+[[vk::binding(0, 1)]] SamplerState bindlessSamplers[256];
+[[vk::binding(1, 1)]] Texture2D bindlessTextures[];
+struct MaterialEntry
+{
+    float4 baseColor;
+    float metallic;
+    float roughness;
+    uint albedoTexIndex;
+    uint normalTexIndex;
+    uint samplerIndex;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+};
+[[vk::binding(2, 1)]] StructuredBuffer<MaterialEntry> materialEntries;
+
+struct PushConstants
+{
+    float4x4 model;
+    int highlighted;
+    uint materialIndex;
+};
+
+#else
+// --- Non-bindless path (current) ---
 // Set 1: per-material (shader-specific)
 struct UnlitMaterialParams
 {
@@ -28,6 +55,7 @@ struct PushConstants
     float4x4 model;
     int highlighted;
 };
+#endif
 
 [[vk::push_constant]] PushConstants pc;
 
@@ -61,7 +89,12 @@ VSOutput vertexMain(VSInput input)
     output.highlighted = pc.highlighted;
     output.normal = float3(0.0, 1.0, 0.0);
     output.worldPos = float3(0.0);
+#ifdef USE_BINDLESS
+    MaterialEntry entry = materialEntries[pc.materialIndex];
+    output.baseColor = entry.baseColor;
+#else
     output.baseColor = materialParams.baseColor;
+#endif
     return output;
 }
 
@@ -71,6 +104,13 @@ float4 fragmentMain(VSOutput input) : SV_Target
     if (input.highlighted == 1)
         return input.baseColor;
 
+#ifdef USE_BINDLESS
+    MaterialEntry entry = materialEntries[pc.materialIndex];
+    float4 texColor = bindlessTextures[NonUniformResourceIndex(entry.albedoTexIndex)]
+                      .Sample(bindlessSamplers[NonUniformResourceIndex(entry.samplerIndex)], input.texCoord);
+    return texColor * input.baseColor;
+#else
     float4 texColor = albedoMap.Sample(input.texCoord);
     return texColor * input.baseColor;
+#endif
 }

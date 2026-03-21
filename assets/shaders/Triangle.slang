@@ -13,6 +13,33 @@ struct FrameData
 
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 
+#ifdef USE_BINDLESS
+// --- Bindless path (PC) ---
+[[vk::binding(0, 1)]] SamplerState bindlessSamplers[256];
+[[vk::binding(1, 1)]] Texture2D bindlessTextures[];
+struct MaterialEntry
+{
+    float4 baseColor;
+    float metallic;
+    float roughness;
+    uint albedoTexIndex;
+    uint normalTexIndex;
+    uint samplerIndex;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+};
+[[vk::binding(2, 1)]] StructuredBuffer<MaterialEntry> materialEntries;
+
+struct PushConstants
+{
+    float4x4 model;
+    int highlighted;
+    uint materialIndex;
+};
+
+#else
+// --- Non-bindless path (current) ---
 // Set 1: per-material (shader-specific)
 struct TriangleMaterialParams
 {
@@ -31,6 +58,7 @@ struct PushConstants
     float4x4 model;
     int highlighted;
 };
+#endif
 
 [[vk::push_constant]] PushConstants pc;
 
@@ -67,9 +95,16 @@ VSOutput vertexMain(VSInput input)
     float3x3 modelMat3 = (float3x3)pc.model;
     output.normal = mul(modelMat3, input.normal);
     output.worldPos = worldPos.xyz;
+#ifdef USE_BINDLESS
+    MaterialEntry entry = materialEntries[pc.materialIndex];
+    output.baseColor = entry.baseColor;
+    output.metallic = entry.metallic;
+    output.roughness = entry.roughness;
+#else
     output.baseColor = materialParams.baseColor;
     output.metallic = materialParams.metallic;
     output.roughness = materialParams.roughness;
+#endif
     return output;
 }
 
@@ -79,10 +114,19 @@ float4 fragmentMain(VSOutput input) : SV_Target
     if (input.highlighted == 1)
         return input.baseColor;
 
+#ifdef USE_BINDLESS
+    MaterialEntry entry = materialEntries[pc.materialIndex];
+    float3 texColor = bindlessTextures[NonUniformResourceIndex(entry.albedoTexIndex)]
+                      .Sample(bindlessSamplers[NonUniformResourceIndex(entry.samplerIndex)], input.texCoord).rgb;
+    float3 albedo = texColor * input.baseColor.rgb;
+    float3 mapN = bindlessTextures[NonUniformResourceIndex(entry.normalTexIndex)]
+                  .Sample(bindlessSamplers[NonUniformResourceIndex(entry.samplerIndex)], input.texCoord).rgb * 2.0 - 1.0;
+#else
     float3 texColor = albedoMap.Sample(input.texCoord).rgb;
     float3 albedo = texColor * input.baseColor.rgb;
     // Sample normal map to keep binding alive (trivial usage for layout compatibility)
     float3 mapN = normalMap.Sample(input.texCoord).rgb * 2.0 - 1.0;
+#endif
     float3 normal = normalize(input.normal + mapN * 0.0001);
     float3 lightD = normalize(-frame.lightDir);
 

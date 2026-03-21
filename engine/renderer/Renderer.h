@@ -49,6 +49,15 @@ public:
     // Shader hot reload: recompile shaders and rebuild pipelines
     void reloadShaders();
 
+    // --- Bindless material system (PC only) ---
+    bool isBindlessEnabled() const { return m_bindlessEnabled; }
+    uint32_t registerBindlessTexture(VkImageView view);
+    uint32_t registerBindlessSampler(VkSampler sampler);
+    void updateBindlessMaterialEntry(uint32_t index, const struct BindlessMaterialEntry& entry);
+    uint32_t allocateBindlessMaterialIndex();
+    VkDescriptorSetLayout getBindlessSetLayout() const { return m_bindlessSetLayout; }
+    VkDescriptorSet getBindlessSet() const { return m_bindlessSet; }
+
     // --- Offscreen rendering ---
     void createOffscreen(uint32_t width, uint32_t height);
     void resizeOffscreen(uint32_t width, uint32_t height);
@@ -149,6 +158,32 @@ private:
     // Draw statistics
     uint32_t m_lastDrawCallCount = 0;
     uint32_t m_lastTriangleCount = 0;
+
+    // --- Bindless resources (PC only) ---
+    bool m_bindlessEnabled = false;
+    VkDescriptorSetLayout m_bindlessSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet m_bindlessSet = VK_NULL_HANDLE;
+    VkDescriptorPool m_bindlessPool = VK_NULL_HANDLE;
+    VkBuffer m_materialSSBO = VK_NULL_HANDLE;
+    VkDeviceMemory m_materialSSBOMemory = VK_NULL_HANDLE;
+    void* m_materialSSBOMapped = nullptr;
+    uint32_t m_nextTextureIndex = 0;
+    uint32_t m_nextSamplerIndex = 0;
+    uint32_t m_nextMaterialIndex = 0;
+    static constexpr uint32_t MAX_BINDLESS_TEXTURES = 4096;
+    static constexpr uint32_t MAX_BINDLESS_SAMPLERS = 256;
+    static constexpr uint32_t MAX_MATERIALS = 256;
+
+    // Bindless pipelines (separate from non-bindless)
+    Pipeline m_bindlessOffscreenPipeline;
+    Pipeline m_bindlessWireframePipeline;
+
+    // Bindless default material index
+    uint32_t m_defaultBindlessMaterialIndex = 0;
+    uint32_t m_wireframeBindlessMaterialIndex = 0;
+
+    void createBindlessResources();
+    void destroyBindlessResources();
 
     // Default material descriptor set (for nodes without material)
     VkDescriptorSet  m_defaultMaterialSet     = VK_NULL_HANDLE;

@@ -22,6 +22,9 @@ struct MaterialInstance {
     void* paramMapped = nullptr;
     uint32_t paramBufferSize = 0;
 
+    // Bindless material index (index into SSBO, used when bindless is enabled)
+    uint32_t bindlessIndex = 0;
+
     // Property values (indexed by reflected member name)
     std::map<std::string, glm::vec4> vec4Props;
     std::map<std::string, float> floatProps;
