@@ -1,6 +1,10 @@
 #include "InspectorPanel.h"
+#include "asset/MaterialAsset.h"
+#include "asset/ShaderAsset.h"
 #include <imgui.h>
+#include <json.hpp>
 #include <cstring>
+#include <fstream>
 
 namespace QymEngine {
 
@@ -99,11 +103,105 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
     }
 
     if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-        // Placeholder: material path display (full material UI in Task 8)
-        char matBuf[256] = {};
-        strncpy(matBuf, selected->materialPath.c_str(), sizeof(matBuf) - 1);
-        if (ImGui::InputText("Material Path", matBuf, sizeof(matBuf)))
-            selected->materialPath = matBuf;
+        // Material file dropdown
+        std::vector<std::string> matItems = {"Default"};
+        for (auto& f : assetManager.getMaterialFiles())
+            matItems.push_back(f);
+
+        int currentMat = 0;
+        for (int i = 1; i < static_cast<int>(matItems.size()); i++) {
+            if (matItems[i] == selected->materialPath) { currentMat = i; break; }
+        }
+
+        if (ImGui::BeginCombo("Material File", matItems[currentMat].c_str())) {
+            for (int i = 0; i < static_cast<int>(matItems.size()); i++) {
+                bool isSelected = (currentMat == i);
+                if (ImGui::Selectable(matItems[i].c_str(), isSelected)) {
+                    selected->materialPath = (i == 0) ? "" : matItems[i];
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        // Show and edit material properties if a material is assigned
+        if (!selected->materialPath.empty()) {
+            const MaterialAsset* mat = assetManager.loadMaterial(selected->materialPath);
+            if (mat && mat->shader) {
+                ImGui::Separator();
+                ImGui::Text("Shader: %s", mat->shader->name.c_str());
+
+                // We need mutable access for editing
+                MaterialAsset* mutableMat = const_cast<MaterialAsset*>(mat);
+                bool modified = false;
+
+                // Dynamic UI from shader properties
+                for (auto& prop : mat->shader->properties) {
+                    if (prop.type == "color4" && prop.name == "baseColor") {
+                        modified |= ImGui::ColorEdit4("Base Color", &mutableMat->baseColor.x);
+                    } else if (prop.type == "float") {
+                        if (prop.name == "metallic") {
+                            modified |= ImGui::SliderFloat("Metallic", &mutableMat->metallic, prop.rangeMin, prop.rangeMax);
+                        } else if (prop.name == "roughness") {
+                            modified |= ImGui::SliderFloat("Roughness", &mutableMat->roughness, prop.rangeMin, prop.rangeMax);
+                        }
+                    } else if (prop.type == "texture2D") {
+                        // Texture path display
+                        std::string* texPath = nullptr;
+                        if (prop.name == "albedoMap") texPath = &mutableMat->albedoMapPath;
+                        else if (prop.name == "normalMap") texPath = &mutableMat->normalMapPath;
+
+                        if (texPath) {
+                            // Show texture dropdown
+                            std::string label = prop.name;
+                            std::vector<std::string> texItems2 = {"None"};
+                            for (auto& f : assetManager.getTextureFiles())
+                                texItems2.push_back(f);
+
+                            int currentTex = 0;
+                            for (int i = 1; i < static_cast<int>(texItems2.size()); i++) {
+                                if (texItems2[i] == *texPath) { currentTex = i; break; }
+                            }
+
+                            if (ImGui::BeginCombo(label.c_str(), texItems2[currentTex].c_str())) {
+                                for (int i = 0; i < static_cast<int>(texItems2.size()); i++) {
+                                    bool isSel = (currentTex == i);
+                                    if (ImGui::Selectable(texItems2[i].c_str(), isSel)) {
+                                        *texPath = (i == 0) ? "" : texItems2[i];
+                                        modified = true;
+                                    }
+                                }
+                                ImGui::EndCombo();
+                            }
+                        }
+                    }
+                }
+
+                // Save button
+                if (ImGui::Button("Save Material")) {
+                    // Write material back to .mat.json
+                    nlohmann::json j;
+                    j["name"] = mutableMat->name;
+                    j["shader"] = mutableMat->shaderPath;
+                    nlohmann::json props;
+                    props["baseColor"] = {mutableMat->baseColor.r, mutableMat->baseColor.g,
+                                          mutableMat->baseColor.b, mutableMat->baseColor.a};
+                    props["metallic"] = mutableMat->metallic;
+                    props["roughness"] = mutableMat->roughness;
+                    if (!mutableMat->albedoMapPath.empty())
+                        props["albedoMap"] = mutableMat->albedoMapPath;
+                    if (!mutableMat->normalMapPath.empty())
+                        props["normalMap"] = mutableMat->normalMapPath;
+                    j["properties"] = props;
+
+                    std::string savePath = std::string(ASSETS_DIR) + "/" + selected->materialPath;
+                    std::ofstream outFile(savePath);
+                    if (outFile.is_open()) {
+                        outFile << j.dump(2);
+                        outFile.close();
+                    }
+                }
+            }
+        }
     }
 
     ImGui::End();
