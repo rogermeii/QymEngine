@@ -73,6 +73,33 @@ uint32_t MeshLibrary::getIndexCount(MeshType type) const
     return it->second.indexCount;
 }
 
+AABB MeshLibrary::getAABB(MeshType type) const
+{
+    AABB aabb;
+    switch (type) {
+        case MeshType::Cube:
+            aabb.min = glm::vec3(-0.5f, -0.5f, -0.5f);
+            aabb.max = glm::vec3( 0.5f,  0.5f,  0.5f);
+            break;
+        case MeshType::Plane:
+            aabb.min = glm::vec3(-0.5f, 0.0f, -0.5f);
+            aabb.max = glm::vec3( 0.5f, 0.0f,  0.5f);
+            break;
+        case MeshType::Quad:
+            aabb.min = glm::vec3(-0.5f, -0.5f, 0.0f);
+            aabb.max = glm::vec3( 0.5f,  0.5f, 0.0f);
+            break;
+        case MeshType::Sphere:
+            aabb.min = glm::vec3(-0.5f, -0.5f, -0.5f);
+            aabb.max = glm::vec3( 0.5f,  0.5f,  0.5f);
+            break;
+        case MeshType::None:
+        default:
+            break;
+    }
+    return aabb;
+}
+
 void MeshLibrary::uploadMesh(VulkanContext& ctx, CommandManager& cmdMgr,
                               MeshType type,
                               const std::vector<Vertex>& vertices,

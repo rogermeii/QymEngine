@@ -1,5 +1,6 @@
 #include "renderer/Renderer.h"
 #include "core/Window.h"
+#include "scene/Frustum.h"
 
 #include <SDL.h>
 #include <glm/glm.hpp>
@@ -1178,10 +1179,36 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         vkCmdDraw(commandBuffer, 6, 1, 0, 0);
     }
 
+    // Build frustum for CPU-side culling
+    Frustum frustum;
+    if (m_camera) {
+        float aspect = m_offscreenWidth / static_cast<float>(m_offscreenHeight);
+        glm::mat4 vp = m_camera->getProjMatrix(aspect) * m_camera->getViewMatrix();
+        frustum.update(vp);
+    }
+
     // Render each scene node with its own material, pipeline, and mesh
     scene.traverseNodes([&](Node* node) {
         // Skip light nodes during mesh rendering
         if (node->nodeType == NodeType::DirectionalLight) return;
+
+        // Frustum culling: get local AABB and test visibility
+        AABB localAABB;
+        if (!node->meshPath.empty()) {
+            auto* mesh = m_assetManager.loadMesh(node->meshPath);
+            if (mesh) {
+                localAABB.min = mesh->boundsMin;
+                localAABB.max = mesh->boundsMax;
+            }
+        } else if (node->meshType != MeshType::None) {
+            localAABB = m_meshLibrary.getAABB(node->meshType);
+        } else {
+            return; // no mesh, skip
+        }
+
+        // Use original GLM matrix (NOT transposed) for frustum test
+        if (!frustum.isVisible(localAABB, node->getWorldMatrix()))
+            return; // culled
 
         // Load material (or use defaults)
         const MaterialInstance* mat = nullptr;

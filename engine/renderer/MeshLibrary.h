@@ -4,6 +4,7 @@
 #include <vector>
 #include <unordered_map>
 #include <string>
+#include "scene/Frustum.h"
 
 namespace QymEngine {
 
@@ -39,6 +40,9 @@ public:
 
     void bind(VkCommandBuffer cmd, MeshType type) const;
     uint32_t getIndexCount(MeshType type) const;
+
+    // Get local-space AABB for built-in meshes
+    AABB getAABB(MeshType type) const;
 
 private:
     struct MeshGPU {
