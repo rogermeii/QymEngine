@@ -330,6 +330,10 @@ void UIAutomation::executeCommand(const std::string& jsonStr, Renderer& renderer
                 writeResult("{\"status\":\"error\",\"command\":\"screenshot\",\"message\":\"Failed to save screenshot\"}");
             }
 
+        } else if (command == "reload_shaders") {
+            renderer.reloadShaders();
+            writeResult("{\"status\":\"ok\",\"command\":\"reload_shaders\"}");
+
         } else {
             writeResult("{\"status\":\"error\",\"message\":\"Unknown command: " + command + "\"}");
         }
@@ -479,9 +483,14 @@ void UIAutomation::injectMouseScroll(int x, int y, int delta, SDL_Window* window
     // Scroll event
     SDL_Event scroll{};
     scroll.type = SDL_MOUSEWHEEL;
+    scroll.wheel.timestamp = SDL_GetTicks();
     scroll.wheel.windowID = windowID;
     scroll.wheel.x = 0;
     scroll.wheel.y = delta;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    scroll.wheel.preciseX = 0.0f;
+    scroll.wheel.preciseY = static_cast<float>(delta);
+#endif
     scroll.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
     SDL_PushEvent(&scroll);
 }

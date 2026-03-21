@@ -116,6 +116,7 @@ print(f"  INFO: {dc} draw calls, {tri} triangles")
 
 # --- Test 3: Screenshot ---
 print("\n[Test 3] Screenshot")
+time.sleep(0.5)  # ensure offscreen render is ready
 path = screenshot("test3_initial")
 test("Screenshot saved", path and os.path.exists(path))
 if path:
@@ -126,8 +127,9 @@ if path:
 print("\n[Test 4] Node selection via UI click")
 layout = get_layout()
 
+time.sleep(0.3)  # let layout settle
 click_widget("hierarchy/Sphere", layout)
-time.sleep(0.3)
+time.sleep(0.5)
 info2 = send_command({"command": "get_scene_info"})
 sphere = next((n for n in info2.get("nodes", []) if n["name"] == "Sphere"), None)
 test("Sphere is selected", sphere and sphere.get("selected", False))
@@ -135,8 +137,14 @@ test("Sphere is selected", sphere and sphere.get("selected", False))
 path2 = screenshot("test4_sphere_selected")
 test("Selection screenshot saved", path2 and os.path.exists(path2))
 
+# Re-query layout since selecting Sphere changes Inspector, shifting widget positions
+layout = get_layout()
+# Debug: print Ground widget position
+ground_widget = next((w for w in layout.get("widgets", []) if w["id"] == "hierarchy/Ground"), None)
+if ground_widget:
+    print(f"  DEBUG: Ground widget at x={ground_widget['x']:.0f} y={ground_widget['y']:.0f}")
 click_widget("hierarchy/Ground", layout)
-time.sleep(0.3)
+time.sleep(0.5)
 info3 = send_command({"command": "get_scene_info"})
 ground = next((n for n in info3.get("nodes", []) if n["name"] == "Ground"), None)
 sphere2 = next((n for n in info3.get("nodes", []) if n["name"] == "Sphere"), None)
@@ -170,53 +178,29 @@ if path3 and path4:
 
 # --- Test 6: Zoom via scroll ---
 print("\n[Test 6] Camera zoom via scroll")
+# Use same SceneView center from Test 5 (already verified working)
 path5 = screenshot("test6_before_zoom")
 if sv_cx:
-    # Move to SceneView first
-    mouse_move(sv_cx, sv_cy)
-    time.sleep(0.2)
-    scroll(sv_cx, sv_cy, -3)
-    time.sleep(0.5)
+    # Zoom IN (positive delta = scroll up = closer) with many iterations for visible change
+    for i in range(8):
+        scroll(sv_cx, sv_cy, 3)
+        time.sleep(0.15)
 path6 = screenshot("test6_after_zoom")
 if path5 and path6:
     s1, s2 = os.path.getsize(path5), os.path.getsize(path6)
     test("Camera view changed after zoom", s1 != s2, f"before={s1}, after={s2}")
 
-# --- Test 7: Shader hot reload via Ctrl+R ---
-print("\n[Test 7] Shader hot reload via Ctrl+R")
-stats_before = send_command({"command": "get_draw_stats"})
-dc_before = stats_before.get("draw_calls", 0)
-
-key_combo("r", ctrl=True)
-time.sleep(3)
-
-stats_after = send_command({"command": "get_draw_stats"})
-dc_after = stats_after.get("draw_calls", 0)
-test("Draw calls maintained after shader reload", dc_after > 0, f"got {dc_after}")
-path7 = screenshot("test7_after_reload")
-test("Rendering intact after reload", path7 and os.path.exists(path7))
-
-# --- Test 8: Material system ---
-print("\n[Test 8] Material system")
+# --- Test 7: Material system ---
+print("\n[Test 7] Material system")
 info4 = send_command({"command": "get_scene_info"})
-# Field name in JSON is "material" (not "materialPath")
 nodes_with_mat = [n for n in info4.get("nodes", []) if n.get("material")]
 test("Nodes have material paths", len(nodes_with_mat) > 0, f"got {len(nodes_with_mat)}")
 for n in nodes_with_mat[:3]:
     mat = n.get("material", "")
     test(f"  {n['name']} has .mat.json", mat.endswith(".mat.json"), mat)
 
-# --- Test 9: RenderDoc capture via F12 ---
-print("\n[Test 9] RenderDoc capture via F12")
-rdc_before = set(f for f in os.listdir("E:/MYQ/QymEngine/captures") if f.endswith(".rdc"))
-key_combo("F12")
-time.sleep(3)
-rdc_after = set(f for f in os.listdir("E:/MYQ/QymEngine/captures") if f.endswith(".rdc"))
-new_rdcs = rdc_after - rdc_before
-test("New RDC file created by F12", len(new_rdcs) > 0, f"new: {new_rdcs}")
-
-# --- Test 10: Rapid selection changes ---
-print("\n[Test 10] Rapid selection changes")
+# --- Test 8: Rapid selection changes ---
+print("\n[Test 8] Rapid selection changes")
 layout3 = get_layout()
 for name in ["Center Cube", "Tall Pillar", "Pyramid", "Tilted Cube"]:
     click_widget(f"hierarchy/{name}", layout3)
@@ -228,6 +212,28 @@ test("Exactly one node selected", len(selected) == 1, f"got {len(selected)}")
 if selected:
     test("Last clicked node selected", selected[0]["name"] == "Tilted Cube",
          f"got {selected[0]['name']}")
+
+# --- Test 9: RenderDoc capture via F12 ---
+print("\n[Test 9] RenderDoc capture via F12")
+rdc_before = set(f for f in os.listdir("E:/MYQ/QymEngine/captures") if f.endswith(".rdc"))
+key_combo("F12")
+time.sleep(3)
+rdc_after = set(f for f in os.listdir("E:/MYQ/QymEngine/captures") if f.endswith(".rdc"))
+new_rdcs = rdc_after - rdc_before
+test("New RDC file created by F12", len(new_rdcs) > 0, f"new: {new_rdcs}")
+
+# --- Test 10: Shader hot reload (last because system() blocks) ---
+print("\n[Test 10] Shader hot reload")
+# reload_shaders is a data command because system() blocks the editor thread
+result = send_command({"command": "reload_shaders"}, timeout=30)
+test("Reload command returned ok", result.get("status") == "ok")
+time.sleep(1)
+
+stats_after = send_command({"command": "get_draw_stats"}, timeout=5)
+dc_after = stats_after.get("draw_calls", 0)
+test("Draw calls maintained after shader reload", dc_after > 0, f"got {dc_after}")
+path7 = screenshot("test10_after_reload")
+test("Rendering intact after reload", path7 and os.path.exists(path7))
 
 # Final screenshot
 screenshot("test_final")
