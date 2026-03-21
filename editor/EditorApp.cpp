@@ -60,10 +60,29 @@ void EditorApp::onInit()
     m_consolePanel.init();
     m_modelPreview.init(m_renderer);
 
-    // Initialize undo manager
+    // Initialize undo manager (preserve selection across undo/redo)
     m_undoManager.init(
-        [this]() { return m_scene.toJsonString(); },
-        [this](const std::string& json) { m_scene.fromJsonString(json); }
+        [this]() {
+            // Encode selected node name into the snapshot
+            std::string selectedName;
+            if (m_scene.getSelectedNode())
+                selectedName = m_scene.getSelectedNode()->name;
+            return selectedName + "\n" + m_scene.toJsonString();
+        },
+        [this](const std::string& snapshot) {
+            // Extract selected node name and scene JSON
+            size_t sep = snapshot.find('\n');
+            std::string selectedName = snapshot.substr(0, sep);
+            std::string json = snapshot.substr(sep + 1);
+            m_scene.fromJsonString(json);
+            // Re-select node by name
+            if (!selectedName.empty()) {
+                m_scene.traverseNodes([&](Node* n) {
+                    if (n->name == selectedName)
+                        m_scene.selectNode(n, false);
+                });
+            }
+        }
     );
 
     // Connect panels to undo
