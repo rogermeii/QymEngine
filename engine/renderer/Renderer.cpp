@@ -985,7 +985,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_wireframePipeline.getPipelineLayout(), 0, 1,
                                 &uboSet, 0, nullptr);
-        VkDescriptorSet texSet = m_defaultTextureSet;
+        VkDescriptorSet texSet = m_defaultMaterialTexSet;
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_wireframePipeline.getPipelineLayout(), 1, 1,
                                 &texSet, 0, nullptr);
