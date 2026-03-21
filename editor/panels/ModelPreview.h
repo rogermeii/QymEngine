@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <glm/glm.hpp>
 #include <cstdint>
 
 namespace QymEngine {
@@ -22,6 +23,7 @@ public:
 
 private:
     void createResources(Renderer& renderer);
+    void writePreviewUbo(const glm::vec3& boundsMin, const glm::vec3& boundsMax);
 
     static constexpr uint32_t PREVIEW_SIZE = 256;
 
@@ -36,6 +38,12 @@ private:
     VkFramebuffer m_framebuffer = VK_NULL_HANDLE;
     VkSampler m_sampler = VK_NULL_HANDLE;
     VkDescriptorSet m_descriptorSet = VK_NULL_HANDLE;
+
+    // Dedicated UBO for preview camera (avoids timing issue with shared UBO)
+    VkBuffer m_uboBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_uboMemory = VK_NULL_HANDLE;
+    void* m_uboMapped = nullptr;
+    VkDescriptorSet m_uboDescriptorSet = VK_NULL_HANDLE;
 
     bool m_initialized = false;
 };

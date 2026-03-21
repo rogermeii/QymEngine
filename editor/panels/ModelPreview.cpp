@@ -7,6 +7,7 @@
 #include <array>
 #include <cstring>
 #include <stdexcept>
+#include <algorithm>
 
 namespace QymEngine {
 
@@ -53,6 +54,16 @@ void ModelPreview::shutdown(VkDevice device)
     if (m_colorMemory != VK_NULL_HANDLE) {
         vkFreeMemory(device, m_colorMemory, nullptr);
         m_colorMemory = VK_NULL_HANDLE;
+    }
+    if (m_uboBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, m_uboBuffer, nullptr);
+        m_uboBuffer = VK_NULL_HANDLE;
+    }
+    if (m_uboMemory != VK_NULL_HANDLE) {
+        vkUnmapMemory(device, m_uboMemory);
+        vkFreeMemory(device, m_uboMemory, nullptr);
+        m_uboMemory = VK_NULL_HANDLE;
+        m_uboMapped = nullptr;
     }
 
     m_initialized = false;
@@ -210,7 +221,70 @@ void ModelPreview::createResources(Renderer& renderer)
     m_descriptorSet = ImGui_ImplVulkan_AddTexture(
         m_sampler, m_colorView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
+    // --- Dedicated UBO buffer for preview camera ---
+    {
+        VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+        Buffer::createBuffer(renderer.getContext(), bufferSize,
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            m_uboBuffer, m_uboMemory);
+        vkMapMemory(device, m_uboMemory, 0, bufferSize, 0, &m_uboMapped);
+
+        // Allocate descriptor set from the shared pool
+        VkDescriptorSetLayout uboLayout = renderer.getDescriptor().getUboLayout();
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool     = renderer.getDescriptor().getPool();
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts        = &uboLayout;
+
+        if (vkAllocateDescriptorSets(device, &allocInfo, &m_uboDescriptorSet) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate model preview UBO descriptor set!");
+
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = m_uboBuffer;
+        bufferInfo.offset = 0;
+        bufferInfo.range  = sizeof(UniformBufferObject);
+
+        VkWriteDescriptorSet descriptorWrite{};
+        descriptorWrite.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet          = m_uboDescriptorSet;
+        descriptorWrite.dstBinding      = 0;
+        descriptorWrite.dstArrayElement = 0;
+        descriptorWrite.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.pBufferInfo     = &bufferInfo;
+
+        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+    }
+
     m_initialized = true;
+}
+
+void ModelPreview::writePreviewUbo(const glm::vec3& boundsMin, const glm::vec3& boundsMax)
+{
+    // Compute bounding sphere center and radius
+    glm::vec3 center = (boundsMin + boundsMax) * 0.5f;
+    float radius = glm::length(boundsMax - boundsMin) * 0.5f;
+    if (radius < 0.001f) radius = 0.5f;  // fallback for degenerate mesh
+
+    // Camera looks from upper-right diagonal toward center
+    float fovY = glm::radians(45.0f);
+    // Distance so that the bounding sphere fits in view with some margin
+    float distance = (radius / std::tan(fovY * 0.5f)) * 1.3f;
+
+    glm::vec3 dir = glm::normalize(glm::vec3(1.0f, 0.7f, 1.0f));
+    glm::vec3 eye = center + dir * distance;
+
+    UniformBufferObject previewUbo{};
+    previewUbo.view = glm::lookAt(eye, center, glm::vec3(0, 1, 0));
+    previewUbo.proj = glm::perspective(fovY, 1.0f, 0.01f, distance * 3.0f);
+    previewUbo.proj[1][1] *= -1;  // Vulkan Y-flip
+    previewUbo.lightDir = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
+    previewUbo.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
+    previewUbo.ambientColor = glm::vec3(0.2f, 0.2f, 0.2f);
+    previewUbo.cameraPos = eye;
+    memcpy(m_uboMapped, &previewUbo, sizeof(UniformBufferObject));
 }
 
 void ModelPreview::renderBuiltIn(Renderer& renderer, MeshType type)
@@ -220,20 +294,8 @@ void ModelPreview::renderBuiltIn(Renderer& renderer, MeshType type)
 
     VkCommandBuffer cmd = renderer.getCurrentCommandBuffer();
 
-    // Save main camera UBO, write preview camera
-    void* mapped = renderer.getBuffer().getUniformBuffersMapped()[renderer.getCurrentFrame()];
-    UniformBufferObject savedUbo;
-    memcpy(&savedUbo, mapped, sizeof(UniformBufferObject));
-
-    UniformBufferObject previewUbo{};
-    previewUbo.view = glm::lookAt(glm::vec3(1.5f, 1.2f, 1.5f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
-    previewUbo.proj = glm::perspective(glm::radians(45.0f), 1.0f, 0.1f, 10.0f);
-    previewUbo.proj[1][1] *= -1;  // Vulkan Y-flip
-    previewUbo.lightDir = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
-    previewUbo.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
-    previewUbo.ambientColor = glm::vec3(0.2f, 0.2f, 0.2f);
-    previewUbo.cameraPos = glm::vec3(1.5f, 1.2f, 1.5f);
-    memcpy(mapped, &previewUbo, sizeof(UniformBufferObject));
+    // Built-in meshes all fit in [-0.5, 0.5] range
+    writePreviewUbo(glm::vec3(-0.5f), glm::vec3(0.5f));
 
     // Begin preview render pass
     VkRenderPassBeginInfo rpInfo{};
@@ -261,13 +323,12 @@ void ModelPreview::renderBuiltIn(Renderer& renderer, MeshType type)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       renderer.getOffscreenPipeline().getPipeline());
 
-    // Bind UBO descriptor set (set 0)
-    VkDescriptorSet uboSet = renderer.getDescriptor().getUboSet(renderer.getCurrentFrame());
+    // Bind dedicated preview UBO descriptor set (set 0)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        renderer.getOffscreenPipeline().getPipelineLayout(), 0, 1, &uboSet, 0, nullptr);
+        renderer.getOffscreenPipeline().getPipelineLayout(), 0, 1, &m_uboDescriptorSet, 0, nullptr);
 
     // Bind default texture descriptor set (set 1)
-    VkDescriptorSet texSet = renderer.getDefaultTextureSet();
+    VkDescriptorSet texSet = renderer.getDefaultMaterialTexSet();
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         renderer.getOffscreenPipeline().getPipelineLayout(), 1, 1, &texSet, 0, nullptr);
 
@@ -287,9 +348,6 @@ void ModelPreview::renderBuiltIn(Renderer& renderer, MeshType type)
     vkCmdDrawIndexed(cmd, renderer.getMeshLibrary().getIndexCount(type), 1, 0, 0, 0);
 
     vkCmdEndRenderPass(cmd);
-
-    // Restore main camera UBO
-    memcpy(mapped, &savedUbo, sizeof(UniformBufferObject));
 }
 
 void ModelPreview::renderMesh(Renderer& renderer, const MeshAsset* mesh)
@@ -300,20 +358,8 @@ void ModelPreview::renderMesh(Renderer& renderer, const MeshAsset* mesh)
 
     VkCommandBuffer cmd = renderer.getCurrentCommandBuffer();
 
-    // Save main camera UBO, write preview camera
-    void* mapped = renderer.getBuffer().getUniformBuffersMapped()[renderer.getCurrentFrame()];
-    UniformBufferObject savedUbo;
-    memcpy(&savedUbo, mapped, sizeof(UniformBufferObject));
-
-    UniformBufferObject previewUbo{};
-    previewUbo.view = glm::lookAt(glm::vec3(1.5f, 1.2f, 1.5f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
-    previewUbo.proj = glm::perspective(glm::radians(45.0f), 1.0f, 0.1f, 10.0f);
-    previewUbo.proj[1][1] *= -1;
-    previewUbo.lightDir = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
-    previewUbo.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
-    previewUbo.ambientColor = glm::vec3(0.2f, 0.2f, 0.2f);
-    previewUbo.cameraPos = glm::vec3(1.5f, 1.2f, 1.5f);
-    memcpy(mapped, &previewUbo, sizeof(UniformBufferObject));
+    // Auto-fit camera from mesh bounding box
+    writePreviewUbo(mesh->boundsMin, mesh->boundsMax);
 
     // Begin preview render pass
     VkRenderPassBeginInfo rpInfo{};
@@ -339,11 +385,11 @@ void ModelPreview::renderMesh(Renderer& renderer, const MeshAsset* mesh)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       renderer.getOffscreenPipeline().getPipeline());
 
-    VkDescriptorSet uboSet = renderer.getDescriptor().getUboSet(renderer.getCurrentFrame());
+    // Bind dedicated preview UBO descriptor set (set 0)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        renderer.getOffscreenPipeline().getPipelineLayout(), 0, 1, &uboSet, 0, nullptr);
+        renderer.getOffscreenPipeline().getPipelineLayout(), 0, 1, &m_uboDescriptorSet, 0, nullptr);
 
-    VkDescriptorSet texSet = renderer.getDefaultTextureSet();
+    VkDescriptorSet texSet = renderer.getDefaultMaterialTexSet();
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         renderer.getOffscreenPipeline().getPipelineLayout(), 1, 1, &texSet, 0, nullptr);
 
@@ -365,9 +411,6 @@ void ModelPreview::renderMesh(Renderer& renderer, const MeshAsset* mesh)
     vkCmdDrawIndexed(cmd, mesh->indexCount, 1, 0, 0, 0);
 
     vkCmdEndRenderPass(cmd);
-
-    // Restore main camera UBO
-    memcpy(mapped, &savedUbo, sizeof(UniformBufferObject));
 }
 
 } // namespace QymEngine

@@ -111,7 +111,9 @@ void ProjectPanel::onImGuiRender()
 
     // ".." to go up one level (if not at root)
     if (!m_currentDir.empty()) {
-        if (ImGui::Selectable("[..] Go up")) {
+        ImGui::Selectable("[..] Go up");
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+            m_selectedFile.clear();
             // Remove last path component
             std::string dir = m_currentDir;
             std::replace(dir.begin(), dir.end(), '\\', '/');
@@ -124,15 +126,17 @@ void ProjectPanel::onImGuiRender()
         }
     }
 
-    // Show directories first
+    // Show directories first (double-click to enter)
     for (auto& d : dirs) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.2f, 1.0f)); // yellow for dirs
         std::string label = "[DIR] " + d.name;
-        if (ImGui::Selectable(label.c_str())) {
+        ImGui::Selectable(label.c_str());
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
             if (m_currentDir.empty())
                 m_currentDir = d.name;
             else
                 m_currentDir += "/" + d.name;
+            m_selectedFile.clear();
         }
         ImGui::PopStyleColor();
     }
@@ -151,7 +155,20 @@ void ProjectPanel::onImGuiRender()
         ImVec4 color(0.8f, 0.8f, 0.8f, 1.0f); // default gray
         std::string prefix;
 
-        if (ext == ".obj") {
+        // Check for compound extensions (.mat.json, .shader.json) before simple .json
+        std::string nameLower = f.name;
+        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(),
+            [](unsigned char c) { return std::tolower(c); });
+        bool isMat = nameLower.size() > 9 && nameLower.substr(nameLower.size() - 9) == ".mat.json";
+        bool isShader = nameLower.size() > 12 && nameLower.substr(nameLower.size() - 12) == ".shader.json";
+
+        if (isMat) {
+            color = ImVec4(1.0f, 0.4f, 0.6f, 1.0f); // pink for materials
+            prefix = "[MAT] ";
+        } else if (isShader) {
+            color = ImVec4(0.8f, 0.5f, 1.0f, 1.0f); // purple for shader definitions
+            prefix = "[SHADER] ";
+        } else if (ext == ".obj") {
             color = ImVec4(0.4f, 0.8f, 1.0f, 1.0f); // blue for models
             prefix = "[OBJ] ";
         } else if (ext == ".jpg" || ext == ".jpeg" || ext == ".png") {
@@ -175,6 +192,10 @@ void ProjectPanel::onImGuiRender()
         ImGui::PopStyleColor();
     }
 
+    // Click empty space to deselect
+    if (ImGui::IsMouseClicked(0) && ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered())
+        m_selectedFile.clear();
+
     ImGui::End();
 }
 
@@ -194,6 +215,10 @@ bool ProjectPanel::isSelectedModel() const {
     if (dot != std::string::npos) ext = m_selectedFile.substr(dot);
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
     return ext == ".obj";
+}
+
+bool ProjectPanel::isSelectedMaterial() const {
+    return m_selectedFile.find(".mat.json") != std::string::npos;
 }
 
 } // namespace QymEngine

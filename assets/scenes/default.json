@@ -1,0 +1,28 @@
+{
+  "scene": {
+    "name": "Untitled",
+    "nodes": [
+      {
+        "children": [],
+        "name": "New Node",
+        "transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.3799999952316284,
+            1.0
+          ]
+        }
+      }
+    ]
+  }
+}

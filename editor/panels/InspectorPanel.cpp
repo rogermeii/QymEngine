@@ -35,6 +35,22 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                     if (side < 64.0f) side = 64.0f;
                     ImGui::Image(reinterpret_cast<ImTextureID>(modelPreview.getDescriptorSet()), ImVec2(side, side));
                 }
+            } else if (projectPanel.isSelectedMaterial()) {
+                auto* mat = assetManager.loadMaterial(projectPanel.getSelectedFile());
+                if (mat) {
+                    ImGui::Text("Material: %s", mat->name.c_str());
+                    ImGui::Separator();
+                    if (mat->shader)
+                        ImGui::Text("Shader: %s", mat->shader->name.c_str());
+                    float previewColor[4] = {mat->baseColor.x, mat->baseColor.y, mat->baseColor.z, mat->baseColor.w};
+                    ImGui::ColorEdit4("Base Color", previewColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoPicker);
+                    ImGui::Text("Metallic: %.2f", mat->metallic);
+                    ImGui::Text("Roughness: %.2f", mat->roughness);
+                    if (!mat->albedoMapPath.empty())
+                        ImGui::Text("Albedo: %s", mat->albedoMapPath.c_str());
+                    if (!mat->normalMapPath.empty())
+                        ImGui::Text("Normal: %s", mat->normalMapPath.c_str());
+                }
             } else {
                 ImGui::Text("No preview available for this file type");
             }

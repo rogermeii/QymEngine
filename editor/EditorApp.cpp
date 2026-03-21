@@ -71,6 +71,11 @@ void EditorApp::onUpdate()
             } else if (selected->meshType != MeshType::None) {
                 m_modelPreview.renderBuiltIn(m_renderer, selected->meshType);
             }
+        } else if (m_projectPanel.isSelectedModel()) {
+            // Preview model selected in Project panel
+            auto* mesh = m_renderer.getAssetManager().loadMesh(m_projectPanel.getSelectedFile());
+            if (mesh)
+                m_modelPreview.renderMesh(m_renderer, mesh);
         }
     }
 
@@ -112,7 +117,7 @@ void EditorApp::onUpdate()
     // Render all panels
     m_sceneViewPanel.onImGuiRender(m_renderer, m_camera, m_scene);
     m_hierarchyPanel.onImGuiRender(m_scene);
-    m_inspectorPanel.onImGuiRender(m_scene, m_renderer.getAssetManager(), m_modelPreview);
+    m_inspectorPanel.onImGuiRender(m_scene, m_renderer.getAssetManager(), m_modelPreview, m_projectPanel);
     m_projectPanel.onImGuiRender();
     m_consolePanel.onImGuiRender();
 

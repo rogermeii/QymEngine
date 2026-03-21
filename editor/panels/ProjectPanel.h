@@ -13,6 +13,7 @@ public:
     bool hasSelectedFile() const { return !m_selectedFile.empty(); }
     bool isSelectedImage() const;
     bool isSelectedModel() const;
+    bool isSelectedMaterial() const;
 
 private:
     std::string m_currentDir;
