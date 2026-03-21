@@ -206,6 +206,11 @@ void EditorApp::onUpdate()
         if (ImGui::BeginMenu("Debug")) {
             if (ImGui::MenuItem("Capture Frame (F12)", "F12", false, m_rdocApi != nullptr))
                 m_captureRequested = true;
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reload Shaders", "Ctrl+R")) {
+                m_renderer.reloadShaders();
+                Log::info("Shaders reloaded");
+            }
             ImGui::EndMenu();
         }
 #endif
@@ -479,6 +484,12 @@ void EditorApp::handleShortcuts()
     // Ctrl+Shift+S: Save As
     if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_S))
         m_showSaveAsPopup = true;
+
+    // Ctrl+R: Reload Shaders
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_R)) {
+        m_renderer.reloadShaders();
+        Log::info("Shaders reloaded");
+    }
 }
 
 } // namespace QymEngine

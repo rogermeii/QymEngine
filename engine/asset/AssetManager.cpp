@@ -588,6 +588,31 @@ bool AssetManager::materialFileExists(const std::string& relativePath) const
     return false;
 }
 
+void AssetManager::invalidateAllShadersAndMaterials()
+{
+    if (!m_ctx) return;
+    VkDevice device = m_ctx->getDevice();
+    vkDeviceWaitIdle(device);
+
+    // Destroy all material param buffers
+    for (auto& [path, mat] : m_materialCache) {
+        if (mat.paramBuffer != VK_NULL_HANDLE)
+            vkDestroyBuffer(device, mat.paramBuffer, nullptr);
+        if (mat.paramMemory != VK_NULL_HANDLE) {
+            if (mat.paramMapped)
+                vkUnmapMemory(device, mat.paramMemory);
+            vkFreeMemory(device, mat.paramMemory, nullptr);
+        }
+    }
+    m_materialCache.clear();
+
+    // Destroy all shader pipelines
+    for (auto& [path, shader] : m_shaderCache) {
+        shader.pipeline.cleanup(device);
+    }
+    m_shaderCache.clear();
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers (mirroring Texture.cpp patterns)
 // ---------------------------------------------------------------------------

@@ -46,6 +46,9 @@ public:
 
     void setCamera(const Camera* camera) { m_camera = camera; }
 
+    // Shader hot reload: recompile shaders and rebuild pipelines
+    void reloadShaders();
+
     // --- Offscreen rendering ---
     void createOffscreen(uint32_t width, uint32_t height);
     void resizeOffscreen(uint32_t width, uint32_t height);

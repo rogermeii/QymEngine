@@ -987,6 +987,39 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         throw std::runtime_error("failed to create offscreen framebuffer!");
 }
 
+void Renderer::reloadShaders()
+{
+    VkDevice device = m_context.getDevice();
+    vkDeviceWaitIdle(device);
+
+    // 1. Run shader compiler
+    std::string compilerPath;
+#ifdef _WIN32
+    compilerPath = std::string(ASSETS_DIR) + "/../build3/tools/shader_compiler/Debug/ShaderCompiler.exe";
+#else
+    compilerPath = "ShaderCompiler";
+#endif
+    std::string shadersDir = std::string(ASSETS_DIR) + "/shaders";
+    std::string cmd = "\"" + compilerPath + "\" \"" + shadersDir + "\" \"" + shadersDir + "\"";
+    int result = system(cmd.c_str());
+    (void)result;
+
+    // 2. Invalidate all shader and material caches
+    m_assetManager.invalidateAllShadersAndMaterials();
+
+    // 3. Rebuild offscreen and wireframe pipelines
+    m_offscreenPipeline.cleanup(device);
+    m_wireframePipeline.cleanup(device);
+    m_offscreenPipeline.create(device, m_offscreenRenderPass,
+        {m_offscreenWidth, m_offscreenHeight}, m_layoutCache);
+    m_wireframePipeline.create(device, m_offscreenRenderPass,
+        {m_offscreenWidth, m_offscreenHeight}, m_layoutCache, VK_POLYGON_MODE_LINE);
+
+    // 4. Rebuild main pipeline
+    m_pipeline.cleanup(device);
+    m_pipeline.create(device, m_renderPass.get(), m_swapChain.getExtent(), m_layoutCache);
+}
+
 void Renderer::resizeOffscreen(uint32_t width, uint32_t height)
 {
     if (width == m_offscreenWidth && height == m_offscreenHeight && m_offscreenFramebuffer != VK_NULL_HANDLE)

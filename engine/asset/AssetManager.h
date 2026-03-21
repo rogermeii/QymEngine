@@ -56,6 +56,9 @@ public:
     // Remove material from cache (needs reload after shader switch)
     void invalidateMaterial(const std::string& relativePath);
 
+    // Clear all shader and material caches (for hot reload)
+    void invalidateAllShadersAndMaterials();
+
     // Check if material file exists in scanned file list
     bool materialFileExists(const std::string& relativePath) const;
 
