@@ -15,10 +15,17 @@ public:
     bool isSelectedModel() const;
     bool isSelectedMaterial() const;
 
+    // Navigate to a file's directory and highlight it (does NOT change Inspector)
+    void navigateToFile(const std::string& relativePath);
+    // Clear highlight
+    void clearHighlight() { m_highlightedFile.clear(); }
+    const std::string& getHighlightedFile() const { return m_highlightedFile; }
+
 private:
     std::string m_currentDir;
     std::string m_assetsDir;
-    std::string m_selectedFile;  // e.g. "textures/container.jpg"
+    std::string m_selectedFile;      // clicked file — drives Inspector content
+    std::string m_highlightedFile;   // jumped-to file — visual only
     bool m_initialized = false;
 };
 

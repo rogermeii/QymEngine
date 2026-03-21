@@ -186,8 +186,21 @@ void ProjectPanel::onImGuiRender()
         std::string label = prefix + f.name;
         std::string relativePath = m_currentDir.empty() ? f.name : m_currentDir + "/" + f.name;
         bool isSelected = (m_selectedFile == relativePath);
-        if (ImGui::Selectable(label.c_str(), isSelected)) {
+        bool isHighlighted = (m_highlightedFile == relativePath);
+
+        // Highlighted items (from jump) get a distinct background
+        if (isHighlighted && !isSelected) {
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.5f, 0.2f, 0.6f));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.5f, 0.6f, 0.3f, 0.7f));
+        }
+
+        if (ImGui::Selectable(label.c_str(), isSelected || isHighlighted)) {
             m_selectedFile = relativePath;
+            m_highlightedFile.clear();  // clicking clears highlight
+        }
+
+        if (isHighlighted && !isSelected) {
+            ImGui::PopStyleColor(2);
         }
         ImGui::PopStyleColor();
     }
@@ -219,6 +232,19 @@ bool ProjectPanel::isSelectedModel() const {
 
 bool ProjectPanel::isSelectedMaterial() const {
     return m_selectedFile.find(".mat.json") != std::string::npos;
+}
+
+void ProjectPanel::navigateToFile(const std::string& relativePath) {
+    // Navigate to directory and highlight (NOT select) the file
+    std::string path = relativePath;
+    std::replace(path.begin(), path.end(), '\\', '/');
+    size_t lastSlash = path.rfind('/');
+    if (lastSlash == std::string::npos) {
+        m_currentDir = "";
+    } else {
+        m_currentDir = path.substr(0, lastSlash);
+    }
+    m_highlightedFile = relativePath;
 }
 
 } // namespace QymEngine

@@ -8,17 +8,32 @@
 
 namespace QymEngine {
 
+// Helper: draw a "Go To" button that navigates ProjectPanel to a file and highlights it
+static bool drawGoToButton(const char* id, const std::string& path, ProjectPanel& projectPanel) {
+    if (path.empty()) return false;
+    ImGui::SameLine();
+    ImGui::PushID(id);
+    bool clicked = ImGui::SmallButton(">");
+    if (clicked) {
+        projectPanel.navigateToFile(path);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Go to: %s", path.c_str());
+    ImGui::PopID();
+    return clicked;
+}
+
 void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, ModelPreview& modelPreview, ProjectPanel& projectPanel) {
     ImGui::Begin("Inspector");
 
     Node* selected = scene.getSelectedNode();
-    if (!selected) {
-        // Asset preview mode: show preview of selected file in Project panel
-        if (projectPanel.hasSelectedFile()) {
-            ImGui::Text("Asset: %s", projectPanel.getSelectedFile().c_str());
-            ImGui::Separator();
 
-            if (projectPanel.isSelectedImage()) {
+    // Asset preview mode: file selected in Project panel takes priority over node
+    if (projectPanel.hasSelectedFile()) {
+        ImGui::Text("Asset: %s", projectPanel.getSelectedFile().c_str());
+        ImGui::Separator();
+
+        if (projectPanel.isSelectedImage()) {
                 auto* tex = assetManager.loadTexture(projectPanel.getSelectedFile());
                 if (tex && tex->descriptorSet != VK_NULL_HANDLE) {
                     ImGui::Text("Texture Preview:");
@@ -36,30 +51,102 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                     ImGui::Image(reinterpret_cast<ImTextureID>(modelPreview.getDescriptorSet()), ImVec2(side, side));
                 }
             } else if (projectPanel.isSelectedMaterial()) {
-                auto* mat = assetManager.loadMaterial(projectPanel.getSelectedFile());
+                // --- Material editing (only when selected in Project panel) ---
+                const MaterialAsset* mat = assetManager.loadMaterial(projectPanel.getSelectedFile());
                 if (mat) {
                     ImGui::Text("Material: %s", mat->name.c_str());
                     ImGui::Separator();
-                    if (mat->shader)
+
+                    if (mat->shader) {
                         ImGui::Text("Shader: %s", mat->shader->name.c_str());
-                    float previewColor[4] = {mat->baseColor.x, mat->baseColor.y, mat->baseColor.z, mat->baseColor.w};
-                    ImGui::ColorEdit4("Base Color", previewColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoPicker);
-                    ImGui::Text("Metallic: %.2f", mat->metallic);
-                    ImGui::Text("Roughness: %.2f", mat->roughness);
-                    if (!mat->albedoMapPath.empty())
-                        ImGui::Text("Albedo: %s", mat->albedoMapPath.c_str());
-                    if (!mat->normalMapPath.empty())
-                        ImGui::Text("Normal: %s", mat->normalMapPath.c_str());
+                        drawGoToButton("goto_shader", mat->shaderPath, projectPanel);
+                    }
+
+                    MaterialAsset* mutableMat = const_cast<MaterialAsset*>(mat);
+
+                    // Dynamic UI from shader properties
+                    if (mat->shader) {
+                        for (auto& prop : mat->shader->properties) {
+                            if (prop.type == "color4" && prop.name == "baseColor") {
+                                ImGui::ColorEdit4("Base Color", &mutableMat->baseColor.x);
+                            } else if (prop.type == "float") {
+                                if (prop.name == "metallic") {
+                                    ImGui::SliderFloat("Metallic", &mutableMat->metallic, prop.rangeMin, prop.rangeMax);
+                                } else if (prop.name == "roughness") {
+                                    ImGui::SliderFloat("Roughness", &mutableMat->roughness, prop.rangeMin, prop.rangeMax);
+                                }
+                            } else if (prop.type == "texture2D") {
+                                std::string* texPath = nullptr;
+                                if (prop.name == "albedoMap") texPath = &mutableMat->albedoMapPath;
+                                else if (prop.name == "normalMap") texPath = &mutableMat->normalMapPath;
+
+                                if (texPath) {
+                                    std::string label = prop.name;
+                                    std::vector<std::string> texItems = {"None"};
+                                    for (auto& f : assetManager.getTextureFiles())
+                                        texItems.push_back(f);
+
+                                    int currentTex = 0;
+                                    for (int i = 1; i < static_cast<int>(texItems.size()); i++) {
+                                        if (texItems[i] == *texPath) { currentTex = i; break; }
+                                    }
+
+                                    if (ImGui::BeginCombo(label.c_str(), texItems[currentTex].c_str())) {
+                                        for (int i = 0; i < static_cast<int>(texItems.size()); i++) {
+                                            bool isSel = (currentTex == i);
+                                            if (ImGui::Selectable(texItems[i].c_str(), isSel)) {
+                                                *texPath = (i == 0) ? "" : texItems[i];
+                                            }
+                                        }
+                                        ImGui::EndCombo();
+                                    }
+                                    // Go to texture button
+                                    if (texPath && !texPath->empty()) {
+                                        drawGoToButton(("goto_" + prop.name).c_str(), *texPath, projectPanel);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ImGui::Separator();
+                    if (ImGui::Button("Save Material")) {
+                        nlohmann::json j;
+                        j["name"] = mutableMat->name;
+                        j["shader"] = mutableMat->shaderPath;
+                        nlohmann::json props;
+                        props["baseColor"] = {mutableMat->baseColor.r, mutableMat->baseColor.g,
+                                              mutableMat->baseColor.b, mutableMat->baseColor.a};
+                        props["metallic"] = mutableMat->metallic;
+                        props["roughness"] = mutableMat->roughness;
+                        if (!mutableMat->albedoMapPath.empty())
+                            props["albedoMap"] = mutableMat->albedoMapPath;
+                        if (!mutableMat->normalMapPath.empty())
+                            props["normalMap"] = mutableMat->normalMapPath;
+                        j["properties"] = props;
+
+                        std::string savePath = std::string(ASSETS_DIR) + "/" + projectPanel.getSelectedFile();
+                        std::ofstream outFile(savePath);
+                        if (outFile.is_open()) {
+                            outFile << j.dump(2);
+                            outFile.close();
+                        }
+                    }
                 }
             } else {
-                ImGui::Text("No preview available for this file type");
-            }
-        } else {
-            ImGui::Text("No node selected");
+            ImGui::Text("No preview available for this file type");
         }
         ImGui::End();
         return;
     }
+
+    if (!selected) {
+        ImGui::Text("No node selected");
+        ImGui::End();
+        return;
+    }
+
+    // ===================== Node properties =====================
 
     // Editable name
     char buf[256];
@@ -76,39 +163,50 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
         ImGui::DragFloat3("Scale",    &selected->transform.scale.x, 0.01f, 0.01f, 100.0f);
     }
 
+    // --- Mesh (merged: built-in type + .obj model) ---
     if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const char* meshTypes[] = {"None", "Quad", "Cube", "Plane", "Sphere"};
-        int current = static_cast<int>(selected->meshType);
-        if (ImGui::Combo("Type", &current, meshTypes, IM_ARRAYSIZE(meshTypes)))
-            selected->meshType = static_cast<MeshType>(current);
-    }
-
-    if (ImGui::CollapsingHeader("Model", ImGuiTreeNodeFlags_DefaultOpen)) {
-        // Build items list: "Built-in" + all .obj files from AssetManager
-        std::vector<std::string> meshItems = {"Built-in"};
+        // Build combined items: built-in types + .obj files
+        std::vector<std::string> meshItems = {"None", "Quad", "Cube", "Plane", "Sphere"};
+        const int builtInCount = static_cast<int>(meshItems.size());
         for (auto& f : assetManager.getMeshFiles())
             meshItems.push_back(f);
 
-        // Find current selection
-        int currentMesh = 0; // "Built-in"
-        for (int i = 1; i < static_cast<int>(meshItems.size()); i++) {
-            if (meshItems[i] == selected->meshPath) { currentMesh = i; break; }
+        // Determine current selection
+        int currentIdx = 0;
+        if (!selected->meshPath.empty()) {
+            // Using an .obj model
+            for (int i = builtInCount; i < static_cast<int>(meshItems.size()); i++) {
+                if (meshItems[i] == selected->meshPath) { currentIdx = i; break; }
+            }
+        } else {
+            // Using built-in mesh type
+            currentIdx = static_cast<int>(selected->meshType);
         }
 
-        // Combo
-        if (ImGui::BeginCombo("Mesh File", meshItems[currentMesh].c_str())) {
+        if (ImGui::BeginCombo("##MeshCombo", meshItems[currentIdx].c_str())) {
             for (int i = 0; i < static_cast<int>(meshItems.size()); i++) {
-                bool isSelected = (currentMesh == i);
-                if (ImGui::Selectable(meshItems[i].c_str(), isSelected)) {
-                    if (i == 0) selected->meshPath = "";  // Built-in
-                    else selected->meshPath = meshItems[i];
+                bool isSel = (currentIdx == i);
+                if (ImGui::Selectable(meshItems[i].c_str(), isSel)) {
+                    if (i < builtInCount) {
+                        // Built-in mesh
+                        selected->meshType = static_cast<MeshType>(i);
+                        selected->meshPath = "";
+                    } else {
+                        // .obj model
+                        selected->meshPath = meshItems[i];
+                        selected->meshType = MeshType::None;
+                    }
                 }
             }
             ImGui::EndCombo();
         }
+        // Go to .obj file
+        if (!selected->meshPath.empty()) {
+            drawGoToButton("goto_mesh", selected->meshPath, projectPanel);
+        }
     }
 
-    // 模型3D预览
+    // Model 3D preview
     if (modelPreview.isReady()) {
         bool hasMesh = (!selected->meshPath.empty() || selected->meshType != MeshType::None);
         if (hasMesh) {
@@ -118,6 +216,7 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
         }
     }
 
+    // --- Material (reference only, editing in Project panel) ---
     if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Material file dropdown
         std::vector<std::string> matItems = {"Default"};
@@ -129,7 +228,7 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
             if (matItems[i] == selected->materialPath) { currentMat = i; break; }
         }
 
-        if (ImGui::BeginCombo("Material File", matItems[currentMat].c_str())) {
+        if (ImGui::BeginCombo("##MaterialCombo", matItems[currentMat].c_str())) {
             for (int i = 0; i < static_cast<int>(matItems.size()); i++) {
                 bool isSelected = (currentMat == i);
                 if (ImGui::Selectable(matItems[i].c_str(), isSelected)) {
@@ -138,84 +237,15 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
             }
             ImGui::EndCombo();
         }
-
-        // Show and edit material properties if a material is assigned
+        // Go to material file
         if (!selected->materialPath.empty()) {
+            drawGoToButton("goto_material", selected->materialPath, projectPanel);
+
+            // Show read-only summary of material properties
             const MaterialAsset* mat = assetManager.loadMaterial(selected->materialPath);
             if (mat && mat->shader) {
-                ImGui::Separator();
-                ImGui::Text("Shader: %s", mat->shader->name.c_str());
-
-                // We need mutable access for editing
-                MaterialAsset* mutableMat = const_cast<MaterialAsset*>(mat);
-                bool modified = false;
-
-                // Dynamic UI from shader properties
-                for (auto& prop : mat->shader->properties) {
-                    if (prop.type == "color4" && prop.name == "baseColor") {
-                        modified |= ImGui::ColorEdit4("Base Color", &mutableMat->baseColor.x);
-                    } else if (prop.type == "float") {
-                        if (prop.name == "metallic") {
-                            modified |= ImGui::SliderFloat("Metallic", &mutableMat->metallic, prop.rangeMin, prop.rangeMax);
-                        } else if (prop.name == "roughness") {
-                            modified |= ImGui::SliderFloat("Roughness", &mutableMat->roughness, prop.rangeMin, prop.rangeMax);
-                        }
-                    } else if (prop.type == "texture2D") {
-                        // Texture path display
-                        std::string* texPath = nullptr;
-                        if (prop.name == "albedoMap") texPath = &mutableMat->albedoMapPath;
-                        else if (prop.name == "normalMap") texPath = &mutableMat->normalMapPath;
-
-                        if (texPath) {
-                            // Show texture dropdown
-                            std::string label = prop.name;
-                            std::vector<std::string> texItems2 = {"None"};
-                            for (auto& f : assetManager.getTextureFiles())
-                                texItems2.push_back(f);
-
-                            int currentTex = 0;
-                            for (int i = 1; i < static_cast<int>(texItems2.size()); i++) {
-                                if (texItems2[i] == *texPath) { currentTex = i; break; }
-                            }
-
-                            if (ImGui::BeginCombo(label.c_str(), texItems2[currentTex].c_str())) {
-                                for (int i = 0; i < static_cast<int>(texItems2.size()); i++) {
-                                    bool isSel = (currentTex == i);
-                                    if (ImGui::Selectable(texItems2[i].c_str(), isSel)) {
-                                        *texPath = (i == 0) ? "" : texItems2[i];
-                                        modified = true;
-                                    }
-                                }
-                                ImGui::EndCombo();
-                            }
-                        }
-                    }
-                }
-
-                // Save button
-                if (ImGui::Button("Save Material")) {
-                    // Write material back to .mat.json
-                    nlohmann::json j;
-                    j["name"] = mutableMat->name;
-                    j["shader"] = mutableMat->shaderPath;
-                    nlohmann::json props;
-                    props["baseColor"] = {mutableMat->baseColor.r, mutableMat->baseColor.g,
-                                          mutableMat->baseColor.b, mutableMat->baseColor.a};
-                    props["metallic"] = mutableMat->metallic;
-                    props["roughness"] = mutableMat->roughness;
-                    if (!mutableMat->albedoMapPath.empty())
-                        props["albedoMap"] = mutableMat->albedoMapPath;
-                    if (!mutableMat->normalMapPath.empty())
-                        props["normalMap"] = mutableMat->normalMapPath;
-                    j["properties"] = props;
-
-                    std::string savePath = std::string(ASSETS_DIR) + "/" + selected->materialPath;
-                    std::ofstream outFile(savePath);
-                    if (outFile.is_open()) {
-                        outFile << j.dump(2);
-                        outFile.close();
-                    }
-                }
+                ImGui::Text("  Shader: %s", mat->shader->name.c_str());
+                ImGui::Text("  Color: (%.1f, %.1f, %.1f)", mat->baseColor.r, mat->baseColor.g, mat->baseColor.b);
             }
         }
     }
