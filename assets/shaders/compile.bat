@@ -1,9 +1,17 @@
-C:/VulkanSDK/1.4.304.1/Bin/glslc.exe Triangle.vert -o vert.spv
-C:/VulkanSDK/1.4.304.1/Bin/glslc.exe Triangle.frag -o frag.spv
-C:/VulkanSDK/1.4.304.1/Bin/glslc.exe Grid.vert -o grid_vert.spv
-C:/VulkanSDK/1.4.304.1/Bin/glslc.exe Grid.frag -o grid_frag.spv
-C:/VulkanSDK/1.4.304.1/Bin/glslc.exe Lit.vert -o lit_vert.spv
-C:/VulkanSDK/1.4.304.1/Bin/glslc.exe Lit.frag -o lit_frag.spv
-C:/VulkanSDK/1.4.304.1/Bin/glslc.exe Unlit.vert -o unlit_vert.spv
-C:/VulkanSDK/1.4.304.1/Bin/glslc.exe Unlit.frag -o unlit_frag.spv
+@echo off
+echo Compiling Slang shaders to SPIR-V...
+
+slangc Triangle.slang -target spirv -entry vertexMain -stage vertex -o vert.spv
+slangc Triangle.slang -target spirv -entry fragmentMain -stage fragment -o frag.spv
+
+slangc Lit.slang -target spirv -entry vertexMain -stage vertex -o lit_vert.spv
+slangc Lit.slang -target spirv -entry fragmentMain -stage fragment -o lit_frag.spv
+
+slangc Unlit.slang -target spirv -entry vertexMain -stage vertex -o unlit_vert.spv
+slangc Unlit.slang -target spirv -entry fragmentMain -stage fragment -o unlit_frag.spv
+
+slangc Grid.slang -target spirv -entry vertexMain -stage vertex -o grid_vert.spv
+slangc Grid.slang -target spirv -entry fragmentMain -stage fragment -o grid_frag.spv
+
+echo Done.
 pause
