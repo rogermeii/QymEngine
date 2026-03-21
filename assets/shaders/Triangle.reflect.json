@@ -1,0 +1,111 @@
+{
+  "pushConstants": [
+    {
+      "members": [
+        {
+          "name": "model",
+          "offset": 0,
+          "size": 64,
+          "type": "float4x4"
+        },
+        {
+          "name": "baseColor",
+          "offset": 64,
+          "size": 16,
+          "type": "float4"
+        },
+        {
+          "name": "metallic",
+          "offset": 80,
+          "size": 4,
+          "type": "float"
+        },
+        {
+          "name": "roughness",
+          "offset": 84,
+          "size": 4,
+          "type": "float"
+        },
+        {
+          "name": "highlighted",
+          "offset": 88,
+          "size": 4,
+          "type": "int"
+        }
+      ],
+      "offset": 0,
+      "size": 92,
+      "stages": [
+        "vertex"
+      ]
+    }
+  ],
+  "sets": [
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "members": [
+            {
+              "name": "view",
+              "offset": 0,
+              "size": 64,
+              "type": "float4x4"
+            },
+            {
+              "name": "proj",
+              "offset": 64,
+              "size": 64,
+              "type": "float4x4"
+            },
+            {
+              "name": "lightDir",
+              "offset": 128,
+              "size": 12,
+              "type": "float3"
+            },
+            {
+              "name": "lightColor",
+              "offset": 144,
+              "size": 12,
+              "type": "float3"
+            },
+            {
+              "name": "ambientColor",
+              "offset": 160,
+              "size": 12,
+              "type": "float3"
+            },
+            {
+              "name": "cameraPos",
+              "offset": 176,
+              "size": 12,
+              "type": "float3"
+            }
+          ],
+          "name": "ubo",
+          "size": 192,
+          "stages": [
+            "fragment",
+            "vertex"
+          ],
+          "type": "uniformBuffer"
+        }
+      ],
+      "set": 0
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "name": "texSampler",
+          "stages": [
+            "fragment"
+          ],
+          "type": "combinedImageSampler"
+        }
+      ],
+      "set": 1
+    }
+  ]
+}
