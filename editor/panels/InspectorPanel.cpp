@@ -5,6 +5,8 @@
 #include <json.hpp>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
+namespace fs = std::filesystem;
 
 namespace QymEngine {
 
@@ -63,6 +65,32 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                     }
 
                     MaterialInstance* mutableMat = const_cast<MaterialInstance*>(mat);
+
+                    // Shader switching dropdown
+                    {
+                        auto& shaderFiles = assetManager.getShaderFiles();
+                        std::vector<std::string> shaderItems;
+                        int currentShaderIdx = 0;
+                        for (int i = 0; i < static_cast<int>(shaderFiles.size()); i++) {
+                            shaderItems.push_back(shaderFiles[i]);
+                            if (shaderFiles[i] == mutableMat->shaderPath) currentShaderIdx = i;
+                        }
+
+                        if (!shaderItems.empty() && ImGui::BeginCombo("Shader##switch", shaderItems[currentShaderIdx].c_str())) {
+                            for (int i = 0; i < static_cast<int>(shaderItems.size()); i++) {
+                                bool isSel = (currentShaderIdx == i);
+                                if (ImGui::Selectable(shaderItems[i].c_str(), isSel)) {
+                                    if (shaderItems[i] != mutableMat->shaderPath) {
+                                        // Switch shader: update path and clear cache
+                                        // so it rebuilds next frame with new shader
+                                        mutableMat->shaderPath = shaderItems[i];
+                                        assetManager.invalidateMaterial(projectPanel.getSelectedFile());
+                                    }
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+                    }
 
                     // Dynamic UI from shader properties
                     if (mat->shader) {
@@ -287,6 +315,40 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                 }
             }
             ImGui::EndCombo();
+        }
+        // New material button
+        ImGui::SameLine();
+        if (ImGui::SmallButton("New")) {
+            std::string newName = "new_material";
+            std::string newPath = "materials/" + newName + ".mat.json";
+
+            // Find a unique name
+            int counter = 1;
+            while (assetManager.materialFileExists(newPath)) {
+                newPath = "materials/" + newName + "_" + std::to_string(counter++) + ".mat.json";
+            }
+
+            // Write default material JSON
+            nlohmann::json j;
+            j["name"] = newName;
+            j["shader"] = "shaders/standard_lit.shader.json";
+            j["properties"] = {
+                {"baseColor", {1.0, 1.0, 1.0, 1.0}},
+                {"metallic", 0.0},
+                {"roughness", 0.5}
+            };
+
+            std::string fullPath = std::string(ASSETS_DIR) + "/" + newPath;
+            fs::create_directories(fs::path(fullPath).parent_path());
+            std::ofstream outFile(fullPath);
+            if (outFile.is_open()) {
+                outFile << j.dump(2);
+                outFile.close();
+                // Assign to current node
+                selected->materialPath = newPath;
+                // Rescan assets to pick up new file
+                assetManager.scanAssets(std::string(ASSETS_DIR));
+            }
         }
         // Go to material file
         if (!selected->materialPath.empty()) {

@@ -549,6 +549,37 @@ const MaterialInstance* AssetManager::loadMaterial(const std::string& relativePa
     return &m_materialCache[relativePath];
 }
 
+void AssetManager::invalidateMaterial(const std::string& relativePath)
+{
+    auto it = m_materialCache.find(relativePath);
+    if (it == m_materialCache.end()) return;
+
+    VkDevice device = m_ctx->getDevice();
+    auto& mat = it->second;
+
+    // Wait for GPU to finish before destroying resources
+    vkDeviceWaitIdle(device);
+
+    if (mat.paramBuffer != VK_NULL_HANDLE)
+        vkDestroyBuffer(device, mat.paramBuffer, nullptr);
+    if (mat.paramMemory != VK_NULL_HANDLE) {
+        if (mat.paramMapped)
+            vkUnmapMemory(device, mat.paramMemory);
+        vkFreeMemory(device, mat.paramMemory, nullptr);
+    }
+    // Descriptor sets are freed when the pool is destroyed
+
+    m_materialCache.erase(it);
+}
+
+bool AssetManager::materialFileExists(const std::string& relativePath) const
+{
+    for (auto& f : m_materialFiles) {
+        if (f == relativePath) return true;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers (mirroring Texture.cpp patterns)
 // ---------------------------------------------------------------------------

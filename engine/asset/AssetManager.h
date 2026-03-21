@@ -53,6 +53,12 @@ public:
     const std::vector<std::string>& getShaderFiles() const { return m_shaderFiles; }
     const std::vector<std::string>& getMaterialFiles() const { return m_materialFiles; }
 
+    // Remove material from cache (needs reload after shader switch)
+    void invalidateMaterial(const std::string& relativePath);
+
+    // Check if material file exists in scanned file list
+    bool materialFileExists(const std::string& relativePath) const;
+
     // For fallback textures (called by Renderer after creating fallbacks)
     void setFallbackAlbedo(VkImageView view, VkSampler sampler) { m_fallbackAlbedoView = view; m_fallbackAlbedoSampler = sampler; }
     void setFallbackNormal(VkImageView view, VkSampler sampler) { m_fallbackNormalView = view; m_fallbackNormalSampler = sampler; }
