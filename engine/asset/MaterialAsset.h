@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <map>
+#include <cstdint>
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 
@@ -23,7 +24,7 @@ struct MaterialInstance {
     uint32_t paramBufferSize = 0;
 
     // Bindless material index (index into SSBO, used when bindless is enabled)
-    uint32_t bindlessIndex = 0;
+    uint32_t bindlessIndex = UINT32_MAX;
 
     // Property values (indexed by reflected member name)
     std::map<std::string, glm::vec4> vec4Props;

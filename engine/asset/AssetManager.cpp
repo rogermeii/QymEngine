@@ -387,7 +387,11 @@ const MaterialInstance* AssetManager::loadMaterial(const std::string& relativePa
     // Check cache - but invalidate if pipeline wasn't ready when first loaded
     auto it = m_materialCache.find(relativePath);
     if (it != m_materialCache.end()) {
-        if (it->second.descriptorSet != VK_NULL_HANDLE)
+        // Bindless: check bindlessIndex; Non-bindless: check descriptorSet
+        bool isLoaded = (m_renderer && m_renderer->isBindlessEnabled())
+            ? (it->second.bindlessIndex != UINT32_MAX)
+            : (it->second.descriptorSet != VK_NULL_HANDLE);
+        if (isLoaded)
             return &it->second;
         // Pipeline wasn't ready before, try again
         m_materialCache.erase(it);
