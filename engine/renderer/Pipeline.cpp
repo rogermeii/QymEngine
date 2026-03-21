@@ -40,10 +40,18 @@ void Pipeline::create(VkDevice device, VkRenderPass renderPass,
                       const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts,
                       VkExtent2D extent,
                       const std::vector<VkPushConstantRange>& pushConstantRanges,
-                      VkPolygonMode polygonMode)
+                      VkPolygonMode polygonMode,
+                      const std::string& vertPath,
+                      const std::string& fragPath)
 {
-    auto vertShaderCode = readFile(std::string(ASSETS_DIR) + "/shaders/vert.spv");
-    auto fragShaderCode = readFile(std::string(ASSETS_DIR) + "/shaders/frag.spv");
+    std::string vertFile = vertPath.empty()
+        ? std::string(ASSETS_DIR) + "/shaders/vert.spv"
+        : std::string(ASSETS_DIR) + "/" + vertPath;
+    std::string fragFile = fragPath.empty()
+        ? std::string(ASSETS_DIR) + "/shaders/frag.spv"
+        : std::string(ASSETS_DIR) + "/" + fragPath;
+    auto vertShaderCode = readFile(vertFile);
+    auto fragShaderCode = readFile(fragFile);
 
     VkShaderModule vertShaderModule = createShaderModule(device, vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(device, fragShaderCode);

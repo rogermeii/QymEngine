@@ -41,10 +41,7 @@ static json serializeNode(const Node* node) {
     j["transform"]["rotation"] = {node->transform.rotation.x, node->transform.rotation.y, node->transform.rotation.z};
     j["transform"]["scale"] = {node->transform.scale.x, node->transform.scale.y, node->transform.scale.z};
     j["meshPath"] = node->meshPath;
-    j["texturePath"] = node->texturePath;
-    j["material"]["baseColor"] = {node->material.baseColor.r, node->material.baseColor.g, node->material.baseColor.b, node->material.baseColor.a};
-    j["material"]["metallic"] = node->material.metallic;
-    j["material"]["roughness"] = node->material.roughness;
+    j["materialPath"] = node->materialPath;
     j["children"] = json::array();
     for (auto& child : node->getChildren())
         j["children"].push_back(serializeNode(child.get()));
@@ -72,17 +69,9 @@ static void deserializeNode(Node* parent, const json& j) {
     }
     if (j.contains("meshPath"))
         node->meshPath = j["meshPath"].get<std::string>();
-    if (j.contains("texturePath"))
-        node->texturePath = j["texturePath"].get<std::string>();
-    if (j.contains("material")) {
-        auto& m = j["material"];
-        if (m.contains("baseColor")) {
-            auto& c = m["baseColor"];
-            node->material.baseColor = {c[0].get<float>(), c[1].get<float>(), c[2].get<float>(), c[3].get<float>()};
-        }
-        if (m.contains("metallic")) node->material.metallic = m["metallic"].get<float>();
-        if (m.contains("roughness")) node->material.roughness = m["roughness"].get<float>();
-    }
+    if (j.contains("materialPath"))
+        node->materialPath = j["materialPath"].get<std::string>();
+    // Backward compat: ignore old texturePath/material fields (migrated to materialPath)
     if (j.contains("children")) {
         for (auto& childJson : j["children"])
             deserializeNode(node, childJson);

@@ -64,6 +64,10 @@ public:
     Buffer&          getBuffer()                        { return m_buffer; }
     MeshLibrary&     getMeshLibrary()                   { return m_meshLibrary; }
     VkDescriptorSet  getDefaultTextureSet()      const { return m_defaultTextureSet; }
+    VkImageView      getWhiteFallbackView()     const { return m_whiteFallbackView; }
+    VkImageView      getNormalFallbackView()    const { return m_normalFallbackView; }
+    VkSampler        getFallbackSampler()       const { return m_fallbackSampler; }
+    VkDescriptorSet  getDefaultMaterialTexSet() const { return m_defaultMaterialTexSet; }
 
 private:
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
@@ -71,6 +75,7 @@ private:
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
     void updateUniformBuffer(uint32_t currentImage);
     void recreateSwapChain();
+    void createFallbackTextures();
 
     // Sub-modules (order matters for init/shutdown)
     VulkanContext  m_context;
@@ -118,6 +123,16 @@ private:
     // Grid pipeline (no vertex input, alpha blending, UBO-only layout)
     VkPipeline       m_gridPipeline       = VK_NULL_HANDLE;
     VkPipelineLayout m_gridPipelineLayout = VK_NULL_HANDLE;
+
+    // Fallback textures for materials without maps
+    VkImage          m_whiteFallbackImage     = VK_NULL_HANDLE;
+    VkDeviceMemory   m_whiteFallbackMemory    = VK_NULL_HANDLE;
+    VkImageView      m_whiteFallbackView      = VK_NULL_HANDLE;
+    VkSampler        m_fallbackSampler        = VK_NULL_HANDLE;
+    VkImage          m_normalFallbackImage    = VK_NULL_HANDLE;
+    VkDeviceMemory   m_normalFallbackMemory   = VK_NULL_HANDLE;
+    VkImageView      m_normalFallbackView     = VK_NULL_HANDLE;
+    VkDescriptorSet  m_defaultMaterialTexSet  = VK_NULL_HANDLE;
 };
 
 } // namespace QymEngine

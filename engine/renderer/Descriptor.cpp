@@ -104,7 +104,7 @@ void Descriptor::createUboSets(VkDevice device, int maxFramesInFlight,
 
 VkDescriptorSet Descriptor::createTextureSet(VkDevice device, VkImageView imageView, VkSampler sampler)
 {
-    // 向后兼容：将同一纹理写入 albedo 和 normal 两个绑定点
+    // Backward compat: write the same texture to both albedo and normal bindings
     return createTextureSet(device, imageView, sampler, imageView, sampler);
 }
 

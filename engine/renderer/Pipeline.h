@@ -11,7 +11,9 @@ public:
                 const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts,
                 VkExtent2D extent,
                 const std::vector<VkPushConstantRange>& pushConstantRanges = {},
-                VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL);
+                VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL,
+                const std::string& vertPath = "",
+                const std::string& fragPath = "");
     void cleanup(VkDevice device);
 
     VkPipeline       getPipeline()       const { return m_graphicsPipeline; }

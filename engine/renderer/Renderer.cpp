@@ -69,6 +69,9 @@ void Renderer::init(Window& window)
     m_defaultTextureSet = m_descriptor.createTextureSet(
         m_context.getDevice(), m_texture.getImageView(), m_texture.getSampler());
 
+    // Create fallback textures for the material system
+    createFallbackTextures();
+
     // Initialize AssetManager
     m_assetManager.init(m_context, m_commandManager);
     m_assetManager.setTextureDescriptorSetLayout(m_descriptor.getTextureLayout());
@@ -185,6 +188,141 @@ void Renderer::endFrame()
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
+void Renderer::createFallbackTextures()
+{
+    VkDevice device = m_context.getDevice();
+
+    // Helper lambda: create a 1x1 texture
+    auto createFallback = [&](const unsigned char pixel[4], VkFormat format,
+                              VkImage& outImage, VkDeviceMemory& outMemory, VkImageView& outView)
+    {
+        VkDeviceSize imageSize = 4; // 1x1 RGBA
+
+        // Staging buffer
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingMemory;
+        Buffer::createBuffer(m_context, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            stagingBuffer, stagingMemory);
+
+        void* data;
+        vkMapMemory(device, stagingMemory, 0, imageSize, 0, &data);
+        memcpy(data, pixel, 4);
+        vkUnmapMemory(device, stagingMemory);
+
+        // Create image
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent = {1, 1, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = format;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateImage(device, &imageInfo, nullptr, &outImage) != VK_SUCCESS)
+            throw std::runtime_error("failed to create fallback image!");
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(device, outImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = m_context.findMemoryType(
+            memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        if (vkAllocateMemory(device, &allocInfo, nullptr, &outMemory) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate fallback image memory!");
+
+        vkBindImageMemory(device, outImage, outMemory, 0);
+
+        // Transition + copy
+        VkCommandBuffer cmd = m_commandManager.beginSingleTimeCommands(device);
+
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = outImage;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {1, 1, 1};
+        vkCmdCopyBufferToImage(cmd, stagingBuffer, outImage,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        m_commandManager.endSingleTimeCommands(device, m_context.getGraphicsQueue(), cmd);
+
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        vkFreeMemory(device, stagingMemory, nullptr);
+
+        // Image view
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = outImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = format;
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        if (vkCreateImageView(device, &viewInfo, nullptr, &outView) != VK_SUCCESS)
+            throw std::runtime_error("failed to create fallback image view!");
+    };
+
+    // White 1x1 (albedo fallback)
+    const unsigned char whitePixel[4] = {255, 255, 255, 255};
+    createFallback(whitePixel, VK_FORMAT_R8G8B8A8_SRGB,
+        m_whiteFallbackImage, m_whiteFallbackMemory, m_whiteFallbackView);
+
+    // Normal 1x1 (flat normal pointing up: 0.5, 0.5, 1.0 in tangent space)
+    const unsigned char normalPixel[4] = {128, 128, 255, 255};
+    createFallback(normalPixel, VK_FORMAT_R8G8B8A8_UNORM,
+        m_normalFallbackImage, m_normalFallbackMemory, m_normalFallbackView);
+
+    // Shared sampler
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+    if (vkCreateSampler(device, &samplerInfo, nullptr, &m_fallbackSampler) != VK_SUCCESS)
+        throw std::runtime_error("failed to create fallback sampler!");
+
+    // Default material texture set (albedo=white, normal=flat)
+    m_defaultMaterialTexSet = m_descriptor.createTextureSet(device,
+        m_whiteFallbackView, m_fallbackSampler,
+        m_normalFallbackView, m_fallbackSampler);
+}
+
 void Renderer::shutdown()
 {
     vkDeviceWaitIdle(m_context.getDevice());
@@ -192,6 +330,22 @@ void Renderer::shutdown()
     VkDevice device = m_context.getDevice();
 
     destroyOffscreen();
+
+    // Cleanup fallback textures
+    if (m_fallbackSampler != VK_NULL_HANDLE)
+        vkDestroySampler(device, m_fallbackSampler, nullptr);
+    if (m_whiteFallbackView != VK_NULL_HANDLE)
+        vkDestroyImageView(device, m_whiteFallbackView, nullptr);
+    if (m_whiteFallbackImage != VK_NULL_HANDLE)
+        vkDestroyImage(device, m_whiteFallbackImage, nullptr);
+    if (m_whiteFallbackMemory != VK_NULL_HANDLE)
+        vkFreeMemory(device, m_whiteFallbackMemory, nullptr);
+    if (m_normalFallbackView != VK_NULL_HANDLE)
+        vkDestroyImageView(device, m_normalFallbackView, nullptr);
+    if (m_normalFallbackImage != VK_NULL_HANDLE)
+        vkDestroyImage(device, m_normalFallbackImage, nullptr);
+    if (m_normalFallbackMemory != VK_NULL_HANDLE)
+        vkFreeMemory(device, m_normalFallbackMemory, nullptr);
 
     m_assetManager.shutdown(device);
     m_swapChain.cleanup(device);
@@ -767,25 +921,21 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
 
     // Render each scene node with its own mesh and texture
     scene.traverseNodes([&](Node* node) {
-        // Determine texture descriptor set (set 1)
-        VkDescriptorSet texSet = m_defaultTextureSet;
-        if (!node->texturePath.empty()) {
-            auto* tex = m_assetManager.loadTexture(node->texturePath);
-            if (tex && tex->descriptorSet != VK_NULL_HANDLE)
-                texSet = tex->descriptorSet;
-        }
+        // Determine texture descriptor set (set 1) — use default material tex set for now
+        // Material system will replace this in Task 7
+        VkDescriptorSet texSet = m_defaultMaterialTexSet;
 
         // Bind texture descriptor set (set 1)
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_offscreenPipeline.getPipelineLayout(), 1, 1,
                                 &texSet, 0, nullptr);
 
-        // Push constants
+        // Push constants — use defaults until material system is integrated
         PushConstantData pc{};
         pc.model = node->getWorldMatrix();
-        pc.baseColor = node->material.baseColor;
-        pc.metallic = node->material.metallic;
-        pc.roughness = node->material.roughness;
+        pc.baseColor = glm::vec4(1.0f);
+        pc.metallic = 0.0f;
+        pc.roughness = 0.5f;
         pc.highlighted = 0;  // wireframe pass handles highlight
         vkCmdPushConstants(commandBuffer, m_offscreenPipeline.getPipelineLayout(),
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

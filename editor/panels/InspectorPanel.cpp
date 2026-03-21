@@ -26,10 +26,10 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
             } else if (projectPanel.isSelectedModel()) {
                 if (modelPreview.isReady()) {
                     ImGui::Text("Model Preview:");
-                    float previewSize = ImGui::GetContentRegionAvail().x - 10.0f;
-                    if (previewSize < 64.0f) previewSize = 64.0f;
-                    if (previewSize > 512.0f) previewSize = 512.0f;
-                    ImGui::Image(reinterpret_cast<ImTextureID>(modelPreview.getDescriptorSet()), ImVec2(previewSize, previewSize));
+                    float w = ImGui::GetContentRegionAvail().x - 10.0f;
+                    float side = (w < 256.0f) ? w : 256.0f;
+                    if (side < 64.0f) side = 64.0f;
+                    ImGui::Image(reinterpret_cast<ImTextureID>(modelPreview.getDescriptorSet()), ImVec2(side, side));
                 }
             } else {
                 ImGui::Text("No preview available for this file type");
@@ -98,41 +98,12 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
         }
     }
 
-    if (ImGui::CollapsingHeader("Texture", ImGuiTreeNodeFlags_DefaultOpen)) {
-        std::vector<std::string> texItems = {"Default"};
-        for (auto& f : assetManager.getTextureFiles())
-            texItems.push_back(f);
-
-        int currentTex = 0;
-        for (int i = 1; i < static_cast<int>(texItems.size()); i++) {
-            if (texItems[i] == selected->texturePath) { currentTex = i; break; }
-        }
-
-        if (ImGui::BeginCombo("Texture File", texItems[currentTex].c_str())) {
-            for (int i = 0; i < static_cast<int>(texItems.size()); i++) {
-                bool isSelected = (currentTex == i);
-                if (ImGui::Selectable(texItems[i].c_str(), isSelected)) {
-                    if (i == 0) selected->texturePath = "";
-                    else selected->texturePath = texItems[i];
-                }
-            }
-            ImGui::EndCombo();
-        }
-
-        // Texture preview
-        if (!selected->texturePath.empty()) {
-            auto* tex = assetManager.loadTexture(selected->texturePath);
-            if (tex && tex->descriptorSet != VK_NULL_HANDLE) {
-                ImGui::Text("Preview:");
-                ImGui::Image(reinterpret_cast<ImTextureID>(tex->descriptorSet), ImVec2(128, 128));
-            }
-        }
-    }
-
     if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::ColorEdit4("Base Color", &selected->material.baseColor.x);
-        ImGui::SliderFloat("Metallic", &selected->material.metallic, 0.0f, 1.0f);
-        ImGui::SliderFloat("Roughness", &selected->material.roughness, 0.0f, 1.0f);
+        // Placeholder: material path display (full material UI in Task 8)
+        char matBuf[256] = {};
+        strncpy(matBuf, selected->materialPath.c_str(), sizeof(matBuf) - 1);
+        if (ImGui::InputText("Material Path", matBuf, sizeof(matBuf)))
+            selected->materialPath = matBuf;
     }
 
     ImGui::End();
