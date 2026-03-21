@@ -88,7 +88,7 @@ float4 gridLine(float3 fragPos, float scale, float4 color)
 {
     float2 coord = fragPos.xz / scale;
     float2 deriv = fwidth(coord);
-    float2 g = abs(frac(coord - 0.5) - 0.5) / deriv;
+    float2 g = abs(frac(coord - 0.5) - 0.5) / (deriv * 0.5);
     float line = min(g.x, g.y);
     float alpha = 1.0 - min(line, 1.0);
     return float4(color.rgb, alpha * color.a);
