@@ -93,6 +93,7 @@ private:
     VkDescriptorSet m_defaultTextureSet = VK_NULL_HANDLE;
 
     const Camera* m_camera = nullptr;
+    Scene* m_activeScene = nullptr;
     Window* m_window = nullptr;
 
     uint32_t m_currentFrame = 0;

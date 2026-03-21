@@ -126,7 +126,7 @@ bool Renderer::beginFrame()
 
 void Renderer::drawScene(Scene& scene)
 {
-    // If offscreen is set up, render to offscreen. Otherwise no-op.
+    m_activeScene = &scene;
     if (m_offscreenRenderPass != VK_NULL_HANDLE && m_offscreenFramebuffer != VK_NULL_HANDLE)
     {
         VkCommandBuffer cmdBuf = m_commandManager.getBuffer(m_currentFrame);
@@ -921,6 +921,9 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
 
     // Render each scene node with its own material, pipeline, and mesh
     scene.traverseNodes([&](Node* node) {
+        // Skip light nodes during mesh rendering
+        if (node->nodeType == NodeType::DirectionalLight) return;
+
         // Load material (or use defaults)
         const MaterialAsset* mat = nullptr;
         if (!node->materialPath.empty())
@@ -1012,6 +1015,62 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         }
     }
 
+    // Draw light gizmos (small wireframe sphere for each directional light)
+    scene.traverseNodes([&](Node* node) {
+        if (node->nodeType != NodeType::DirectionalLight) return;
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          m_wireframePipeline.getPipeline());
+
+        VkDescriptorSet uboSet2 = m_descriptor.getUboSet(m_currentFrame);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_wireframePipeline.getPipelineLayout(), 0, 1,
+                                &uboSet2, 0, nullptr);
+
+        VkDescriptorSet texSet = m_defaultMaterialTexSet;
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_wireframePipeline.getPipelineLayout(), 1, 1,
+                                &texSet, 0, nullptr);
+
+        // Small sphere at light position, scaled down
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), node->transform.position);
+        model = glm::scale(model, glm::vec3(0.2f));
+
+        PushConstantData pc{};
+        pc.model = model;
+        pc.baseColor = glm::vec4(node->lightColor, 1.0f);
+        pc.highlighted = 1;
+        vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(PushConstantData), &pc);
+
+        m_meshLibrary.bind(commandBuffer, MeshType::Sphere);
+        vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(MeshType::Sphere), 1, 0, 0, 0);
+
+        // Draw direction arrow using a scaled cube along light direction
+        glm::vec3 dir = node->getLightDirection();
+        glm::vec3 arrowEnd = node->transform.position + dir * 0.5f;
+        glm::vec3 arrowCenter = (node->transform.position + arrowEnd) * 0.5f;
+
+        glm::mat4 arrowModel = glm::translate(glm::mat4(1.0f), arrowCenter);
+        // Scale thin along perpendicular axes, long along direction
+        arrowModel = glm::scale(arrowModel, glm::vec3(0.02f, 0.02f, 0.25f));
+        // Rotate cube to align with light direction
+        glm::vec3 up = glm::vec3(0, 0, -1);
+        if (glm::abs(glm::dot(dir, up)) > 0.99f)
+            up = glm::vec3(1, 0, 0);
+        glm::mat4 lookMat = glm::inverse(glm::lookAt(glm::vec3(0), dir, up));
+        arrowModel = glm::translate(glm::mat4(1.0f), arrowCenter) * lookMat * glm::scale(glm::mat4(1.0f), glm::vec3(0.02f, 0.02f, 0.25f));
+
+        pc.model = arrowModel;
+        vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(PushConstantData), &pc);
+
+        m_meshLibrary.bind(commandBuffer, MeshType::Cube);
+        vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(MeshType::Cube), 1, 0, 0, 0);
+    });
+
     vkCmdEndRenderPass(commandBuffer);
 }
 
@@ -1039,9 +1098,18 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
         ubo.proj[1][1] *= -1;
     }
 
+    // Find directional light in scene (use first one found, fallback to defaults)
     ubo.lightDir = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
     ubo.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
     ubo.ambientColor = glm::vec3(0.15f, 0.15f, 0.15f);
+    if (m_activeScene) {
+        m_activeScene->traverseNodes([&](Node* node) {
+            if (node->nodeType == NodeType::DirectionalLight) {
+                ubo.lightDir = node->getLightDirection();
+                ubo.lightColor = node->lightColor * node->lightIntensity;
+            }
+        });
+    }
     if (m_camera)
         ubo.cameraPos = m_camera->getPosition();
     else

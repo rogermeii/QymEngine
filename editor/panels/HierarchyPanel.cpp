@@ -14,6 +14,13 @@ void HierarchyPanel::onImGuiRender(Scene& scene) {
         if (ImGui::MenuItem("Plane"))  { auto* n = scene.createNode("Plane");  n->meshType = MeshType::Plane; }
         if (ImGui::MenuItem("Sphere")) { auto* n = scene.createNode("Sphere"); n->meshType = MeshType::Sphere; }
         if (ImGui::MenuItem("Quad"))   { auto* n = scene.createNode("Quad");   n->meshType = MeshType::Quad; }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Directional Light")) {
+            auto* n = scene.createNode("Directional Light");
+            n->nodeType = NodeType::DirectionalLight;
+            n->meshType = MeshType::None;
+            n->transform.rotation = glm::vec3(-50.0f, -30.0f, 0.0f);
+        }
         ImGui::EndPopup();
     }
 
@@ -42,7 +49,8 @@ void HierarchyPanel::drawNodeTree(Node* node, Scene& scene) {
     if (node->getChildren().empty())
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 
-    bool opened = ImGui::TreeNodeEx((void*)(intptr_t)node, flags, "%s", node->name.c_str());
+    const char* icon = (node->nodeType == NodeType::DirectionalLight) ? "[L] " : "";
+    bool opened = ImGui::TreeNodeEx((void*)(intptr_t)node, flags, "%s%s", icon, node->name.c_str());
 
     if (ImGui::IsItemClicked())
         scene.setSelectedNode(node);

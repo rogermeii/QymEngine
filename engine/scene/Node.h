@@ -7,15 +7,27 @@
 
 namespace QymEngine {
 
+enum class NodeType { Mesh, DirectionalLight };
+
 class Node {
 public:
     explicit Node(const std::string& name = "Node");
 
     std::string name;
     Transform transform;
+    NodeType nodeType = NodeType::Mesh;
+
+    // Mesh properties (only used when nodeType == Mesh)
     MeshType meshType = MeshType::Cube;
-    std::string meshPath;       // empty = use built-in meshType
-    std::string materialPath;   // .mat.json 路径，empty = 使用默认材质
+    std::string meshPath;
+    std::string materialPath;
+
+    // Light properties (only used when nodeType == DirectionalLight)
+    glm::vec3 lightColor = glm::vec3(1.0f);
+    float lightIntensity = 1.0f;
+
+    // Get light direction from rotation (forward = -Z rotated by euler angles)
+    glm::vec3 getLightDirection() const;
 
     Node* getParent() const { return m_parent; }
     const std::vector<std::unique_ptr<Node>>& getChildren() const { return m_children; }

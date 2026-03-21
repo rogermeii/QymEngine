@@ -40,8 +40,13 @@ static json serializeNode(const Node* node) {
     j["transform"]["position"] = {node->transform.position.x, node->transform.position.y, node->transform.position.z};
     j["transform"]["rotation"] = {node->transform.rotation.x, node->transform.rotation.y, node->transform.rotation.z};
     j["transform"]["scale"] = {node->transform.scale.x, node->transform.scale.y, node->transform.scale.z};
+    j["nodeType"] = (node->nodeType == NodeType::DirectionalLight) ? "DirectionalLight" : "Mesh";
     j["meshPath"] = node->meshPath;
     j["materialPath"] = node->materialPath;
+    if (node->nodeType == NodeType::DirectionalLight) {
+        j["lightColor"] = {node->lightColor.r, node->lightColor.g, node->lightColor.b};
+        j["lightIntensity"] = node->lightIntensity;
+    }
     j["children"] = json::array();
     for (auto& child : node->getChildren())
         j["children"].push_back(serializeNode(child.get()));
@@ -67,11 +72,20 @@ static void deserializeNode(Node* parent, const json& j) {
             node->transform.scale = {s[0].get<float>(), s[1].get<float>(), s[2].get<float>()};
         }
     }
+    if (j.contains("nodeType")) {
+        std::string nt = j["nodeType"].get<std::string>();
+        node->nodeType = (nt == "DirectionalLight") ? NodeType::DirectionalLight : NodeType::Mesh;
+    }
     if (j.contains("meshPath"))
         node->meshPath = j["meshPath"].get<std::string>();
     if (j.contains("materialPath"))
         node->materialPath = j["materialPath"].get<std::string>();
-    // Backward compat: ignore old texturePath/material fields (migrated to materialPath)
+    if (j.contains("lightColor")) {
+        auto& c = j["lightColor"];
+        node->lightColor = {c[0].get<float>(), c[1].get<float>(), c[2].get<float>()};
+    }
+    if (j.contains("lightIntensity"))
+        node->lightIntensity = j["lightIntensity"].get<float>();
     if (j.contains("children")) {
         for (auto& childJson : j["children"])
             deserializeNode(node, childJson);

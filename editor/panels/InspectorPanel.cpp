@@ -162,6 +162,19 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
         ImGui::DragFloat3("Scale",    &selected->transform.scale.x, 0.01f, 0.01f, 100.0f);
     }
 
+    // --- Light properties (only for DirectionalLight nodes) ---
+    if (selected->nodeType == NodeType::DirectionalLight) {
+        if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::ColorEdit3("Light Color", &selected->lightColor.x);
+            ImGui::SliderFloat("Intensity", &selected->lightIntensity, 0.0f, 10.0f);
+
+            glm::vec3 dir = selected->getLightDirection();
+            ImGui::Text("Direction: (%.2f, %.2f, %.2f)", dir.x, dir.y, dir.z);
+        }
+        ImGui::End();
+        return;
+    }
+
     // --- Mesh (merged: built-in type + .obj model) ---
     if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Build combined items: built-in types + .obj files
