@@ -1,4 +1,5 @@
 #include "ProjectPanel.h"
+#include "UIAutomation.h"
 #include <imgui.h>
 #include <json.hpp>
 #include <filesystem>
@@ -18,6 +19,9 @@ void ProjectPanel::onImGuiRender()
     }
 
     ImGui::Begin("Project");
+#ifndef __ANDROID__
+    UIAutomation::recordPanel("Project");
+#endif
 
     // --- Breadcrumb navigation ---
     {
@@ -200,6 +204,9 @@ void ProjectPanel::onImGuiRender()
             m_selectedFile = relativePath;
             m_highlightedFile.clear();  // clicking clears highlight
         }
+#ifndef __ANDROID__
+        UIAutomation::recordWidget("project/" + relativePath, f.name);
+#endif
 
         if (isHighlighted && !isSelected) {
             ImGui::PopStyleColor(2);

@@ -17,6 +17,7 @@
 
 #ifndef __ANDROID__
 #include <renderdoc_app.h>
+#include "UIAutomation.h"
 #endif
 
 namespace QymEngine {
@@ -69,6 +70,8 @@ private:
     bool m_autoCaptureDone = false;
     bool m_captureAndExit = false;
     std::string m_captureOutputPath;
+
+    UIAutomation m_uiAutomation;
 #endif
 };
 

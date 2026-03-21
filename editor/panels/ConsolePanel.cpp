@@ -1,4 +1,5 @@
 #include "ConsolePanel.h"
+#include "UIAutomation.h"
 #include <imgui.h>
 
 namespace QymEngine {
@@ -13,6 +14,9 @@ void ConsolePanel::init()
 void ConsolePanel::onImGuiRender()
 {
     ImGui::Begin("Console");
+#ifndef __ANDROID__
+    UIAutomation::recordPanel("Console");
+#endif
     if (ImGui::Button("Clear"))
         m_logs.clear();
     ImGui::SameLine();

@@ -57,6 +57,7 @@ public:
 
     VkSampler   getOffscreenSampler()   const { return m_offscreenSampler; }
     VkImageView getOffscreenImageView() const { return m_offscreenImageView; }
+    VkImage     getOffscreenImage()     const { return m_offscreenImage; }
     uint32_t    getOffscreenWidth()     const { return m_offscreenWidth; }
     uint32_t    getOffscreenHeight()    const { return m_offscreenHeight; }
     bool        isOffscreenReady()      const { return m_offscreenRenderPass != VK_NULL_HANDLE
@@ -74,6 +75,10 @@ public:
     VkSampler        getFallbackSampler()       const { return m_fallbackSampler; }
     DescriptorLayoutCache& getLayoutCache()           { return m_layoutCache; }
     VkDescriptorSetLayout  getPerFrameLayout()  const { return m_perFrameLayout; }
+
+    // Draw statistics (updated per frame in drawSceneToOffscreen)
+    uint32_t getLastDrawCallCount() const { return m_lastDrawCallCount; }
+    uint32_t getLastTriangleCount() const { return m_lastTriangleCount; }
 
 private:
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
@@ -140,6 +145,10 @@ private:
     VkImage          m_normalFallbackImage    = VK_NULL_HANDLE;
     VkDeviceMemory   m_normalFallbackMemory   = VK_NULL_HANDLE;
     VkImageView      m_normalFallbackView     = VK_NULL_HANDLE;
+
+    // Draw statistics
+    uint32_t m_lastDrawCallCount = 0;
+    uint32_t m_lastTriangleCount = 0;
 
     // Default material descriptor set (for nodes without material)
     VkDescriptorSet  m_defaultMaterialSet     = VK_NULL_HANDLE;

@@ -1,4 +1,5 @@
 #include "InspectorPanel.h"
+#include "UIAutomation.h"
 #include "asset/MaterialAsset.h"
 #include "asset/ShaderAsset.h"
 #include <imgui.h>
@@ -25,6 +26,9 @@ static bool drawGoToButton(const char* id, const std::string& path, ProjectPanel
 
 void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, ModelPreview& modelPreview, ProjectPanel& projectPanel) {
     ImGui::Begin("Inspector");
+#ifndef __ANDROID__
+    UIAutomation::recordPanel("Inspector");
+#endif
 
     Node* selected = scene.getSelectedNode();
 
@@ -242,6 +246,9 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
     buf[sizeof(buf) - 1] = '\0';
     if (ImGui::InputText("Name", buf, sizeof(buf)))
         selected->name = buf;
+#ifndef __ANDROID__
+    UIAutomation::recordWidget("inspector/Name", "Name");
+#endif
 
     ImGui::Separator();
 
@@ -250,10 +257,19 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
         bool anyActive = false;
         ImGui::DragFloat3("Position", &selected->transform.position.x, 0.1f);
         anyActive |= ImGui::IsItemActive();
+#ifndef __ANDROID__
+        UIAutomation::recordWidget("inspector/Position", "Position");
+#endif
         ImGui::DragFloat3("Rotation", &selected->transform.rotation.x, 1.0f);
         anyActive |= ImGui::IsItemActive();
+#ifndef __ANDROID__
+        UIAutomation::recordWidget("inspector/Rotation", "Rotation");
+#endif
         ImGui::DragFloat3("Scale",    &selected->transform.scale.x, 0.01f, 0.01f, 100.0f);
         anyActive |= ImGui::IsItemActive();
+#ifndef __ANDROID__
+        UIAutomation::recordWidget("inspector/Scale", "Scale");
+#endif
 
         if (anyActive && !m_wasDragging && m_saveState)
             m_saveState();

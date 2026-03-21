@@ -490,7 +490,7 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
     imageInfo.format        = format;
     imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.usage         = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.usage         = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -1140,6 +1140,9 @@ void Renderer::destroyOffscreen()
 
 void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
 {
+    m_lastDrawCallCount = 0;
+    m_lastTriangleCount = 0;
+
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass        = m_offscreenRenderPass;
@@ -1259,10 +1262,15 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
                 vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
                 vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
                 vkCmdDrawIndexed(commandBuffer, mesh->indexCount, 1, 0, 0, 0);
+                m_lastDrawCallCount++;
+                m_lastTriangleCount += mesh->indexCount / 3;
             }
         } else if (node->meshType != MeshType::None) {
             m_meshLibrary.bind(commandBuffer, node->meshType);
-            vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(node->meshType), 1, 0, 0, 0);
+            uint32_t idxCount = m_meshLibrary.getIndexCount(node->meshType);
+            vkCmdDrawIndexed(commandBuffer, idxCount, 1, 0, 0, 0);
+            m_lastDrawCallCount++;
+            m_lastTriangleCount += idxCount / 3;
         }
     });
 

@@ -1,4 +1,5 @@
 #include "SceneViewPanel.h"
+#include "UIAutomation.h"
 #include "renderer/Renderer.h"
 #include "scene/Camera.h"
 #include "scene/Scene.h"
@@ -41,6 +42,9 @@ void SceneViewPanel::applyPendingResize(Renderer& renderer)
 void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& scene)
 {
     ImGui::Begin("Scene View");
+#ifndef __ANDROID__
+    UIAutomation::recordPanel("SceneView");
+#endif
 
     ImVec2 viewportSize = ImGui::GetContentRegionAvail();
 

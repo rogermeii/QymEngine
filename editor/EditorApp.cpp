@@ -110,6 +110,8 @@ void EditorApp::onInit()
 void EditorApp::onUpdate()
 {
 #ifndef __ANDROID__
+    UIAutomation::beginFrame();
+
     // Check file-based capture trigger and F12 BEFORE starting capture
     checkExternalCaptureTrigger();
 
@@ -306,6 +308,10 @@ void EditorApp::onUpdate()
                           m_renderer.getImageIndex());
 
     m_renderer.endFrame();
+
+#ifndef __ANDROID__
+    m_uiAutomation.pollAndExecute(m_renderer, m_scene, m_camera, m_window->getNativeWindow());
+#endif
 
 #ifndef __ANDROID__
     if (m_capturingThisFrame) {

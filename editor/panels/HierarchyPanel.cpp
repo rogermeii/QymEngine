@@ -2,6 +2,7 @@
 #include "ProjectPanel.h"
 #include "UndoManager.h"
 #include "Clipboard.h"
+#include "UIAutomation.h"
 #include <imgui.h>
 
 namespace QymEngine {
@@ -10,6 +11,9 @@ void HierarchyPanel::onImGuiRender(Scene& scene, UndoManager* undo, Clipboard* c
                                     ProjectPanel* projectPanel) {
     m_projectPanel = projectPanel;
     ImGui::Begin("Hierarchy");
+#ifndef __ANDROID__
+    UIAutomation::recordPanel("Hierarchy");
+#endif
 
     if (ImGui::Button("Add..."))
         ImGui::OpenPopup("AddNodePopup");
@@ -152,6 +156,9 @@ void HierarchyPanel::drawNodeTree(Node* node, Scene& scene, int childIndex) {
 
     const char* icon = (node->nodeType == NodeType::DirectionalLight) ? "[L] " : "";
     bool opened = ImGui::TreeNodeEx((void*)(intptr_t)node, flags, "%s%s", icon, node->name.c_str());
+#ifndef __ANDROID__
+    UIAutomation::recordWidget("hierarchy/" + node->name, node->name);
+#endif
 
     // Selection: click, ctrl+click, shift+click
     if (ImGui::IsItemClicked()) {
