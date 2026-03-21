@@ -304,10 +304,14 @@ const TextureAsset* AssetManager::loadTexture(const std::string& relativePath)
 
 const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
 {
-    // Check cache
+    // Check cache - but invalidate if pipeline wasn't ready when first loaded
     auto it = m_shaderCache.find(relativePath);
-    if (it != m_shaderCache.end())
-        return &it->second;
+    if (it != m_shaderCache.end()) {
+        if (it->second.pipeline.getPipeline() != VK_NULL_HANDLE)
+            return &it->second;
+        // Pipeline wasn't ready before (e.g. offscreen render pass not set yet), retry
+        m_shaderCache.erase(it);
+    }
 
     if (!m_ctx) return nullptr;
 
@@ -379,10 +383,14 @@ const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
 
 const MaterialInstance* AssetManager::loadMaterial(const std::string& relativePath)
 {
-    // Check cache
+    // Check cache - but invalidate if pipeline wasn't ready when first loaded
     auto it = m_materialCache.find(relativePath);
-    if (it != m_materialCache.end())
-        return &it->second;
+    if (it != m_materialCache.end()) {
+        if (it->second.descriptorSet != VK_NULL_HANDLE)
+            return &it->second;
+        // Pipeline wasn't ready before, try again
+        m_materialCache.erase(it);
+    }
 
     if (!m_ctx) return nullptr;
 

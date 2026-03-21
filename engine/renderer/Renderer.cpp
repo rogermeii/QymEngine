@@ -1160,7 +1160,9 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         VkPipelineLayout pipelineLayout;
         VkDescriptorSet matSet;
 
-        if (mat && mat->shader && mat->descriptorSet != VK_NULL_HANDLE) {
+        if (mat && mat->shader &&
+            mat->shader->pipeline.getPipeline() != VK_NULL_HANDLE &&
+            mat->descriptorSet != VK_NULL_HANDLE) {
             shaderPipeline = mat->shader->pipeline.getPipeline();
             pipelineLayout = mat->shader->pipeline.getPipelineLayout();
             matSet = mat->descriptorSet;
