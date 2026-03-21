@@ -33,7 +33,9 @@ public:
     const std::vector<std::unique_ptr<Node>>& getChildren() const { return m_children; }
 
     Node* addChild(const std::string& childName);
+    Node* insertChild(const std::string& childName, int index);
     void removeChild(Node* child);
+    int getChildIndex(Node* child) const;
 
     glm::mat4 getWorldMatrix() const;
 

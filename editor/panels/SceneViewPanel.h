@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 #include <SDL.h>
 #include <cstdint>
+#include <functional>
 #include <imgui.h>
 #include <ImGuizmo.h>
 
@@ -14,6 +15,8 @@ class Scene;
 
 class SceneViewPanel {
 public:
+    using SaveStateFn = std::function<void()>;
+
     void onImGuiRender(Renderer& renderer, Camera& camera, Scene& scene);
     void cleanup();
 
@@ -22,6 +25,8 @@ public:
 
     /// Process SDL event for touch gestures. Call from event callback.
     void processEvent(const SDL_Event& event);
+
+    void setSaveStateFn(SaveStateFn fn) { m_saveState = fn; }
 
 private:
     void recreateDescriptorSet(Renderer& renderer);
@@ -37,6 +42,8 @@ private:
     VkImageView     m_cachedImageView = VK_NULL_HANDLE;
 
     ImGuizmo::OPERATION m_gizmoOperation = ImGuizmo::TRANSLATE;
+    bool m_wasGizmoUsing = false;
+    SaveStateFn m_saveState;
 
     // Touch gesture state
     int m_fingerCount = 0;

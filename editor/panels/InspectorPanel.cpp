@@ -157,9 +157,18 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Save undo state when drag starts
+        bool anyActive = false;
         ImGui::DragFloat3("Position", &selected->transform.position.x, 0.1f);
+        anyActive |= ImGui::IsItemActive();
         ImGui::DragFloat3("Rotation", &selected->transform.rotation.x, 1.0f);
+        anyActive |= ImGui::IsItemActive();
         ImGui::DragFloat3("Scale",    &selected->transform.scale.x, 0.01f, 0.01f, 100.0f);
+        anyActive |= ImGui::IsItemActive();
+
+        if (anyActive && !m_wasDragging && m_saveState)
+            m_saveState();
+        m_wasDragging = anyActive;
     }
 
     // --- Light properties (only for DirectionalLight nodes) ---

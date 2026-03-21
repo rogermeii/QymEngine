@@ -3,10 +3,18 @@
 #include "asset/AssetManager.h"
 #include "panels/ModelPreview.h"
 #include "panels/ProjectPanel.h"
+#include <functional>
 
 namespace QymEngine {
 class InspectorPanel {
 public:
+    using SaveStateFn = std::function<void()>;
+
     void onImGuiRender(Scene& scene, AssetManager& assetManager, ModelPreview& modelPreview, ProjectPanel& projectPanel);
+    void setSaveStateFn(SaveStateFn fn) { m_saveState = fn; }
+
+private:
+    SaveStateFn m_saveState;
+    bool m_wasDragging = false; // Track drag start for undo
 };
 }

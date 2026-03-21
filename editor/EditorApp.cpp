@@ -60,6 +60,23 @@ void EditorApp::onInit()
     m_consolePanel.init();
     m_modelPreview.init(m_renderer);
 
+    // Initialize undo manager
+    m_undoManager.init(
+        [this]() { return m_scene.toJsonString(); },
+        [this](const std::string& json) { m_scene.fromJsonString(json); }
+    );
+
+    // Connect panels to undo
+    m_hierarchyPanel.setSaveStateFn([this]() { m_undoManager.saveState(); });
+    m_inspectorPanel.setSaveStateFn([this]() { m_undoManager.saveState(); });
+    m_sceneViewPanel.setSaveStateFn([this]() { m_undoManager.saveState(); });
+
+#ifdef __ANDROID__
+    m_currentScenePath = "scenes/default.json";
+#else
+    m_currentScenePath = std::string(ASSETS_DIR) + "/scenes/default.json";
+#endif
+
 #ifndef __ANDROID__
     if (m_rdocApi)
         Log::info("RenderDoc: ready (press F12 to capture)");
@@ -104,10 +121,66 @@ void EditorApp::onUpdate()
 
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Save Scene"))
-                m_scene.serialize(std::string(ASSETS_DIR) + "/scenes/default.json");
-            if (ImGui::MenuItem("Load Scene"))
+            if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
+                m_undoManager.saveState();
+                m_scene.clearSelection();
+                m_scene.fromJsonString("{\"scene\":{\"name\":\"Untitled\",\"nodes\":[]}}");
+                m_currentScenePath.clear();
+            }
+            if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
+                if (!m_currentScenePath.empty())
+                    m_scene.serialize(m_currentScenePath);
+                else
+                    m_showSaveAsPopup = true;
+            }
+            if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {
+                m_showSaveAsPopup = true;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Load Scene")) {
+                m_undoManager.saveState();
+#ifdef __ANDROID__
+                m_scene.deserialize("scenes/default.json");
+#else
                 m_scene.deserialize(std::string(ASSETS_DIR) + "/scenes/default.json");
+#endif
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Edit")) {
+            if (ImGui::MenuItem("Undo", "Ctrl+Z", false, m_undoManager.canUndo()))
+                m_undoManager.undo();
+            if (ImGui::MenuItem("Redo", "Ctrl+Y", false, m_undoManager.canRedo()))
+                m_undoManager.redo();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Copy", "Ctrl+C", false, m_scene.getSelectedNode() != nullptr)) {
+                std::vector<std::string> jsons;
+                for (auto* n : m_scene.getSelectedNodes())
+                    jsons.push_back(m_scene.serializeNodeToString(n));
+                m_clipboard.copyNodes(jsons);
+            }
+            if (ImGui::MenuItem("Paste", "Ctrl+V", false, m_clipboard.hasContent())) {
+                m_undoManager.saveState();
+                Node* parent = m_scene.getSelectedNode()
+                    ? m_scene.getSelectedNode()->getParent()
+                    : m_scene.getRoot();
+                for (auto& json : m_clipboard.getNodes())
+                    m_scene.deserializeNodeFromString(json, parent);
+            }
+            if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, m_scene.getSelectedNode() != nullptr)) {
+                m_undoManager.saveState();
+                for (auto* n : m_scene.getSelectedNodes()) {
+                    std::string json = m_scene.serializeNodeToString(n);
+                    m_scene.deserializeNodeFromString(json, n->getParent());
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Delete", "Del", false, m_scene.getSelectedNode() != nullptr)) {
+                m_undoManager.saveState();
+                auto selected = m_scene.getSelectedNodes();
+                for (auto* n : selected)
+                    m_scene.removeNode(n);
+            }
             ImGui::EndMenu();
         }
 #ifndef __ANDROID__
@@ -119,6 +192,34 @@ void EditorApp::onUpdate()
 #endif
         ImGui::EndMainMenuBar();
     }
+
+    // Save As popup
+    if (m_showSaveAsPopup) {
+        ImGui::OpenPopup("Save Scene As");
+        m_showSaveAsPopup = false;
+    }
+    if (ImGui::BeginPopupModal("Save Scene As", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("File name:");
+        ImGui::InputText("##saveas", m_saveAsBuffer, sizeof(m_saveAsBuffer));
+        if (ImGui::Button("Save")) {
+            std::string filename = m_saveAsBuffer;
+            if (!filename.empty()) {
+                if (filename.find(".json") == std::string::npos)
+                    filename += ".json";
+                m_currentScenePath = std::string(ASSETS_DIR) + "/scenes/" + filename;
+                m_scene.serialize(m_currentScenePath);
+                Log::info("Saved scene to: " + m_currentScenePath);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    // Keyboard shortcuts
+    handleShortcuts();
 
 #ifndef __ANDROID__
     // F12 shortcut for RenderDoc capture
@@ -138,7 +239,7 @@ void EditorApp::onUpdate()
 
     // Render all panels
     m_sceneViewPanel.onImGuiRender(m_renderer, m_camera, m_scene);
-    m_hierarchyPanel.onImGuiRender(m_scene);
+    m_hierarchyPanel.onImGuiRender(m_scene, &m_undoManager, &m_clipboard);
     m_inspectorPanel.onImGuiRender(m_scene, m_renderer.getAssetManager(), m_modelPreview, m_projectPanel);
     m_projectPanel.onImGuiRender();
     m_consolePanel.onImGuiRender();
@@ -289,5 +390,76 @@ void EditorApp::checkExternalCaptureTrigger()
     }
 }
 #endif
+
+void EditorApp::handleShortcuts()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    bool ctrl = io.KeyCtrl;
+    bool shift = io.KeyShift;
+
+    // Ctrl+Z: Undo
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_Z))
+        m_undoManager.undo();
+
+    // Ctrl+Y or Ctrl+Shift+Z: Redo
+    if ((ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) ||
+        (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_Z)))
+        m_undoManager.redo();
+
+    // Ctrl+C: Copy
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_C)) {
+        auto& selected = m_scene.getSelectedNodes();
+        if (!selected.empty()) {
+            std::vector<std::string> jsons;
+            for (auto* n : selected)
+                jsons.push_back(m_scene.serializeNodeToString(n));
+            m_clipboard.copyNodes(jsons);
+        }
+    }
+
+    // Ctrl+V: Paste
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V) && m_clipboard.hasContent()) {
+        m_undoManager.saveState();
+        Node* parent = m_scene.getSelectedNode()
+            ? m_scene.getSelectedNode()->getParent()
+            : m_scene.getRoot();
+        for (auto& json : m_clipboard.getNodes())
+            m_scene.deserializeNodeFromString(json, parent);
+    }
+
+    // Ctrl+D: Duplicate
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
+        auto& selected = m_scene.getSelectedNodes();
+        if (!selected.empty()) {
+            m_undoManager.saveState();
+            // Copy first to avoid modifying the set while iterating
+            std::vector<Node*> nodes(selected.begin(), selected.end());
+            for (auto* n : nodes) {
+                std::string json = m_scene.serializeNodeToString(n);
+                m_scene.deserializeNodeFromString(json, n->getParent());
+            }
+        }
+    }
+
+    // Ctrl+N: New Scene
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N)) {
+        m_undoManager.saveState();
+        m_scene.clearSelection();
+        m_scene.fromJsonString("{\"scene\":{\"name\":\"Untitled\",\"nodes\":[]}}");
+        m_currentScenePath.clear();
+    }
+
+    // Ctrl+S: Save
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_S)) {
+        if (!m_currentScenePath.empty())
+            m_scene.serialize(m_currentScenePath);
+        else
+            m_showSaveAsPopup = true;
+    }
+
+    // Ctrl+Shift+S: Save As
+    if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_S))
+        m_showSaveAsPopup = true;
+}
 
 } // namespace QymEngine

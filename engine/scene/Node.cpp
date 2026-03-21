@@ -14,6 +14,24 @@ Node* Node::addChild(const std::string& childName) {
     return ptr;
 }
 
+Node* Node::insertChild(const std::string& childName, int index) {
+    auto child = std::make_unique<Node>(childName);
+    child->m_parent = this;
+    Node* ptr = child.get();
+    if (index < 0 || index >= static_cast<int>(m_children.size()))
+        m_children.push_back(std::move(child));
+    else
+        m_children.insert(m_children.begin() + index, std::move(child));
+    return ptr;
+}
+
+int Node::getChildIndex(Node* child) const {
+    for (int i = 0; i < static_cast<int>(m_children.size()); i++) {
+        if (m_children[i].get() == child) return i;
+    }
+    return -1;
+}
+
 void Node::removeChild(Node* child) {
     m_children.erase(
         std::remove_if(m_children.begin(), m_children.end(),

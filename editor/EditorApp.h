@@ -5,6 +5,8 @@
 #include "scene/Scene.h"
 #include "scene/Camera.h"
 #include "ImGuiLayer.h"
+#include "UndoManager.h"
+#include "Clipboard.h"
 
 #include "panels/SceneViewPanel.h"
 #include "panels/HierarchyPanel.h"
@@ -22,8 +24,9 @@ namespace QymEngine {
 class EditorApp : public Application {
 public:
     EditorApp();
+#ifndef __ANDROID__
     void setCaptureAndExit(bool enabled, const std::string& outputPath = "");
-
+#endif
 
 protected:
     void onInit() override;
@@ -32,14 +35,19 @@ protected:
 
 private:
     void setupDockingLayout();
+    void handleShortcuts();
+#ifndef __ANDROID__
     void initRenderDoc();
     void captureFrame();
     void checkExternalCaptureTrigger();
+#endif
 
     Renderer       m_renderer;
     Scene          m_scene;
     Camera         m_camera;
     ImGuiLayer     m_imguiLayer;
+    UndoManager    m_undoManager;
+    Clipboard      m_clipboard;
 
     SceneViewPanel m_sceneViewPanel;
     HierarchyPanel m_hierarchyPanel;
@@ -49,6 +57,9 @@ private:
     ModelPreview   m_modelPreview;
 
     bool m_firstFrame = true;
+    std::string m_currentScenePath;
+    bool m_showSaveAsPopup = false;
+    char m_saveAsBuffer[256] = {};
 
 #ifndef __ANDROID__
     RENDERDOC_API_1_6_0* m_rdocApi = nullptr;

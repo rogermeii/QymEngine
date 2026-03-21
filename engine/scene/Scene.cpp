@@ -16,8 +16,57 @@ Node* Scene::createNode(const std::string& nodeName, Node* parent) {
     return parent->addChild(nodeName);
 }
 
+void Scene::selectNode(Node* node, bool addToSelection) {
+    if (!addToSelection) {
+        m_selectedNodes.clear();
+    }
+    if (node) {
+        m_selectedNodes.insert(node);
+        m_selectedNode = node;
+    }
+}
+
+void Scene::deselectNode(Node* node) {
+    m_selectedNodes.erase(node);
+    if (m_selectedNode == node) {
+        m_selectedNode = m_selectedNodes.empty() ? nullptr : *m_selectedNodes.begin();
+    }
+}
+
+void Scene::clearSelection() {
+    m_selectedNodes.clear();
+    m_selectedNode = nullptr;
+}
+
+void Scene::selectRange(Node* from, Node* to) {
+    std::vector<Node*> flat;
+    collectFlatList(m_root.get(), flat);
+
+    int idxFrom = -1, idxTo = -1;
+    for (int i = 0; i < static_cast<int>(flat.size()); i++) {
+        if (flat[i] == from) idxFrom = i;
+        if (flat[i] == to) idxTo = i;
+    }
+    if (idxFrom < 0 || idxTo < 0) return;
+    if (idxFrom > idxTo) std::swap(idxFrom, idxTo);
+
+    m_selectedNodes.clear();
+    for (int i = idxFrom; i <= idxTo; i++) {
+        m_selectedNodes.insert(flat[i]);
+    }
+    m_selectedNode = to;
+}
+
+void Scene::collectFlatList(Node* node, std::vector<Node*>& list) const {
+    for (auto& child : node->getChildren()) {
+        list.push_back(child.get());
+        collectFlatList(child.get(), list);
+    }
+}
+
 void Scene::removeNode(Node* node) {
     if (!node || node == m_root.get()) return;
+    m_selectedNodes.erase(node);
     if (m_selectedNode == node) m_selectedNode = nullptr;
     Node* parent = node->getParent();
     if (parent) parent->removeChild(node);
@@ -54,8 +103,10 @@ static json serializeNode(const Node* node) {
     return j;
 }
 
-static void deserializeNode(Node* parent, const json& j) {
-    Node* node = parent->addChild(j.value("name", "Node"));
+static void deserializeNode(Node* parent, const json& j, int insertIndex = -1) {
+    Node* node = (insertIndex >= 0)
+        ? parent->insertChild(j.value("name", "Node"), insertIndex)
+        : parent->addChild(j.value("name", "Node"));
     if (j.contains("meshType"))
         node->meshType = meshTypeFromString(j["meshType"].get<std::string>());
     if (j.contains("transform")) {
@@ -122,6 +173,59 @@ void Scene::deserialize(const std::string& path) {
         }
     } catch (...) {
         return; // File not found or parse error
+    }
+}
+
+std::string Scene::serializeNodeToString(Node* node) const {
+    return serializeNode(node).dump();
+}
+
+Node* Scene::deserializeNodeFromString(const std::string& jsonStr, Node* parent) {
+    json j = json::parse(jsonStr, nullptr, false);
+    if (j.is_discarded()) return nullptr;
+    if (!parent) parent = m_root.get();
+    int childCountBefore = static_cast<int>(parent->getChildren().size());
+    deserializeNode(parent, j);
+    if (static_cast<int>(parent->getChildren().size()) > childCountBefore)
+        return parent->getChildren().back().get();
+    return nullptr;
+}
+
+Node* Scene::deserializeNodeFromString(const std::string& jsonStr, Node* parent, int index) {
+    json j = json::parse(jsonStr, nullptr, false);
+    if (j.is_discarded()) return nullptr;
+    if (!parent) parent = m_root.get();
+    int childCountBefore = static_cast<int>(parent->getChildren().size());
+    deserializeNode(parent, j, index);
+    // Find the newly inserted node
+    if (index >= 0 && index < static_cast<int>(parent->getChildren().size()))
+        return parent->getChildren()[index].get();
+    if (static_cast<int>(parent->getChildren().size()) > childCountBefore)
+        return parent->getChildren().back().get();
+    return nullptr;
+}
+
+std::string Scene::toJsonString() const {
+    json j;
+    j["scene"]["name"] = name;
+    j["scene"]["nodes"] = json::array();
+    for (auto& child : m_root->getChildren())
+        j["scene"]["nodes"].push_back(serializeNode(child.get()));
+    return j.dump();
+}
+
+void Scene::fromJsonString(const std::string& jsonStr) {
+    json j = json::parse(jsonStr, nullptr, false);
+    if (j.is_discarded() || !j.contains("scene")) return;
+
+    m_selectedNode = nullptr;
+    m_root = std::make_unique<Node>("Root");
+
+    auto& sceneJson = j["scene"];
+    name = sceneJson.value("name", "Untitled");
+    if (sceneJson.contains("nodes")) {
+        for (auto& nodeJson : sceneJson["nodes"])
+            deserializeNode(m_root.get(), nodeJson);
     }
 }
 

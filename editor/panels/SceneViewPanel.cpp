@@ -150,8 +150,14 @@ void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& sc
             glm::value_ptr(worldMatrix)
         );
 
+        // Save undo state when gizmo starts being used
+        bool gizmoUsing = ImGuizmo::IsUsing();
+        if (gizmoUsing && !m_wasGizmoUsing && m_saveState)
+            m_saveState();
+        m_wasGizmoUsing = gizmoUsing;
+
         // If gizmo was used, decompose back to local transform
-        if (ImGuizmo::IsUsing()) {
+        if (gizmoUsing) {
             // Convert world matrix back to local
             glm::mat4 localMatrix = worldMatrix;
             if (selected->getParent()) {
