@@ -63,7 +63,7 @@ void ImGuiLayer::init(Renderer& renderer)
     float fontSize = 36.0f;
 #else
     const char* fontPath = "C:/Windows/Fonts/msyh.ttc";
-    float fontSize = 20.0f;
+    float fontSize = 16.0f;
 #endif
     ImFont* font = io.Fonts->AddFontFromFileTTF(fontPath, fontSize, &fontConfig, io.Fonts->GetGlyphRangesChineseFull());
     if (!font) {

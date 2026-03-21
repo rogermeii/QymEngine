@@ -52,7 +52,7 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                 }
             } else if (projectPanel.isSelectedMaterial()) {
                 // --- Material editing (only when selected in Project panel) ---
-                const MaterialAsset* mat = assetManager.loadMaterial(projectPanel.getSelectedFile());
+                const MaterialInstance* mat = assetManager.loadMaterial(projectPanel.getSelectedFile());
                 if (mat) {
                     ImGui::Text("Material: %s", mat->name.c_str());
                     ImGui::Separator();
@@ -62,7 +62,7 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                         drawGoToButton("goto_shader", mat->shaderPath, projectPanel);
                     }
 
-                    MaterialAsset* mutableMat = const_cast<MaterialAsset*>(mat);
+                    MaterialInstance* mutableMat = const_cast<MaterialInstance*>(mat);
 
                     // Dynamic UI from shader properties
                     if (mat->shader) {
@@ -72,37 +72,67 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                             texItems.push_back(f);
 
                         for (auto& prop : mat->shader->properties) {
-                            if (prop.type == "color4" && prop.name == "baseColor") {
-                                ImGui::ColorEdit4("Base Color", &mutableMat->baseColor.x);
-                            } else if (prop.type == "float") {
-                                if (prop.name == "metallic") {
-                                    ImGui::SliderFloat("Metallic", &mutableMat->metallic, prop.rangeMin, prop.rangeMax);
-                                } else if (prop.name == "roughness") {
-                                    ImGui::SliderFloat("Roughness", &mutableMat->roughness, prop.rangeMin, prop.rangeMax);
-                                }
-                            } else if (prop.type == "texture2D") {
-                                std::string* texPath = nullptr;
-                                if (prop.name == "albedoMap") texPath = &mutableMat->albedoMapPath;
-                                else if (prop.name == "normalMap") texPath = &mutableMat->normalMapPath;
-
-                                if (texPath) {
-                                    int currentTex = 0;
-                                    for (int i = 1; i < static_cast<int>(texItems.size()); i++) {
-                                        if (texItems[i] == *texPath) { currentTex = i; break; }
-                                    }
-
-                                    if (ImGui::BeginCombo(prop.name.c_str(), texItems[currentTex].c_str())) {
-                                        for (int i = 0; i < static_cast<int>(texItems.size()); i++) {
-                                            bool isSel = (currentTex == i);
-                                            if (ImGui::Selectable(texItems[i].c_str(), isSel)) {
-                                                *texPath = (i == 0) ? "" : texItems[i];
+                            if (prop.type == "color4") {
+                                auto& val = mutableMat->vec4Props[prop.name];
+                                if (ImGui::ColorEdit4(prop.name.c_str(), &val.x)) {
+                                    // Write updated value to mapped param buffer
+                                    if (mutableMat->paramMapped && mat->shader) {
+                                        const auto& reflection = mat->shader->pipeline.getReflection();
+                                        auto set1It = reflection.sets.find(1);
+                                        if (set1It != reflection.sets.end()) {
+                                            for (auto& rb : set1It->second) {
+                                                if (rb.type == "uniformBuffer") {
+                                                    for (auto& member : rb.members) {
+                                                        if (member.name == prop.name) {
+                                                            memcpy(static_cast<char*>(mutableMat->paramMapped) + member.offset,
+                                                                   &val, sizeof(glm::vec4));
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
-                                        ImGui::EndCombo();
                                     }
-                                    if (!texPath->empty()) {
-                                        drawGoToButton(("goto_" + prop.name).c_str(), *texPath, projectPanel);
+                                }
+                            } else if (prop.type == "float") {
+                                auto& val = mutableMat->floatProps[prop.name];
+                                if (ImGui::SliderFloat(prop.name.c_str(), &val, prop.rangeMin, prop.rangeMax)) {
+                                    // Write updated value to mapped param buffer
+                                    if (mutableMat->paramMapped && mat->shader) {
+                                        const auto& reflection = mat->shader->pipeline.getReflection();
+                                        auto set1It = reflection.sets.find(1);
+                                        if (set1It != reflection.sets.end()) {
+                                            for (auto& rb : set1It->second) {
+                                                if (rb.type == "uniformBuffer") {
+                                                    for (auto& member : rb.members) {
+                                                        if (member.name == prop.name) {
+                                                            memcpy(static_cast<char*>(mutableMat->paramMapped) + member.offset,
+                                                                   &val, sizeof(float));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
+                                }
+                            } else if (prop.type == "texture2D") {
+                                std::string& texPath = mutableMat->texturePaths[prop.name];
+
+                                int currentTex = 0;
+                                for (int i = 1; i < static_cast<int>(texItems.size()); i++) {
+                                    if (texItems[i] == texPath) { currentTex = i; break; }
+                                }
+
+                                if (ImGui::BeginCombo(prop.name.c_str(), texItems[currentTex].c_str())) {
+                                    for (int i = 0; i < static_cast<int>(texItems.size()); i++) {
+                                        bool isSel = (currentTex == i);
+                                        if (ImGui::Selectable(texItems[i].c_str(), isSel)) {
+                                            texPath = (i == 0) ? "" : texItems[i];
+                                        }
+                                    }
+                                    ImGui::EndCombo();
+                                }
+                                if (!texPath.empty()) {
+                                    drawGoToButton(("goto_" + prop.name).c_str(), texPath, projectPanel);
                                 }
                             }
                         }
@@ -114,14 +144,14 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                         j["name"] = mutableMat->name;
                         j["shader"] = mutableMat->shaderPath;
                         nlohmann::json props;
-                        props["baseColor"] = {mutableMat->baseColor.r, mutableMat->baseColor.g,
-                                              mutableMat->baseColor.b, mutableMat->baseColor.a};
-                        props["metallic"] = mutableMat->metallic;
-                        props["roughness"] = mutableMat->roughness;
-                        if (!mutableMat->albedoMapPath.empty())
-                            props["albedoMap"] = mutableMat->albedoMapPath;
-                        if (!mutableMat->normalMapPath.empty())
-                            props["normalMap"] = mutableMat->normalMapPath;
+                        for (auto& [name, val] : mutableMat->vec4Props)
+                            props[name] = {val.r, val.g, val.b, val.a};
+                        for (auto& [name, val] : mutableMat->floatProps)
+                            props[name] = val;
+                        for (auto& [name, path] : mutableMat->texturePaths) {
+                            if (!path.empty())
+                                props[name] = path;
+                        }
                         j["properties"] = props;
 
                         std::string savePath = std::string(ASSETS_DIR) + "/" + projectPanel.getSelectedFile();
@@ -263,10 +293,12 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
             drawGoToButton("goto_material", selected->materialPath, projectPanel);
 
             // Show read-only summary of material properties
-            const MaterialAsset* mat = assetManager.loadMaterial(selected->materialPath);
+            const MaterialInstance* mat = assetManager.loadMaterial(selected->materialPath);
             if (mat && mat->shader) {
                 ImGui::Text("  Shader: %s", mat->shader->name.c_str());
-                ImGui::Text("  Color: (%.1f, %.1f, %.1f)", mat->baseColor.r, mat->baseColor.g, mat->baseColor.b);
+                auto bcIt = mat->vec4Props.find("baseColor");
+                if (bcIt != mat->vec4Props.end())
+                    ImGui::Text("  Color: (%.1f, %.1f, %.1f)", bcIt->second.r, bcIt->second.g, bcIt->second.b);
             }
         }
     }

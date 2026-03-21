@@ -1,6 +1,7 @@
 // Lit PBR shader (Cook-Torrance GGX)
 
-struct UBO
+// Set 0: per-frame (engine-managed, all shaders must match)
+struct FrameData
 {
     float4x4 view;
     float4x4 proj;
@@ -10,20 +11,28 @@ struct UBO
     float3 cameraPos;
 };
 
-struct PushConstants
+[[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
+
+// Set 1: per-material (shader-specific)
+struct LitMaterialParams
 {
-    float4x4 model;
     float4 baseColor;
     float metallic;
     float roughness;
+};
+
+[[vk::binding(0, 1)]] ConstantBuffer<LitMaterialParams> materialParams;
+[[vk::binding(1, 1)]] Sampler2D albedoMap;
+[[vk::binding(2, 1)]] Sampler2D normalMap;
+
+// Push constant: per-object
+struct PushConstants
+{
+    float4x4 model;
     int highlighted;
 };
 
-[[vk::binding(0, 0)]] ConstantBuffer<UBO> ubo;
 [[vk::push_constant]] PushConstants pc;
-
-[[vk::binding(0, 1)]] Sampler2D texSampler;
-[[vk::binding(1, 1)]] Sampler2D normalMap;
 
 struct VSInput
 {
@@ -51,7 +60,7 @@ VSOutput vertexMain(VSInput input)
 {
     VSOutput output;
     float4 worldPos = mul(pc.model, float4(input.position, 1.0));
-    output.sv_position = mul(ubo.proj, mul(ubo.view, worldPos));
+    output.sv_position = mul(frame.proj, mul(frame.view, worldPos));
     output.color = input.color;
     output.texCoord = input.texCoord;
     output.highlighted = pc.highlighted;
@@ -61,9 +70,9 @@ VSOutput vertexMain(VSInput input)
     float3x3 modelMat3 = (float3x3)pc.model;
     output.normal = mul(modelMat3, input.normal);
     output.worldPos = worldPos.xyz;
-    output.baseColor = pc.baseColor;
-    output.metallic = pc.metallic;
-    output.roughness = pc.roughness;
+    output.baseColor = materialParams.baseColor;
+    output.metallic = materialParams.metallic;
+    output.roughness = materialParams.roughness;
     return output;
 }
 
@@ -113,12 +122,12 @@ float4 fragmentMain(VSOutput input) : SV_Target
     float3x3 TBN = float3x3(T, B, N);
     N = normalize(mul(mapN, TBN));
 
-    float3 albedo = texSampler.Sample(input.texCoord).rgb * input.baseColor.rgb;
+    float3 albedo = albedoMap.Sample(input.texCoord).rgb * input.baseColor.rgb;
     float metallic = input.metallic;
     float roughness = max(input.roughness, 0.04);
 
-    float3 V = normalize(ubo.cameraPos - input.worldPos);
-    float3 L = normalize(-ubo.lightDir);
+    float3 V = normalize(frame.cameraPos - input.worldPos);
+    float3 L = normalize(-frame.lightDir);
     float3 H = normalize(V + L);
 
     float NdotL = max(dot(N, L), 0.0);
@@ -139,8 +148,8 @@ float4 fragmentMain(VSOutput input) : SV_Target
     float3 kD = (float3(1.0) - F) * (1.0 - metallic);
     float3 diffuse = kD * albedo / PI;
 
-    float3 Lo = (diffuse + specular) * ubo.lightColor * NdotL;
-    float3 ambient = ubo.ambientColor * albedo;
+    float3 Lo = (diffuse + specular) * frame.lightColor * NdotL;
+    float3 ambient = frame.ambientColor * albedo;
     float3 result = ambient + Lo;
 
     return float4(result, input.baseColor.a);

@@ -228,15 +228,9 @@ void ModelPreview::createResources(Renderer& renderer)
             m_uboBuffer, m_uboMemory);
         vkMapMemory(device, m_uboMemory, 0, bufferSize, 0, &m_uboMapped);
 
-        VkDescriptorSetLayout uboLayout = renderer.getDescriptor().getUboLayout();
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool     = renderer.getDescriptor().getPool();
-        allocInfo.descriptorSetCount = 1;
-        allocInfo.pSetLayouts        = &uboLayout;
-
-        if (vkAllocateDescriptorSets(device, &allocInfo, &m_uboDescriptorSet) != VK_SUCCESS)
-            throw std::runtime_error("failed to allocate model preview UBO descriptor set!");
+        // Allocate UBO descriptor set using per-frame layout from cache
+        VkDescriptorSetLayout uboLayout = renderer.getPerFrameLayout();
+        m_uboDescriptorSet = renderer.getDescriptor().allocateSet(device, uboLayout);
 
         VkDescriptorBufferInfo bufferInfo{};
         bufferInfo.buffer = m_uboBuffer;
@@ -271,9 +265,10 @@ void ModelPreview::writePreviewUbo(const glm::vec3& boundsMin, const glm::vec3& 
     glm::vec3 eye = center + dir * distance;
 
     UniformBufferObject previewUbo{};
-    previewUbo.view = glm::lookAt(eye, center, glm::vec3(0, 1, 0));
-    previewUbo.proj = glm::perspective(fovY, 1.0f, 0.01f, distance * 3.0f);
-    previewUbo.proj[1][1] *= -1;  // Vulkan Y-flip
+    previewUbo.view = glm::transpose(glm::lookAt(eye, center, glm::vec3(0, 1, 0)));
+    auto projMat = glm::perspective(fovY, 1.0f, 0.01f, distance * 3.0f);
+    projMat[1][1] *= -1;  // Vulkan Y-flip
+    previewUbo.proj = glm::transpose(projMat);
     previewUbo.lightDir = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
     previewUbo.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
     previewUbo.ambientColor = glm::vec3(0.2f, 0.2f, 0.2f);
@@ -308,21 +303,21 @@ void ModelPreview::beginPreviewPass(Renderer& renderer)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       renderer.getOffscreenPipeline().getPipeline());
 
+    // Bind set 0 (per-frame UBO - using preview's own UBO)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         renderer.getOffscreenPipeline().getPipelineLayout(), 0, 1, &m_uboDescriptorSet, 0, nullptr);
 
-    VkDescriptorSet texSet = renderer.getDefaultMaterialTexSet();
+    // Bind set 1 (default material)
+    VkDescriptorSet matSet = renderer.getDefaultMaterialSet();
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        renderer.getOffscreenPipeline().getPipelineLayout(), 1, 1, &texSet, 0, nullptr);
+        renderer.getOffscreenPipeline().getPipelineLayout(), 1, 1, &matSet, 0, nullptr);
 
+    // Push constants: model + highlighted only
     PushConstantData pc{};
     pc.model = glm::mat4(1.0f);
-    pc.baseColor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
-    pc.metallic = 0.0f;
-    pc.roughness = 0.5f;
     pc.highlighted = 0;
     vkCmdPushConstants(cmd, renderer.getOffscreenPipeline().getPipelineLayout(),
-        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        VK_SHADER_STAGE_VERTEX_BIT,
         0, sizeof(PushConstantData), &pc);
 }
 

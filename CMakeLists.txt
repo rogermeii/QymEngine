@@ -57,6 +57,9 @@ target_link_libraries(imgui PUBLIC Vulkan::Vulkan SDL2::SDL2-static)
 target_sources(imgui PRIVATE "3rd-party/imguizmo/ImGuizmo.cpp")
 target_include_directories(imgui PUBLIC "${CMAKE_SOURCE_DIR}/3rd-party/imguizmo")
 
+# Shader compiler tool
+add_subdirectory(tools/shader_compiler)
+
 # 引擎（暂时直接编译 main.cpp 为可执行文件）
 add_subdirectory(engine)
 

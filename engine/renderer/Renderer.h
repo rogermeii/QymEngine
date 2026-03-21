@@ -9,6 +9,7 @@
 #include "renderer/Descriptor.h"
 #include "renderer/CommandManager.h"
 #include "renderer/MeshLibrary.h"
+#include "renderer/DescriptorLayoutCache.h"
 #include "asset/AssetManager.h"
 #include "scene/Scene.h"
 #include "scene/Camera.h"
@@ -64,11 +65,12 @@ public:
     Descriptor&      getDescriptor()                    { return m_descriptor; }
     Buffer&          getBuffer()                        { return m_buffer; }
     MeshLibrary&     getMeshLibrary()                   { return m_meshLibrary; }
-    VkDescriptorSet  getDefaultTextureSet()      const { return m_defaultTextureSet; }
+    VkDescriptorSet  getDefaultMaterialSet()    const { return m_defaultMaterialSet; }
     VkImageView      getWhiteFallbackView()     const { return m_whiteFallbackView; }
     VkImageView      getNormalFallbackView()    const { return m_normalFallbackView; }
     VkSampler        getFallbackSampler()       const { return m_fallbackSampler; }
-    VkDescriptorSet  getDefaultMaterialTexSet() const { return m_defaultMaterialTexSet; }
+    DescriptorLayoutCache& getLayoutCache()           { return m_layoutCache; }
+    VkDescriptorSetLayout  getPerFrameLayout()  const { return m_perFrameLayout; }
 
 private:
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
@@ -89,9 +91,10 @@ private:
     Texture        m_texture;
     MeshLibrary    m_meshLibrary;
     AssetManager   m_assetManager;
+    DescriptorLayoutCache m_layoutCache;
 
-    // Default texture descriptor set (for nodes without texturePath)
-    VkDescriptorSet m_defaultTextureSet = VK_NULL_HANDLE;
+    // Per-frame layout (cache-managed, not owned)
+    VkDescriptorSetLayout m_perFrameLayout = VK_NULL_HANDLE;
 
     const Camera* m_camera = nullptr;
     Scene* m_activeScene = nullptr;
@@ -134,7 +137,12 @@ private:
     VkImage          m_normalFallbackImage    = VK_NULL_HANDLE;
     VkDeviceMemory   m_normalFallbackMemory   = VK_NULL_HANDLE;
     VkImageView      m_normalFallbackView     = VK_NULL_HANDLE;
-    VkDescriptorSet  m_defaultMaterialTexSet  = VK_NULL_HANDLE;
+
+    // Default material descriptor set (for nodes without material)
+    VkDescriptorSet  m_defaultMaterialSet     = VK_NULL_HANDLE;
+    VkBuffer         m_defaultMaterialParamBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory   m_defaultMaterialParamMemory = VK_NULL_HANDLE;
+    void*            m_defaultMaterialParamMapped = nullptr;
 };
 
 } // namespace QymEngine

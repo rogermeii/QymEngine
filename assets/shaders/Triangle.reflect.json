@@ -9,32 +9,14 @@
           "type": "float4x4"
         },
         {
-          "name": "baseColor",
-          "offset": 64,
-          "size": 16,
-          "type": "float4"
-        },
-        {
-          "name": "metallic",
-          "offset": 80,
-          "size": 4,
-          "type": "float"
-        },
-        {
-          "name": "roughness",
-          "offset": 84,
-          "size": 4,
-          "type": "float"
-        },
-        {
           "name": "highlighted",
-          "offset": 88,
+          "offset": 64,
           "size": 4,
           "type": "int"
         }
       ],
       "offset": 0,
-      "size": 92,
+      "size": 68,
       "stages": [
         "vertex"
       ]
@@ -83,7 +65,7 @@
               "type": "float3"
             }
           ],
-          "name": "ubo",
+          "name": "frame",
           "size": 192,
           "stages": [
             "fragment",
@@ -98,7 +80,44 @@
       "bindings": [
         {
           "binding": 0,
-          "name": "texSampler",
+          "members": [
+            {
+              "name": "baseColor",
+              "offset": 0,
+              "size": 16,
+              "type": "float4"
+            },
+            {
+              "name": "metallic",
+              "offset": 16,
+              "size": 4,
+              "type": "float"
+            },
+            {
+              "name": "roughness",
+              "offset": 20,
+              "size": 4,
+              "type": "float"
+            }
+          ],
+          "name": "materialParams",
+          "size": 32,
+          "stages": [
+            "vertex"
+          ],
+          "type": "uniformBuffer"
+        },
+        {
+          "binding": 1,
+          "name": "albedoMap",
+          "stages": [
+            "fragment"
+          ],
+          "type": "combinedImageSampler"
+        },
+        {
+          "binding": 2,
+          "name": "normalMap",
           "stages": [
             "fragment"
           ],

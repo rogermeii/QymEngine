@@ -1,6 +1,7 @@
 // Triangle/Basic shader (Blinn-Phong lighting)
 
-struct UBO
+// Set 0: per-frame (engine-managed, all shaders must match)
+struct FrameData
 {
     float4x4 view;
     float4x4 proj;
@@ -10,19 +11,28 @@ struct UBO
     float3 cameraPos;
 };
 
-struct PushConstants
+[[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
+
+// Set 1: per-material (shader-specific)
+struct TriangleMaterialParams
 {
-    float4x4 model;
     float4 baseColor;
     float metallic;
     float roughness;
+};
+
+[[vk::binding(0, 1)]] ConstantBuffer<TriangleMaterialParams> materialParams;
+[[vk::binding(1, 1)]] Sampler2D albedoMap;
+[[vk::binding(2, 1)]] Sampler2D normalMap;
+
+// Push constant: per-object
+struct PushConstants
+{
+    float4x4 model;
     int highlighted;
 };
 
-[[vk::binding(0, 0)]] ConstantBuffer<UBO> ubo;
 [[vk::push_constant]] PushConstants pc;
-
-[[vk::binding(0, 1)]] Sampler2D texSampler;
 
 struct VSInput
 {
@@ -50,16 +60,16 @@ VSOutput vertexMain(VSInput input)
 {
     VSOutput output;
     float4 worldPos = mul(pc.model, float4(input.position, 1.0));
-    output.sv_position = mul(ubo.proj, mul(ubo.view, worldPos));
+    output.sv_position = mul(frame.proj, mul(frame.view, worldPos));
     output.color = input.color;
     output.texCoord = input.texCoord;
     output.highlighted = pc.highlighted;
     float3x3 modelMat3 = (float3x3)pc.model;
     output.normal = mul(modelMat3, input.normal);
     output.worldPos = worldPos.xyz;
-    output.baseColor = pc.baseColor;
-    output.metallic = pc.metallic;
-    output.roughness = pc.roughness;
+    output.baseColor = materialParams.baseColor;
+    output.metallic = materialParams.metallic;
+    output.roughness = materialParams.roughness;
     return output;
 }
 
@@ -69,22 +79,24 @@ float4 fragmentMain(VSOutput input) : SV_Target
     if (input.highlighted == 1)
         return input.baseColor;
 
-    float3 texColor = texSampler.Sample(input.texCoord).rgb;
+    float3 texColor = albedoMap.Sample(input.texCoord).rgb;
     float3 albedo = texColor * input.baseColor.rgb;
-    float3 normal = normalize(input.normal);
-    float3 lightD = normalize(-ubo.lightDir);
+    // Sample normal map to keep binding alive (trivial usage for layout compatibility)
+    float3 mapN = normalMap.Sample(input.texCoord).rgb * 2.0 - 1.0;
+    float3 normal = normalize(input.normal + mapN * 0.0001);
+    float3 lightD = normalize(-frame.lightDir);
 
-    float3 ambient = ubo.ambientColor * albedo;
+    float3 ambient = frame.ambientColor * albedo;
 
     float diff = max(dot(normal, lightD), 0.0);
-    float3 diffuseColor = diff * ubo.lightColor * albedo * (1.0 - input.metallic);
+    float3 diffuseColor = diff * frame.lightColor * albedo * (1.0 - input.metallic);
 
-    float3 viewDir = normalize(ubo.cameraPos - input.worldPos);
+    float3 viewDir = normalize(frame.cameraPos - input.worldPos);
     float3 halfDir = normalize(lightD + viewDir);
     float shininess = lerp(256.0, 8.0, input.roughness);
     float spec = pow(max(dot(normal, halfDir), 0.0), shininess);
     float specStrength = lerp(0.3, 1.0, input.metallic);
-    float3 specular = spec * ubo.lightColor * specStrength;
+    float3 specular = spec * frame.lightColor * specStrength;
 
     float3 result = ambient + diffuseColor + specular;
     return float4(result, input.baseColor.a);

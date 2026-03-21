@@ -43,7 +43,7 @@
               "type": "float3"
             }
           ],
-          "name": "ubo",
+          "name": "frame",
           "size": 192,
           "stages": [
             "fragment",

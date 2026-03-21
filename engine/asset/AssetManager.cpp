@@ -9,6 +9,7 @@
 #include "renderer/VulkanContext.h"
 #include "renderer/CommandManager.h"
 #include "renderer/Buffer.h"
+#include "renderer/Descriptor.h"
 
 #include <array>
 #include <sstream>
@@ -52,7 +53,6 @@ void AssetManager::shutdown(VkDevice device)
             vkDestroyImage(device, tex.image, nullptr);
         if (tex.memory != VK_NULL_HANDLE)
             vkFreeMemory(device, tex.memory, nullptr);
-        // descriptorSet is freed when the pool is destroyed
     }
     m_textureCache.clear();
 
@@ -61,7 +61,17 @@ void AssetManager::shutdown(VkDevice device)
     }
     m_shaderCache.clear();
 
-    // Material descriptor sets are freed when the pool is destroyed
+    // Destroy material param buffers
+    for (auto& [key, mat] : m_materialCache) {
+        if (mat.paramBuffer != VK_NULL_HANDLE)
+            vkDestroyBuffer(device, mat.paramBuffer, nullptr);
+        if (mat.paramMemory != VK_NULL_HANDLE) {
+            if (mat.paramMapped)
+                vkUnmapMemory(device, mat.paramMemory);
+            vkFreeMemory(device, mat.paramMemory, nullptr);
+        }
+        // Descriptor sets are freed when the pool is destroyed
+    }
     m_materialCache.clear();
 }
 
@@ -260,7 +270,7 @@ const TextureAsset* AssetManager::loadTexture(const std::string& relativePath)
     createTextureFromPixels(pixels, texWidth, texHeight, texAsset);
     stbi_image_free(pixels);
 
-    // Create descriptor set for this texture
+    // Create descriptor set for this texture (for Inspector preview)
     if (m_textureSetLayout != VK_NULL_HANDLE && m_textureDescriptorPool != VK_NULL_HANDLE) {
         VkDescriptorSetAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -350,25 +360,13 @@ const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
         }
     }
 
-    // Create pipeline using the offscreen render pass and descriptor set layouts
-    if (m_offscreenRenderPass != VK_NULL_HANDLE &&
-        m_uboLayout != VK_NULL_HANDLE &&
-        m_texLayout != VK_NULL_HANDLE)
-    {
-        VkPushConstantRange pcRange{};
-        pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-        pcRange.offset = 0;
-        pcRange.size = sizeof(PushConstantData);
-
-        std::vector<VkDescriptorSetLayout> setLayouts = { m_uboLayout, m_texLayout };
-        std::vector<VkPushConstantRange> pcRanges = { pcRange };
-
+    // Create pipeline using layout cache (reflection-driven)
+    if (m_offscreenRenderPass != VK_NULL_HANDLE && m_layoutCache) {
         shader.pipeline.create(
             m_ctx->getDevice(),
             m_offscreenRenderPass,
-            setLayouts,
             m_offscreenExtent,
-            pcRanges,
+            *m_layoutCache,
             VK_POLYGON_MODE_FILL,
             shader.vertPath,
             shader.fragPath
@@ -379,7 +377,7 @@ const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
     return &m_shaderCache[relativePath];
 }
 
-const MaterialAsset* AssetManager::loadMaterial(const std::string& relativePath)
+const MaterialInstance* AssetManager::loadMaterial(const std::string& relativePath)
 {
     // Check cache
     auto it = m_materialCache.find(relativePath);
@@ -390,7 +388,7 @@ const MaterialAsset* AssetManager::loadMaterial(const std::string& relativePath)
 
     std::string fullPath = m_assetsDir.empty() ? relativePath : (m_assetsDir + "/" + relativePath);
 
-    // Read and parse JSON file via SDL_RWops
+    // Read and parse JSON file
     std::string content;
     try {
         content = readFileAsString(fullPath);
@@ -400,7 +398,7 @@ const MaterialAsset* AssetManager::loadMaterial(const std::string& relativePath)
     nlohmann::json j = nlohmann::json::parse(content, nullptr, false);
     if (j.is_discarded()) return nullptr;
 
-    MaterialAsset mat{};
+    MaterialInstance mat{};
     mat.name = j.value("name", "Unnamed");
     mat.shaderPath = j.value("shader", "");
 
@@ -409,83 +407,145 @@ const MaterialAsset* AssetManager::loadMaterial(const std::string& relativePath)
         mat.shader = const_cast<ShaderAsset*>(loadShader(mat.shaderPath));
     }
 
-    // Parse properties
+    // Parse properties from JSON
     if (j.contains("properties")) {
         auto& props = j["properties"];
         if (props.contains("baseColor")) {
             auto& c = props["baseColor"];
-            mat.baseColor = {c[0].get<float>(), c[1].get<float>(), c[2].get<float>(), c[3].get<float>()};
+            mat.vec4Props["baseColor"] = {c[0].get<float>(), c[1].get<float>(), c[2].get<float>(), c[3].get<float>()};
         }
         if (props.contains("metallic"))
-            mat.metallic = props["metallic"].get<float>();
+            mat.floatProps["metallic"] = props["metallic"].get<float>();
         if (props.contains("roughness"))
-            mat.roughness = props["roughness"].get<float>();
+            mat.floatProps["roughness"] = props["roughness"].get<float>();
         if (props.contains("albedoMap"))
-            mat.albedoMapPath = props["albedoMap"].get<std::string>();
+            mat.texturePaths["albedoMap"] = props["albedoMap"].get<std::string>();
         if (props.contains("normalMap"))
-            mat.normalMapPath = props["normalMap"].get<std::string>();
+            mat.texturePaths["normalMap"] = props["normalMap"].get<std::string>();
     }
 
-    // Load textures, using fallbacks for missing maps
-    VkImageView albedoView = m_fallbackAlbedoView;
-    VkSampler albedoSampler = m_fallbackAlbedoSampler;
-    VkImageView normalView = m_fallbackNormalView;
-    VkSampler normalSampler = m_fallbackNormalSampler;
-
-    if (!mat.albedoMapPath.empty()) {
-        auto* tex = loadTexture(mat.albedoMapPath);
-        if (tex) {
-            albedoView = tex->view;
-            albedoSampler = tex->sampler;
-        }
-    }
-    if (!mat.normalMapPath.empty()) {
-        auto* tex = loadTexture(mat.normalMapPath);
-        if (tex) {
-            normalView = tex->view;
-            normalSampler = tex->sampler;
-        }
-    }
-
-    // Create descriptor set with both albedo and normal map bindings
     VkDevice device = m_ctx->getDevice();
 
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = m_textureDescriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_textureSetLayout;
+    // Build material descriptor set from shader reflection
+    if (mat.shader && m_layoutCache && m_descriptor) {
+        const auto& reflection = mat.shader->pipeline.getReflection();
 
-    if (vkAllocateDescriptorSets(device, &allocInfo, &mat.textureSet) != VK_SUCCESS)
-        throw std::runtime_error("failed to allocate material texture descriptor set!");
+        // Get set 1 bindings from reflection
+        auto set1It = reflection.sets.find(1);
+        if (set1It != reflection.sets.end()) {
+            // Build set 1 layout via cache
+            auto bindings = reflection.buildBindings(1);
+            VkDescriptorSetLayout set1Layout = m_layoutCache->getOrCreate(device, bindings);
 
-    std::array<VkDescriptorImageInfo, 2> imageInfos{};
-    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfos[0].imageView = albedoView;
-    imageInfos[0].sampler = albedoSampler;
+            // Allocate descriptor set
+            mat.descriptorSet = m_descriptor->allocateSet(device, set1Layout);
 
-    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfos[1].imageView = normalView;
-    imageInfos[1].sampler = normalSampler;
+            // Find the UBO binding (binding 0) to get size
+            uint32_t paramBufferSize = 0;
+            const ReflectedBinding* uboBinding = nullptr;
+            for (auto& rb : set1It->second) {
+                if (rb.type == "uniformBuffer" && rb.binding == 0) {
+                    paramBufferSize = rb.size;
+                    uboBinding = &rb;
+                    break;
+                }
+            }
 
-    std::array<VkWriteDescriptorSet, 2> writes{};
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = mat.textureSet;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].descriptorCount = 1;
-    writes[0].pImageInfo = &imageInfos[0];
+            // Create material params UBO
+            if (paramBufferSize > 0) {
+                mat.paramBufferSize = paramBufferSize;
+                Buffer::createBuffer(*m_ctx, paramBufferSize,
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    mat.paramBuffer, mat.paramMemory);
+                vkMapMemory(device, mat.paramMemory, 0, paramBufferSize, 0, &mat.paramMapped);
 
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = mat.textureSet;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[1].descriptorCount = 1;
-    writes[1].pImageInfo = &imageInfos[1];
+                // Initialize buffer to zero
+                memset(mat.paramMapped, 0, paramBufferSize);
 
-    vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+                // Write property values at reflected offsets
+                if (uboBinding) {
+                    for (auto& member : uboBinding->members) {
+                        if (member.type == "float4") {
+                            auto vIt = mat.vec4Props.find(member.name);
+                            if (vIt != mat.vec4Props.end()) {
+                                memcpy(static_cast<char*>(mat.paramMapped) + member.offset,
+                                       &vIt->second, sizeof(glm::vec4));
+                            }
+                        } else if (member.type == "float") {
+                            auto fIt = mat.floatProps.find(member.name);
+                            if (fIt != mat.floatProps.end()) {
+                                memcpy(static_cast<char*>(mat.paramMapped) + member.offset,
+                                       &fIt->second, sizeof(float));
+                            }
+                        }
+                    }
+                }
 
-    m_materialCache[relativePath] = mat;
+                // Write UBO descriptor (binding 0)
+                VkDescriptorBufferInfo bufferInfo{};
+                bufferInfo.buffer = mat.paramBuffer;
+                bufferInfo.offset = 0;
+                bufferInfo.range = paramBufferSize;
+
+                VkWriteDescriptorSet uboWrite{};
+                uboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                uboWrite.dstSet = mat.descriptorSet;
+                uboWrite.dstBinding = 0;
+                uboWrite.dstArrayElement = 0;
+                uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                uboWrite.descriptorCount = 1;
+                uboWrite.pBufferInfo = &bufferInfo;
+
+                vkUpdateDescriptorSets(device, 1, &uboWrite, 0, nullptr);
+            }
+
+            // Write sampler bindings
+            for (auto& rb : set1It->second) {
+                if (rb.type == "combinedImageSampler") {
+                    VkImageView texView = m_fallbackAlbedoView;
+                    VkSampler texSampler = m_fallbackAlbedoSampler;
+
+                    // Check if this is a normal map by name
+                    bool isNormal = (rb.name.find("normal") != std::string::npos ||
+                                     rb.name.find("Normal") != std::string::npos);
+
+                    if (isNormal) {
+                        texView = m_fallbackNormalView;
+                        texSampler = m_fallbackNormalSampler;
+                    }
+
+                    // Check if material has a texture path for this binding
+                    auto tIt = mat.texturePaths.find(rb.name);
+                    if (tIt != mat.texturePaths.end() && !tIt->second.empty()) {
+                        auto* tex = loadTexture(tIt->second);
+                        if (tex) {
+                            texView = tex->view;
+                            texSampler = tex->sampler;
+                        }
+                    }
+
+                    VkDescriptorImageInfo imageInfo{};
+                    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    imageInfo.imageView = texView;
+                    imageInfo.sampler = texSampler;
+
+                    VkWriteDescriptorSet samplerWrite{};
+                    samplerWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    samplerWrite.dstSet = mat.descriptorSet;
+                    samplerWrite.dstBinding = rb.binding;
+                    samplerWrite.dstArrayElement = 0;
+                    samplerWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    samplerWrite.descriptorCount = 1;
+                    samplerWrite.pImageInfo = &imageInfo;
+
+                    vkUpdateDescriptorSets(device, 1, &samplerWrite, 0, nullptr);
+                }
+            }
+        }
+    }
+
+    m_materialCache[relativePath] = std::move(mat);
     return &m_materialCache[relativePath];
 }
 

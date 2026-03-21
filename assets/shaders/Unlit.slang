@@ -1,6 +1,7 @@
 // Unlit shader (flat color / texture)
 
-struct UBO
+// Set 0: per-frame (engine-managed, all shaders must match)
+struct FrameData
 {
     float4x4 view;
     float4x4 proj;
@@ -10,19 +11,25 @@ struct UBO
     float3 cameraPos;
 };
 
+[[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
+
+// Set 1: per-material (shader-specific)
+struct UnlitMaterialParams
+{
+    float4 baseColor;
+};
+
+[[vk::binding(0, 1)]] ConstantBuffer<UnlitMaterialParams> materialParams;
+[[vk::binding(1, 1)]] Sampler2D albedoMap;
+
+// Push constant: per-object
 struct PushConstants
 {
     float4x4 model;
-    float4 baseColor;
-    float metallic;
-    float roughness;
     int highlighted;
 };
 
-[[vk::binding(0, 0)]] ConstantBuffer<UBO> ubo;
 [[vk::push_constant]] PushConstants pc;
-
-[[vk::binding(0, 1)]] Sampler2D albedoMap;
 
 struct VSInput
 {
@@ -41,8 +48,6 @@ struct VSOutput
     [[vk::location(3)]] float3 normal;
     [[vk::location(4)]] float3 worldPos;
     [[vk::location(5)]] float4 baseColor;
-    [[vk::location(6)]] float metallic;
-    [[vk::location(7)]] float roughness;
 };
 
 [shader("vertex")]
@@ -50,15 +55,13 @@ VSOutput vertexMain(VSInput input)
 {
     VSOutput output;
     float4 worldPos = mul(pc.model, float4(input.position, 1.0));
-    output.sv_position = mul(ubo.proj, mul(ubo.view, worldPos));
+    output.sv_position = mul(frame.proj, mul(frame.view, worldPos));
     output.color = float3(0.0);
     output.texCoord = input.texCoord;
     output.highlighted = pc.highlighted;
     output.normal = float3(0.0, 1.0, 0.0);
     output.worldPos = float3(0.0);
-    output.baseColor = pc.baseColor;
-    output.metallic = 0.0;
-    output.roughness = 0.0;
+    output.baseColor = materialParams.baseColor;
     return output;
 }
 

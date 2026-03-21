@@ -65,11 +65,8 @@ struct UniformBufferObject
 struct PushConstantData
 {
     glm::mat4 model;         // 64 bytes
-    glm::vec4 baseColor;     // 16 bytes
-    float metallic;          // 4 bytes
-    float roughness;         // 4 bytes
     int highlighted;         // 4 bytes
-    int _pad;                // 4 bytes → total 96 bytes
+    int _pad[3];             // 12 bytes padding → total 80 bytes
 };
 
 class Buffer {

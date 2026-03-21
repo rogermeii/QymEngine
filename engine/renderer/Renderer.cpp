@@ -29,24 +29,20 @@ void Renderer::init(Window& window)
     // The original scene RenderPass (used for swapchain). Kept for init compatibility.
     m_renderPass.create(m_context.getDevice(), m_swapChain.getImageFormat());
 
-    // Create split descriptor set layouts: set 0 = UBO, set 1 = texture
-    m_descriptor.createUboLayout(m_context.getDevice());
-    m_descriptor.createTextureLayout(m_context.getDevice());
+    // Register per-frame layout in cache (set 0: UBO with vertex+fragment stages)
+    {
+        VkDescriptorSetLayoutBinding uboBinding{};
+        uboBinding.binding = 0;
+        uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboBinding.descriptorCount = 1;
+        uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        uboBinding.pImmutableSamplers = nullptr;
+        m_perFrameLayout = m_layoutCache.getOrCreate(m_context.getDevice(), {uboBinding});
+    }
 
-    VkPushConstantRange pushConstantRange{};
-    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(PushConstantData);
-    std::vector<VkPushConstantRange> pushConstantRanges = { pushConstantRange };
-
-    // Pipeline layout now uses both descriptor set layouts
-    std::vector<VkDescriptorSetLayout> setLayouts = {
-        m_descriptor.getUboLayout(),
-        m_descriptor.getTextureLayout()
-    };
+    // Create main pipeline using layout cache
     m_pipeline.create(m_context.getDevice(), m_renderPass.get(),
-                      setLayouts, m_swapChain.getExtent(),
-                      pushConstantRanges);
+                      m_swapChain.getExtent(), m_layoutCache);
 
     // Swapchain framebuffers
     m_swapChain.createFramebuffers(m_context.getDevice(), m_renderPass.get());
@@ -58,26 +54,37 @@ void Renderer::init(Window& window)
     m_meshLibrary.init(m_context, m_commandManager);
     m_buffer.createUniformBuffers(m_context, MAX_FRAMES_IN_FLIGHT);
 
-    // Create descriptor pool with space for UBO sets + texture sets
+    // Create descriptor pool
     m_descriptor.createPool(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT, 100);
 
-    // Create UBO descriptor sets (set 0, per frame-in-flight)
-    m_descriptor.createUboSets(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT,
-                               m_buffer.getUniformBuffers());
-
-    // Create default texture descriptor set (set 1) for the existing texture.jpg
-    m_defaultTextureSet = m_descriptor.createTextureSet(
-        m_context.getDevice(), m_texture.getImageView(), m_texture.getSampler());
+    // Create per-frame UBO descriptor sets (set 0)
+    m_descriptor.createPerFrameSets(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT,
+                                     m_perFrameLayout,
+                                     m_buffer.getUniformBuffers());
 
     // Create fallback textures for the material system
     createFallbackTextures();
 
-    // Initialize AssetManager
+    // Initialize AssetManager with layout cache and descriptor allocator
     m_assetManager.init(m_context, m_commandManager);
-    m_assetManager.setTextureDescriptorSetLayout(m_descriptor.getTextureLayout());
-    m_assetManager.setTextureDescriptorPool(m_descriptor.getPool());
+    m_assetManager.setLayoutCache(&m_layoutCache);
+    m_assetManager.setDescriptorAllocator(&m_descriptor);
     m_assetManager.setFallbackAlbedo(m_whiteFallbackView, m_fallbackSampler);
     m_assetManager.setFallbackNormal(m_normalFallbackView, m_fallbackSampler);
+
+    // For texture preview in Inspector (single-sampler layout)
+    {
+        VkDescriptorSetLayoutBinding samplerBinding{};
+        samplerBinding.binding = 0;
+        samplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        samplerBinding.descriptorCount = 1;
+        samplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayout texPreviewLayout = m_layoutCache.getOrCreate(
+            m_context.getDevice(), {samplerBinding});
+        m_assetManager.setTextureDescriptorSetLayout(texPreviewLayout);
+        m_assetManager.setTextureDescriptorPool(m_descriptor.getPool());
+    }
+
 #ifndef __ANDROID__
     m_assetManager.scanAssets(std::string(ASSETS_DIR));
 #endif
@@ -389,11 +396,6 @@ void Renderer::createFallbackTextures()
 
     if (vkCreateSampler(device, &samplerInfo, nullptr, &m_fallbackSampler) != VK_SUCCESS)
         throw std::runtime_error("failed to create fallback sampler!");
-
-    // Default material texture set (albedo=white, normal=flat)
-    m_defaultMaterialTexSet = m_descriptor.createTextureSet(device,
-        m_whiteFallbackView, m_fallbackSampler,
-        m_normalFallbackView, m_fallbackSampler);
 }
 
 void Renderer::shutdown()
@@ -420,6 +422,15 @@ void Renderer::shutdown()
     if (m_normalFallbackMemory != VK_NULL_HANDLE)
         vkFreeMemory(device, m_normalFallbackMemory, nullptr);
 
+    // Destroy default material param buffer
+    if (m_defaultMaterialParamBuffer != VK_NULL_HANDLE)
+        vkDestroyBuffer(device, m_defaultMaterialParamBuffer, nullptr);
+    if (m_defaultMaterialParamMemory != VK_NULL_HANDLE) {
+        if (m_defaultMaterialParamMapped)
+            vkUnmapMemory(device, m_defaultMaterialParamMemory);
+        vkFreeMemory(device, m_defaultMaterialParamMemory, nullptr);
+    }
+
     m_assetManager.shutdown(device);
     m_swapChain.cleanup(device);
     m_texture.cleanup(device);
@@ -435,8 +446,11 @@ void Renderer::shutdown()
         m_gridPipelineLayout = VK_NULL_HANDLE;
     }
     m_offscreenPipeline.cleanup(device);
+    m_wireframePipeline.cleanup(device);
     m_pipeline.cleanup(device);
     m_renderPass.cleanup(device);
+    // Layout cache cleanup AFTER all pipelines and descriptors
+    m_layoutCache.cleanup(device);
     m_swapChain.cleanupSyncObjects(device, MAX_FRAMES_IN_FLIGHT);
     m_commandManager.cleanup(device);
     m_context.shutdown();
@@ -645,24 +659,13 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         if (vkCreateRenderPass(device, &rpInfo, nullptr, &m_offscreenRenderPass) != VK_SUCCESS)
             throw std::runtime_error("failed to create offscreen render pass!");
 
-        // Create pipeline compatible with offscreen render pass
-        VkPushConstantRange pcRange{};
-        pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-        pcRange.offset = 0;
-        pcRange.size = sizeof(PushConstantData);
-        std::vector<VkPushConstantRange> pcRanges = { pcRange };
-
-        std::vector<VkDescriptorSetLayout> setLayouts = {
-            m_descriptor.getUboLayout(),
-            m_descriptor.getTextureLayout()
-        };
+        // Create offscreen pipeline using layout cache
         m_offscreenPipeline.create(device, m_offscreenRenderPass,
-                                   setLayouts, {width, height},
-                                   pcRanges);
+            {width, height}, m_layoutCache);
 
+        // Create wireframe pipeline using layout cache (same shader, different polygon mode)
         m_wireframePipeline.create(device, m_offscreenRenderPass,
-                                   setLayouts, {width, height},
-                                   pcRanges, VK_POLYGON_MODE_LINE);
+            {width, height}, m_layoutCache, VK_POLYGON_MODE_LINE);
 
         // --- Create grid pipeline (no vertex input, alpha blending, UBO-only) ---
         {
@@ -776,8 +779,8 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
             dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
             dynamicState.pDynamicStates = dynamicStates.data();
 
-            // Pipeline layout: only UBO set (set 0), no push constants
-            VkDescriptorSetLayout gridSetLayout = m_descriptor.getUboLayout();
+            // Pipeline layout: only UBO set (set 0) from layout cache, no push constants
+            VkDescriptorSetLayout gridSetLayout = m_perFrameLayout;
             VkPipelineLayoutCreateInfo gridLayoutInfo{};
             gridLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             gridLayoutInfo.setLayoutCount = 1;
@@ -813,9 +816,88 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
             vkDestroyShaderModule(device, gridVert, nullptr);
         }
 
+        // --- Create default material descriptor set (for nodes without material) ---
+        {
+            // Get set 1 layout from offscreen pipeline (Lit shader)
+            const auto& pipelineLayouts = m_offscreenPipeline.getDescriptorSetLayouts();
+            if (pipelineLayouts.size() >= 2) {
+                VkDescriptorSetLayout set1Layout = pipelineLayouts[1];
+                m_defaultMaterialSet = m_descriptor.allocateSet(device, set1Layout);
+
+                // Create default material params UBO (match Lit material params: baseColor + metallic + roughness = 32 bytes)
+                uint32_t defaultParamSize = 32;
+                Buffer::createBuffer(m_context, defaultParamSize,
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    m_defaultMaterialParamBuffer, m_defaultMaterialParamMemory);
+                vkMapMemory(device, m_defaultMaterialParamMemory, 0, defaultParamSize, 0, &m_defaultMaterialParamMapped);
+
+                // Default: white baseColor, 0 metallic, 0.5 roughness
+                struct DefaultParams {
+                    glm::vec4 baseColor;
+                    float metallic;
+                    float roughness;
+                    float _pad[2];
+                } defaults;
+                defaults.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+                defaults.metallic = 0.0f;
+                defaults.roughness = 0.5f;
+                defaults._pad[0] = 0.0f;
+                defaults._pad[1] = 0.0f;
+                memcpy(m_defaultMaterialParamMapped, &defaults, sizeof(defaults));
+
+                // Write UBO binding (binding 0)
+                VkDescriptorBufferInfo bufferInfo{};
+                bufferInfo.buffer = m_defaultMaterialParamBuffer;
+                bufferInfo.offset = 0;
+                bufferInfo.range = defaultParamSize;
+
+                VkWriteDescriptorSet uboWrite{};
+                uboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                uboWrite.dstSet = m_defaultMaterialSet;
+                uboWrite.dstBinding = 0;
+                uboWrite.dstArrayElement = 0;
+                uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                uboWrite.descriptorCount = 1;
+                uboWrite.pBufferInfo = &bufferInfo;
+
+                vkUpdateDescriptorSets(device, 1, &uboWrite, 0, nullptr);
+
+                // Write sampler bindings (albedo at binding 1, normal at binding 2) using fallback textures
+                VkDescriptorImageInfo albedoImageInfo{};
+                albedoImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                albedoImageInfo.imageView = m_whiteFallbackView;
+                albedoImageInfo.sampler = m_fallbackSampler;
+
+                VkDescriptorImageInfo normalImageInfo{};
+                normalImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                normalImageInfo.imageView = m_normalFallbackView;
+                normalImageInfo.sampler = m_fallbackSampler;
+
+                std::array<VkWriteDescriptorSet, 2> samplerWrites{};
+                samplerWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                samplerWrites[0].dstSet = m_defaultMaterialSet;
+                samplerWrites[0].dstBinding = 1;
+                samplerWrites[0].dstArrayElement = 0;
+                samplerWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                samplerWrites[0].descriptorCount = 1;
+                samplerWrites[0].pImageInfo = &albedoImageInfo;
+
+                samplerWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                samplerWrites[1].dstSet = m_defaultMaterialSet;
+                samplerWrites[1].dstBinding = 2;
+                samplerWrites[1].dstArrayElement = 0;
+                samplerWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                samplerWrites[1].descriptorCount = 1;
+                samplerWrites[1].pImageInfo = &normalImageInfo;
+
+                vkUpdateDescriptorSets(device, static_cast<uint32_t>(samplerWrites.size()),
+                                       samplerWrites.data(), 0, nullptr);
+            }
+        }
+
         // Pass render pass and layout info to AssetManager for shader pipeline creation
         m_assetManager.setOffscreenRenderPass(m_offscreenRenderPass);
-        m_assetManager.setDescriptorSetLayouts(m_descriptor.getUboLayout(), m_descriptor.getTextureLayout());
         m_assetManager.setOffscreenExtent({width, height});
     }
 
@@ -983,17 +1065,15 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     scissor.extent = {m_offscreenWidth, m_offscreenHeight};
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
+    VkDescriptorSet frameSet = m_descriptor.getPerFrameSet(m_currentFrame);
+
     // --- Draw grid + sky (before scene objects) ---
     if (m_gridPipeline != VK_NULL_HANDLE) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_gridPipeline);
-        VkDescriptorSet gridUboSet = m_descriptor.getUboSet(m_currentFrame);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_gridPipelineLayout, 0, 1, &gridUboSet, 0, nullptr);
+                                m_gridPipelineLayout, 0, 1, &frameSet, 0, nullptr);
         vkCmdDraw(commandBuffer, 6, 1, 0, 0);
     }
-
-    // UBO descriptor set (set 0) - shared across all nodes
-    VkDescriptorSet uboSet = m_descriptor.getUboSet(m_currentFrame);
 
     // Render each scene node with its own material, pipeline, and mesh
     scene.traverseNodes([&](Node* node) {
@@ -1001,39 +1081,41 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         if (node->nodeType == NodeType::DirectionalLight) return;
 
         // Load material (or use defaults)
-        const MaterialAsset* mat = nullptr;
+        const MaterialInstance* mat = nullptr;
         if (!node->materialPath.empty())
             mat = m_assetManager.loadMaterial(node->materialPath);
 
-        // Bind shader pipeline — different nodes may use different shaders
-        VkPipeline shaderPipeline = (mat && mat->shader)
-            ? mat->shader->pipeline.getPipeline()
-            : m_offscreenPipeline.getPipeline();
-        VkPipelineLayout pipelineLayout = (mat && mat->shader)
-            ? mat->shader->pipeline.getPipelineLayout()
-            : m_offscreenPipeline.getPipelineLayout();
+        // Bind shader pipeline -- different nodes may use different shaders
+        VkPipeline shaderPipeline;
+        VkPipelineLayout pipelineLayout;
+        VkDescriptorSet matSet;
+
+        if (mat && mat->shader && mat->descriptorSet != VK_NULL_HANDLE) {
+            shaderPipeline = mat->shader->pipeline.getPipeline();
+            pipelineLayout = mat->shader->pipeline.getPipelineLayout();
+            matSet = mat->descriptorSet;
+        } else {
+            shaderPipeline = m_offscreenPipeline.getPipeline();
+            pipelineLayout = m_offscreenPipeline.getPipelineLayout();
+            matSet = m_defaultMaterialSet;
+        }
+
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shaderPipeline);
 
-        // Re-bind UBO descriptor set (set 0) after pipeline change
+        // Bind set 0 (per-frame)
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipelineLayout, 0, 1, &uboSet, 0, nullptr);
+                                pipelineLayout, 0, 1, &frameSet, 0, nullptr);
 
-        // Bind material texture set (set 1) or default
-        VkDescriptorSet texSet = (mat && mat->textureSet != VK_NULL_HANDLE)
-            ? mat->textureSet
-            : m_defaultMaterialTexSet;
+        // Bind set 1 (per-material)
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipelineLayout, 1, 1, &texSet, 0, nullptr);
+                                pipelineLayout, 1, 1, &matSet, 0, nullptr);
 
-        // Push constants from material (or defaults)
+        // Push constants (per-object): model + highlighted only
         PushConstantData pc{};
-        pc.model = node->getWorldMatrix();
-        pc.baseColor = mat ? mat->baseColor : glm::vec4(1.0f);
-        pc.metallic = mat ? mat->metallic : 0.0f;
-        pc.roughness = mat ? mat->roughness : 0.5f;
-        pc.highlighted = 0;  // wireframe pass handles highlight
+        pc.model = glm::transpose(node->getWorldMatrix());
+        pc.highlighted = 0;
         vkCmdPushConstants(commandBuffer, pipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_VERTEX_BIT,
             0, sizeof(PushConstantData), &pc);
 
         // Determine mesh and draw
@@ -1057,23 +1139,22 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     if (selected && (selected->meshType != MeshType::None || !selected->meshPath.empty())) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_wireframePipeline.getPipeline());
 
-        // Re-bind UBO set 0 after pipeline change, bind texture set 1
+        // Re-bind set 0 after pipeline change
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_wireframePipeline.getPipelineLayout(), 0, 1,
-                                &uboSet, 0, nullptr);
-        VkDescriptorSet texSet = m_defaultMaterialTexSet;
+                                &frameSet, 0, nullptr);
+        // Bind default material set 1
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_wireframePipeline.getPipelineLayout(), 1, 1,
-                                &texSet, 0, nullptr);
+                                &m_defaultMaterialSet, 0, nullptr);
 
+        // For wireframe highlight, we need to set baseColor in the default material UBO temporarily
+        // But since it's a shared buffer, instead we just push highlighted=1 and the shader returns baseColor
         PushConstantData pc{};
-        pc.model = selected->getWorldMatrix();
-        pc.baseColor = glm::vec4(1.0f, 0.5f, 0.0f, 1.0f); // orange outline
-        pc.metallic = 0.0f;
-        pc.roughness = 1.0f;
+        pc.model = glm::transpose(selected->getWorldMatrix());
         pc.highlighted = 1;
         vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_VERTEX_BIT,
             0, sizeof(PushConstantData), &pc);
 
         if (!selected->meshPath.empty()) {
@@ -1098,39 +1179,34 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           m_wireframePipeline.getPipeline());
 
-        VkDescriptorSet uboSet2 = m_descriptor.getUboSet(m_currentFrame);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_wireframePipeline.getPipelineLayout(), 0, 1,
-                                &uboSet2, 0, nullptr);
-
-        VkDescriptorSet texSet = m_defaultMaterialTexSet;
+                                &frameSet, 0, nullptr);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_wireframePipeline.getPipelineLayout(), 1, 1,
-                                &texSet, 0, nullptr);
+                                &m_defaultMaterialSet, 0, nullptr);
 
         // Light gizmo: sphere at position + single arrow showing direction
         glm::vec3 pos = node->transform.position;
         glm::vec3 dir = node->getLightDirection();
 
         PushConstantData pc{};
-        pc.baseColor = glm::vec4(1.0f, 0.9f, 0.3f, 1.0f); // yellow
         pc.highlighted = 1;
 
         // Sphere at light position
-        pc.model = glm::scale(glm::translate(glm::mat4(1.0f), pos), glm::vec3(0.15f));
+        pc.model = glm::transpose(glm::scale(glm::translate(glm::mat4(1.0f), pos), glm::vec3(0.15f)));
         vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_VERTEX_BIT,
             0, sizeof(PushConstantData), &pc);
         m_meshLibrary.bind(commandBuffer, MeshType::Sphere);
         vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(MeshType::Sphere), 1, 0, 0, 0);
 
         // Arrow from sphere center along light direction
-        // Place a thin scaled cube from pos to pos + dir * length
         float arrowLen = 0.6f;
         glm::vec3 arrowCenter = pos + dir * (arrowLen * 0.5f);
 
         // Build rotation from (0,1,0) to dir using quaternion
-        glm::vec3 defaultUp = glm::vec3(0, 1, 0); // cube is tall along Y by default
+        glm::vec3 defaultUp = glm::vec3(0, 1, 0);
         glm::vec3 axis = glm::cross(defaultUp, dir);
         float axisLen = glm::length(axis);
         glm::mat4 rotMat(1.0f);
@@ -1139,15 +1215,14 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
             float angle = std::acos(glm::clamp(glm::dot(defaultUp, dir), -1.0f, 1.0f));
             rotMat = glm::rotate(glm::mat4(1.0f), angle, axis);
         } else if (glm::dot(defaultUp, dir) < 0.0f) {
-            // 180 degree flip
             rotMat = glm::rotate(glm::mat4(1.0f), glm::pi<float>(), glm::vec3(1, 0, 0));
         }
 
-        pc.model = glm::translate(glm::mat4(1.0f), arrowCenter)
+        pc.model = glm::transpose(glm::translate(glm::mat4(1.0f), arrowCenter)
                  * rotMat
-                 * glm::scale(glm::mat4(1.0f), glm::vec3(0.03f, arrowLen, 0.03f));
+                 * glm::scale(glm::mat4(1.0f), glm::vec3(0.03f, arrowLen, 0.03f)));
         vkCmdPushConstants(commandBuffer, m_wireframePipeline.getPipelineLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_VERTEX_BIT,
             0, sizeof(PushConstantData), &pc);
         m_meshLibrary.bind(commandBuffer, MeshType::Cube);
         vkCmdDrawIndexed(commandBuffer, m_meshLibrary.getIndexCount(MeshType::Cube), 1, 0, 0, 0);
@@ -1172,12 +1247,14 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
         : 1.0f;
 
     if (m_camera) {
-        ubo.view = m_camera->getViewMatrix();
-        ubo.proj = m_camera->getProjMatrix(aspect);
+        ubo.view = glm::transpose(m_camera->getViewMatrix());
+        ubo.proj = glm::transpose(m_camera->getProjMatrix(aspect));
     } else {
         ubo.view = glm::lookAt(glm::vec3(2,2,2), glm::vec3(0,0,0), glm::vec3(0,1,0));
         ubo.proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
         ubo.proj[1][1] *= -1;
+        ubo.view = glm::transpose(ubo.view);
+        ubo.proj = glm::transpose(ubo.proj);
     }
 
     // Find directional light in scene (use first one found, fallback to defaults)

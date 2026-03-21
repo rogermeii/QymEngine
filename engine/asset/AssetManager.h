@@ -6,11 +6,13 @@
 #include <glm/glm.hpp>
 #include "asset/ShaderAsset.h"
 #include "asset/MaterialAsset.h"
+#include "renderer/DescriptorLayoutCache.h"
 
 namespace QymEngine {
 
 class VulkanContext;
 class CommandManager;
+class Descriptor;
 
 struct MeshAsset {
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
@@ -44,7 +46,7 @@ public:
     const MeshAsset* loadMesh(const std::string& relativePath);
     const TextureAsset* loadTexture(const std::string& relativePath);
     const ShaderAsset* loadShader(const std::string& relativePath);
-    const MaterialAsset* loadMaterial(const std::string& relativePath);
+    const MaterialInstance* loadMaterial(const std::string& relativePath);
 
     const std::vector<std::string>& getMeshFiles() const { return m_meshFiles; }
     const std::vector<std::string>& getTextureFiles() const { return m_textureFiles; }
@@ -55,31 +57,34 @@ public:
     void setFallbackAlbedo(VkImageView view, VkSampler sampler) { m_fallbackAlbedoView = view; m_fallbackAlbedoSampler = sampler; }
     void setFallbackNormal(VkImageView view, VkSampler sampler) { m_fallbackNormalView = view; m_fallbackNormalSampler = sampler; }
 
-    // For per-texture descriptor set creation
-    void setTextureDescriptorSetLayout(VkDescriptorSetLayout layout) { m_textureSetLayout = layout; }
-    void setTextureDescriptorPool(VkDescriptorPool pool) { m_textureDescriptorPool = pool; }
+    // Layout cache and descriptor allocator (set by Renderer)
+    void setLayoutCache(DescriptorLayoutCache* cache) { m_layoutCache = cache; }
+    void setDescriptorAllocator(Descriptor* desc) { m_descriptor = desc; }
 
     // For shader pipeline creation - called by Renderer after offscreen setup
     void setOffscreenRenderPass(VkRenderPass rp) { m_offscreenRenderPass = rp; }
     void setOffscreenExtent(VkExtent2D ext) { m_offscreenExtent = ext; }
-    void setDescriptorSetLayouts(VkDescriptorSetLayout ubo, VkDescriptorSetLayout tex) {
-        m_uboLayout = ubo; m_texLayout = tex;
-    }
+
+    // For per-texture descriptor set allocation (Inspector preview)
+    void setTextureDescriptorSetLayout(VkDescriptorSetLayout layout) { m_textureSetLayout = layout; }
+    void setTextureDescriptorPool(VkDescriptorPool pool) { m_textureDescriptorPool = pool; }
 
 private:
     VulkanContext* m_ctx = nullptr;
     CommandManager* m_cmdMgr = nullptr;
     std::string m_assetsDir;
+    DescriptorLayoutCache* m_layoutCache = nullptr;
+    Descriptor* m_descriptor = nullptr;
 
-    std::vector<std::string> m_meshFiles;      // relative paths like "models/cube.obj"
-    std::vector<std::string> m_textureFiles;   // relative paths like "textures/wall.jpg"
-    std::vector<std::string> m_shaderFiles;    // relative paths like "shaders/standard_lit.shader.json"
-    std::vector<std::string> m_materialFiles;  // relative paths like "materials/default_lit.mat.json"
+    std::vector<std::string> m_meshFiles;
+    std::vector<std::string> m_textureFiles;
+    std::vector<std::string> m_shaderFiles;
+    std::vector<std::string> m_materialFiles;
 
     std::unordered_map<std::string, MeshAsset> m_meshCache;
     std::unordered_map<std::string, TextureAsset> m_textureCache;
     std::unordered_map<std::string, ShaderAsset> m_shaderCache;
-    std::unordered_map<std::string, MaterialAsset> m_materialCache;
+    std::unordered_map<std::string, MaterialInstance> m_materialCache;
 
     // Fallback textures for materials without explicit maps
     VkImageView m_fallbackAlbedoView = VK_NULL_HANDLE;
@@ -92,8 +97,6 @@ private:
 
     // For shader pipeline creation
     VkRenderPass m_offscreenRenderPass = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_uboLayout = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_texLayout = VK_NULL_HANDLE;
     VkExtent2D m_offscreenExtent = {0, 0};
 
     // Helper: create VkImage + memory + view + sampler from pixel data

@@ -1,6 +1,6 @@
 // Infinite grid shader (no vertex input, fullscreen quad)
 
-struct UBO
+struct FrameData
 {
     float4x4 view;
     float4x4 proj;
@@ -10,7 +10,7 @@ struct UBO
     float3 cameraPos;
 };
 
-[[vk::binding(0, 0)]] ConstantBuffer<UBO> ubo;
+[[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 
 struct VSOutput
 {
@@ -62,7 +62,7 @@ float4x4 mat4Inverse(float4x4 m)
 
 float3 unprojectPoint(float3 p)
 {
-    float4x4 viewProjInv = mat4Inverse(mul(ubo.proj, ubo.view));
+    float4x4 viewProjInv = mat4Inverse(mul(frame.proj, frame.view));
     float4 unprojected = mul(viewProjInv, float4(p, 1.0));
     return unprojected.xyz / unprojected.w;
 }
@@ -114,7 +114,7 @@ FSOutput fragmentMain(VSOutput input)
 
     float3 fragPos = input.nearPoint + t * (input.farPoint - input.nearPoint);
 
-    float dist = length(fragPos.xz - ubo.cameraPos.xz);
+    float dist = length(fragPos.xz - frame.cameraPos.xz);
     float fade = 1.0 - smoothstep(20.0, 50.0, dist);
 
     float4 smallGrid = gridLine(fragPos, 0.5, float4(0.4, 0.4, 0.4, 0.4));
@@ -136,7 +136,7 @@ FSOutput fragmentMain(VSOutput input)
 
     output.color = color;
 
-    float4 clipPos = mul(ubo.proj, mul(ubo.view, float4(fragPos, 1.0)));
+    float4 clipPos = mul(frame.proj, mul(frame.view, float4(fragPos, 1.0)));
     output.depth = clipPos.z / clipPos.w;
     return output;
 }
