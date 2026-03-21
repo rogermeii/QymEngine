@@ -75,8 +75,13 @@ void SwapChain::create(VulkanContext& ctx, SDL_Window* window)
         createInfo.pQueueFamilyIndices = nullptr;
     }
 
-    // Use surface's current preTransform to avoid compositor rotation overhead
+    // Android: use IDENTITY, let compositor handle rotation (avoids pre-rotation in shaders)
+    // Desktop: use currentTransform for efficiency
+#ifdef __ANDROID__
+    createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+#else
     createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+#endif
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
