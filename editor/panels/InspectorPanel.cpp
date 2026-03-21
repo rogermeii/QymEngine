@@ -66,6 +66,11 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
 
                     // Dynamic UI from shader properties
                     if (mat->shader) {
+                        // Build texture file list once (reused by all texture2D properties)
+                        std::vector<std::string> texItems = {"None"};
+                        for (auto& f : assetManager.getTextureFiles())
+                            texItems.push_back(f);
+
                         for (auto& prop : mat->shader->properties) {
                             if (prop.type == "color4" && prop.name == "baseColor") {
                                 ImGui::ColorEdit4("Base Color", &mutableMat->baseColor.x);
@@ -81,17 +86,12 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                                 else if (prop.name == "normalMap") texPath = &mutableMat->normalMapPath;
 
                                 if (texPath) {
-                                    std::string label = prop.name;
-                                    std::vector<std::string> texItems = {"None"};
-                                    for (auto& f : assetManager.getTextureFiles())
-                                        texItems.push_back(f);
-
                                     int currentTex = 0;
                                     for (int i = 1; i < static_cast<int>(texItems.size()); i++) {
                                         if (texItems[i] == *texPath) { currentTex = i; break; }
                                     }
 
-                                    if (ImGui::BeginCombo(label.c_str(), texItems[currentTex].c_str())) {
+                                    if (ImGui::BeginCombo(prop.name.c_str(), texItems[currentTex].c_str())) {
                                         for (int i = 0; i < static_cast<int>(texItems.size()); i++) {
                                             bool isSel = (currentTex == i);
                                             if (ImGui::Selectable(texItems[i].c_str(), isSel)) {
@@ -100,8 +100,7 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                                         }
                                         ImGui::EndCombo();
                                     }
-                                    // Go to texture button
-                                    if (texPath && !texPath->empty()) {
+                                    if (!texPath->empty()) {
                                         drawGoToButton(("goto_" + prop.name).c_str(), *texPath, projectPanel);
                                     }
                                 }

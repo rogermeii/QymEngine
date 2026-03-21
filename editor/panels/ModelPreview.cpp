@@ -73,7 +73,6 @@ void ModelPreview::createResources(Renderer& renderer)
 {
     if (m_initialized) return;
 
-    // Wait for the offscreen render pass to be ready (we reuse it)
     if (renderer.getOffscreenRenderPass() == VK_NULL_HANDLE)
         return;
 
@@ -217,7 +216,6 @@ void ModelPreview::createResources(Renderer& renderer)
             throw std::runtime_error("failed to create model preview framebuffer!");
     }
 
-    // --- ImGui descriptor set for display ---
     m_descriptorSet = ImGui_ImplVulkan_AddTexture(
         m_sampler, m_colorView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
@@ -230,7 +228,6 @@ void ModelPreview::createResources(Renderer& renderer)
             m_uboBuffer, m_uboMemory);
         vkMapMemory(device, m_uboMemory, 0, bufferSize, 0, &m_uboMapped);
 
-        // Allocate descriptor set from the shared pool
         VkDescriptorSetLayout uboLayout = renderer.getDescriptor().getUboLayout();
         VkDescriptorSetAllocateInfo allocInfo{};
         allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -263,14 +260,11 @@ void ModelPreview::createResources(Renderer& renderer)
 
 void ModelPreview::writePreviewUbo(const glm::vec3& boundsMin, const glm::vec3& boundsMax)
 {
-    // Compute bounding sphere center and radius
     glm::vec3 center = (boundsMin + boundsMax) * 0.5f;
     float radius = glm::length(boundsMax - boundsMin) * 0.5f;
-    if (radius < 0.001f) radius = 0.5f;  // fallback for degenerate mesh
+    if (radius < 0.001f) radius = 0.5f;
 
-    // Camera looks from upper-right diagonal toward center
     float fovY = glm::radians(45.0f);
-    // Distance so that the bounding sphere fits in view with some margin
     float distance = (radius / std::tan(fovY * 0.5f)) * 1.3f;
 
     glm::vec3 dir = glm::normalize(glm::vec3(1.0f, 0.7f, 1.0f));
@@ -287,81 +281,10 @@ void ModelPreview::writePreviewUbo(const glm::vec3& boundsMin, const glm::vec3& 
     memcpy(m_uboMapped, &previewUbo, sizeof(UniformBufferObject));
 }
 
-void ModelPreview::renderBuiltIn(Renderer& renderer, MeshType type)
+void ModelPreview::beginPreviewPass(Renderer& renderer)
 {
-    if (!m_initialized) createResources(renderer);
-    if (!m_initialized) return;
-
     VkCommandBuffer cmd = renderer.getCurrentCommandBuffer();
 
-    // Built-in meshes all fit in [-0.5, 0.5] range
-    writePreviewUbo(glm::vec3(-0.5f), glm::vec3(0.5f));
-
-    // Begin preview render pass
-    VkRenderPassBeginInfo rpInfo{};
-    rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpInfo.renderPass        = renderer.getOffscreenRenderPass();
-    rpInfo.framebuffer       = m_framebuffer;
-    rpInfo.renderArea.offset = {0, 0};
-    rpInfo.renderArea.extent = {PREVIEW_SIZE, PREVIEW_SIZE};
-
-    std::array<VkClearValue, 2> clears{};
-    clears[0].color = {{0.15f, 0.15f, 0.18f, 1.0f}};  // dark gray background
-    clears[1].depthStencil = {1.0f, 0};
-    rpInfo.clearValueCount = static_cast<uint32_t>(clears.size());
-    rpInfo.pClearValues    = clears.data();
-
-    vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-    // Viewport and scissor
-    VkViewport vp{0, 0, static_cast<float>(PREVIEW_SIZE), static_cast<float>(PREVIEW_SIZE), 0, 1};
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    VkRect2D sc{{0, 0}, {PREVIEW_SIZE, PREVIEW_SIZE}};
-    vkCmdSetScissor(cmd, 0, 1, &sc);
-
-    // Bind pipeline
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      renderer.getOffscreenPipeline().getPipeline());
-
-    // Bind dedicated preview UBO descriptor set (set 0)
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        renderer.getOffscreenPipeline().getPipelineLayout(), 0, 1, &m_uboDescriptorSet, 0, nullptr);
-
-    // Bind default texture descriptor set (set 1)
-    VkDescriptorSet texSet = renderer.getDefaultMaterialTexSet();
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        renderer.getOffscreenPipeline().getPipelineLayout(), 1, 1, &texSet, 0, nullptr);
-
-    // Push constants: identity model, light gray color
-    PushConstantData pc{};
-    pc.model = glm::mat4(1.0f);
-    pc.baseColor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
-    pc.metallic = 0.0f;
-    pc.roughness = 0.5f;
-    pc.highlighted = 0;
-    vkCmdPushConstants(cmd, renderer.getOffscreenPipeline().getPipelineLayout(),
-        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        0, sizeof(PushConstantData), &pc);
-
-    // Bind mesh and draw
-    renderer.getMeshLibrary().bind(cmd, type);
-    vkCmdDrawIndexed(cmd, renderer.getMeshLibrary().getIndexCount(type), 1, 0, 0, 0);
-
-    vkCmdEndRenderPass(cmd);
-}
-
-void ModelPreview::renderMesh(Renderer& renderer, const MeshAsset* mesh)
-{
-    if (!mesh) return;
-    if (!m_initialized) createResources(renderer);
-    if (!m_initialized) return;
-
-    VkCommandBuffer cmd = renderer.getCurrentCommandBuffer();
-
-    // Auto-fit camera from mesh bounding box
-    writePreviewUbo(mesh->boundsMin, mesh->boundsMax);
-
-    // Begin preview render pass
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpInfo.renderPass        = renderer.getOffscreenRenderPass();
@@ -385,7 +308,6 @@ void ModelPreview::renderMesh(Renderer& renderer, const MeshAsset* mesh)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       renderer.getOffscreenPipeline().getPipeline());
 
-    // Bind dedicated preview UBO descriptor set (set 0)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         renderer.getOffscreenPipeline().getPipelineLayout(), 0, 1, &m_uboDescriptorSet, 0, nullptr);
 
@@ -402,8 +324,33 @@ void ModelPreview::renderMesh(Renderer& renderer, const MeshAsset* mesh)
     vkCmdPushConstants(cmd, renderer.getOffscreenPipeline().getPipelineLayout(),
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(PushConstantData), &pc);
+}
 
-    // Bind imported mesh
+void ModelPreview::renderBuiltIn(Renderer& renderer, MeshType type)
+{
+    if (!m_initialized) createResources(renderer);
+    if (!m_initialized) return;
+
+    writePreviewUbo(glm::vec3(-0.5f), glm::vec3(0.5f));
+    beginPreviewPass(renderer);
+
+    VkCommandBuffer cmd = renderer.getCurrentCommandBuffer();
+    renderer.getMeshLibrary().bind(cmd, type);
+    vkCmdDrawIndexed(cmd, renderer.getMeshLibrary().getIndexCount(type), 1, 0, 0, 0);
+
+    vkCmdEndRenderPass(cmd);
+}
+
+void ModelPreview::renderMesh(Renderer& renderer, const MeshAsset* mesh)
+{
+    if (!mesh) return;
+    if (!m_initialized) createResources(renderer);
+    if (!m_initialized) return;
+
+    writePreviewUbo(mesh->boundsMin, mesh->boundsMax);
+    beginPreviewPass(renderer);
+
+    VkCommandBuffer cmd = renderer.getCurrentCommandBuffer();
     VkBuffer vertBuffers[] = {mesh->vertexBuffer};
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(cmd, 0, 1, vertBuffers, offsets);

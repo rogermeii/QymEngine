@@ -24,6 +24,7 @@ public:
 private:
     void createResources(Renderer& renderer);
     void writePreviewUbo(const glm::vec3& boundsMin, const glm::vec3& boundsMax);
+    void beginPreviewPass(Renderer& renderer);
 
     static constexpr uint32_t PREVIEW_SIZE = 256;
 
