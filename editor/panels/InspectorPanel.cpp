@@ -83,6 +83,10 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                                         // so it rebuilds next frame with new shader
                                         mutableMat->shaderPath = shaderItems[i];
                                         assetManager.invalidateMaterial(projectPanel.getSelectedFile());
+                                        ImGui::EndCombo();
+                                        // Material invalidated, stop using freed pointer
+                                        ImGui::End();
+                                        return;
                                     }
                                 }
                             }
@@ -153,6 +157,35 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
                                         bool isSel = (currentTex == i);
                                         if (ImGui::Selectable(texItems[i].c_str(), isSel)) {
                                             texPath = (i == 0) ? "" : texItems[i];
+
+                                            // Save material properties to file, then invalidate cache to rebuild descriptor
+                                            {
+                                                nlohmann::json j;
+                                                j["name"] = mutableMat->name;
+                                                j["shader"] = mutableMat->shaderPath;
+                                                nlohmann::json props2;
+                                                for (auto& [n, v] : mutableMat->vec4Props)
+                                                    props2[n] = {v.r, v.g, v.b, v.a};
+                                                for (auto& [n, v] : mutableMat->floatProps)
+                                                    props2[n] = v;
+                                                for (auto& [n, p] : mutableMat->texturePaths) {
+                                                    if (!p.empty())
+                                                        props2[n] = p;
+                                                }
+                                                j["properties"] = props2;
+
+                                                std::string savePath = std::string(ASSETS_DIR) + "/" + projectPanel.getSelectedFile();
+                                                std::ofstream outFile(savePath);
+                                                if (outFile.is_open()) {
+                                                    outFile << j.dump(2);
+                                                    outFile.close();
+                                                }
+                                            }
+                                            assetManager.invalidateMaterial(projectPanel.getSelectedFile());
+                                            ImGui::EndCombo();
+                                            // Material invalidated, stop using freed pointer
+                                            ImGui::End();
+                                            return;
                                         }
                                     }
                                     ImGui::EndCombo();

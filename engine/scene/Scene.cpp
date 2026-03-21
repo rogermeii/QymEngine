@@ -66,8 +66,14 @@ void Scene::collectFlatList(Node* node, std::vector<Node*>& list) const {
 
 void Scene::removeNode(Node* node) {
     if (!node || node == m_root.get()) return;
-    m_selectedNodes.erase(node);
-    if (m_selectedNode == node) m_selectedNode = nullptr;
+    // Recursively clear selection for node and all descendants to prevent dangling pointers
+    std::function<void(Node*)> clearDescendants = [&](Node* n) {
+        m_selectedNodes.erase(n);
+        if (m_selectedNode == n) m_selectedNode = nullptr;
+        for (auto& child : n->getChildren())
+            clearDescendants(child.get());
+    };
+    clearDescendants(node);
     Node* parent = node->getParent();
     if (parent) parent->removeChild(node);
 }
@@ -163,6 +169,7 @@ void Scene::deserialize(const std::string& path) {
         if (j.is_discarded() || !j.contains("scene")) return;
 
         m_selectedNode = nullptr;
+        m_selectedNodes.clear();
         m_root = std::make_unique<Node>("Root");
 
         auto& sceneJson = j["scene"];
@@ -219,6 +226,7 @@ void Scene::fromJsonString(const std::string& jsonStr) {
     if (j.is_discarded() || !j.contains("scene")) return;
 
     m_selectedNode = nullptr;
+    m_selectedNodes.clear();
     m_root = std::make_unique<Node>("Root");
 
     auto& sceneJson = j["scene"];

@@ -7,19 +7,22 @@ namespace QymEngine {
 
 void Descriptor::createPool(VkDevice device, int maxFramesInFlight, int maxMaterials)
 {
+    // Extra margin for editor/preview descriptor sets
+    const int editorExtra = 10;
+
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
-    // UBOs: per-frame sets + per-material param UBOs
+    // UBOs: per-frame sets + per-material param UBOs + editor reserve
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = static_cast<uint32_t>(maxFramesInFlight + maxMaterials);
-    // Samplers: each material can have up to 4 texture slots
+    poolSizes[0].descriptorCount = static_cast<uint32_t>(maxFramesInFlight + maxMaterials + editorExtra);
+    // Samplers: each material can have up to 4 texture slots + editor reserve
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = static_cast<uint32_t>(maxMaterials * 4);
+    poolSizes[1].descriptorCount = static_cast<uint32_t>(maxMaterials * 4 + editorExtra);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = static_cast<uint32_t>(maxFramesInFlight + maxMaterials);
+    poolInfo.maxSets = static_cast<uint32_t>(maxFramesInFlight + maxMaterials + editorExtra);
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
         throw std::runtime_error("failed to create descriptor pool!");

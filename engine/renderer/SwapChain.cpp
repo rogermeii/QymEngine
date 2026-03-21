@@ -75,9 +75,8 @@ void SwapChain::create(VulkanContext& ctx, SDL_Window* window)
         createInfo.pQueueFamilyIndices = nullptr;
     }
 
-    // Use IDENTITY transform — let the compositor handle rotation.
-    // This avoids needing a pre-transform rotation matrix in the projection.
-    createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    // Use surface's current preTransform to avoid compositor rotation overhead
+    createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;

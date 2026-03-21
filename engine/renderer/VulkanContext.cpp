@@ -291,7 +291,8 @@ int VulkanContext::rateDeviceSuitability(VkPhysicalDevice device)
     if (!deviceFeatures.samplerAnisotropy)
         return 0;
 
-    if (!deviceFeatures.geometryShader)
+    // fillModeNonSolid is required for wireframe mode
+    if (!deviceFeatures.fillModeNonSolid)
         return 0;
 
     return score;

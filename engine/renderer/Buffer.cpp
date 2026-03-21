@@ -57,6 +57,11 @@ void Buffer::cleanup(VkDevice device, int maxFramesInFlight)
 {
     for (int i = 0; i < maxFramesInFlight; i++)
     {
+        // Unmap before destroy to avoid resource leak
+        if (m_uniformBuffersMapped[i]) {
+            vkUnmapMemory(device, m_uniformBuffersMemory[i]);
+            m_uniformBuffersMapped[i] = nullptr;
+        }
         vkDestroyBuffer(device, m_uniformBuffers[i], nullptr);
         vkFreeMemory(device, m_uniformBuffersMemory[i], nullptr);
     }
