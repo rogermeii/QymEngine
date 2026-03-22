@@ -206,16 +206,19 @@ void Renderer::blitToSwapchain()
     offscreenBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     offscreenBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &offscreenBarrier);
+
     // Transition swapchain: TRANSFER_DST -> PRESENT_SRC
     swapBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     swapBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     swapBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     swapBarrier.dstAccessMask = 0;
 
-    VkImageMemoryBarrier barriers2[] = {offscreenBarrier, swapBarrier};
     vkCmdPipelineBarrier(cmd,
         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-        0, 0, nullptr, 0, nullptr, 2, barriers2);
+        0, 0, nullptr, 0, nullptr, 1, &swapBarrier);
 }
 
 void Renderer::endFrame()
@@ -467,11 +470,9 @@ void Renderer::createBindlessResources()
 
         // Binding flags for bindless
         std::array<VkDescriptorBindingFlags, 3> bindingFlags{};
-        bindingFlags[0] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-                          VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+        bindingFlags[0] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
         bindingFlags[1] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-                          VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
-                          VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+                          VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
         bindingFlags[2] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 
         VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
@@ -492,18 +493,11 @@ void Renderer::createBindlessResources()
 
     // --- 3. Allocate the bindless descriptor set with variable count ---
     {
-        uint32_t variableCount = MAX_BINDLESS_TEXTURES;
-        VkDescriptorSetVariableDescriptorCountAllocateInfo varCountInfo{};
-        varCountInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
-        varCountInfo.descriptorSetCount = 1;
-        varCountInfo.pDescriptorCounts = &variableCount;
-
         VkDescriptorSetAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         allocInfo.descriptorPool = m_bindlessPool;
         allocInfo.descriptorSetCount = 1;
         allocInfo.pSetLayouts = &m_bindlessSetLayout;
-        allocInfo.pNext = &varCountInfo;
 
         if (vkAllocateDescriptorSets(device, &allocInfo, &m_bindlessSet) != VK_SUCCESS)
             throw std::runtime_error("failed to allocate bindless descriptor set!");

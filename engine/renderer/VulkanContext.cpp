@@ -430,6 +430,8 @@ void VulkanContext::createLogicalDevice()
         enableDI.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
         enableDI.descriptorBindingVariableDescriptorCount = VK_TRUE;
         enableDI.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+        enableDI.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+        enableDI.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
 
         enableBDA.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
         enableBDA.bufferDeviceAddress = VK_TRUE;

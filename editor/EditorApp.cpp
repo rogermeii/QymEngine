@@ -391,6 +391,12 @@ void EditorApp::setCaptureAndExit(bool enabled, const std::string& outputPath)
 
 void EditorApp::initRenderDoc()
 {
+    // Skip RenderDoc if env var set (for validation layer testing)
+    if (getenv("QYMENGINE_NO_RENDERDOC")) {
+        Log::info("RenderDoc: disabled by QYMENGINE_NO_RENDERDOC env var");
+        return;
+    }
+
     HMODULE mod = GetModuleHandleA("renderdoc.dll");
     if (!mod) {
         mod = LoadLibraryA("C:/Program Files/RenderDoc/renderdoc.dll");

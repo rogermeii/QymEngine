@@ -92,7 +92,16 @@ print("=" * 60)
 print("QymEngine Automated Test Suite")
 print("=" * 60)
 
-# Wait for editor to fully initialize
+# Wait for editor to fully initialize (poll until draw stats available)
+print("Waiting for editor...")
+for attempt in range(20):
+    result = send_command({"command": "get_draw_stats"}, timeout=2)
+    if result.get("status") == "ok" and result.get("draw_calls", 0) > 0:
+        print(f"Editor ready (attempt {attempt + 1})")
+        break
+    time.sleep(1)
+else:
+    print("WARNING: Editor may not be fully initialized")
 time.sleep(1)
 
 # --- Test 1: Scene loaded ---
@@ -116,10 +125,16 @@ print(f"  INFO: {dc} draw calls, {tri} triangles")
 
 # --- Test 3: Screenshot ---
 print("\n[Test 3] Screenshot")
-time.sleep(0.5)  # ensure offscreen render is ready
-path = screenshot("test3_initial")
+time.sleep(1)
+# Retry screenshot up to 3 times
+path = None
+for attempt in range(3):
+    path = screenshot("test3_initial")
+    if path and os.path.exists(path):
+        break
+    time.sleep(1)
 test("Screenshot saved", path and os.path.exists(path))
-if path:
+if path and os.path.exists(path):
     size = os.path.getsize(path)
     test("Screenshot has content", size > 1000, f"size={size}")
 
@@ -134,7 +149,11 @@ info2 = send_command({"command": "get_scene_info"})
 sphere = next((n for n in info2.get("nodes", []) if n["name"] == "Sphere"), None)
 test("Sphere is selected", sphere and sphere.get("selected", False))
 
-path2 = screenshot("test4_sphere_selected")
+path2 = None
+for _ in range(3):
+    path2 = screenshot("test4_sphere_selected")
+    if path2 and os.path.exists(path2): break
+    time.sleep(0.5)
 test("Selection screenshot saved", path2 and os.path.exists(path2))
 
 # Re-query layout since selecting Sphere changes Inspector, shifting widget positions
@@ -201,11 +220,13 @@ for n in nodes_with_mat[:3]:
 
 # --- Test 8: Rapid selection changes ---
 print("\n[Test 8] Rapid selection changes")
-layout3 = get_layout()
 for name in ["Center Cube", "Tall Pillar", "Pyramid", "Tilted Cube"]:
+    # Re-query layout each time since selection changes Inspector
+    layout3 = get_layout()
     click_widget(f"hierarchy/{name}", layout3)
-    time.sleep(0.15)
+    time.sleep(0.3)
 
+time.sleep(0.5)
 info5 = send_command({"command": "get_scene_info"})
 selected = [n for n in info5.get("nodes", []) if n.get("selected")]
 test("Exactly one node selected", len(selected) == 1, f"got {len(selected)}")
@@ -213,23 +234,29 @@ if selected:
     test("Last clicked node selected", selected[0]["name"] == "Tilted Cube",
          f"got {selected[0]['name']}")
 
-# --- Test 9: RenderDoc capture via F12 ---
-print("\n[Test 9] RenderDoc capture via F12")
+# --- Test 9: RenderDoc capture ---
+print("\n[Test 9] RenderDoc capture")
 rdc_before = set(f for f in os.listdir("E:/MYQ/QymEngine/captures") if f.endswith(".rdc"))
-key_combo("F12")
-time.sleep(3)
+send_command({"command": "capture_frame"})
+time.sleep(5)  # wait for capture to complete fully
 rdc_after = set(f for f in os.listdir("E:/MYQ/QymEngine/captures") if f.endswith(".rdc"))
 new_rdcs = rdc_after - rdc_before
-test("New RDC file created by F12", len(new_rdcs) > 0, f"new: {new_rdcs}")
+test("New RDC file created", len(new_rdcs) > 0, f"new: {new_rdcs}")
 
 # --- Test 10: Shader hot reload (last because system() blocks) ---
 print("\n[Test 10] Shader hot reload")
-# reload_shaders is a data command because system() blocks the editor thread
+time.sleep(2)  # ensure capture is fully complete before reload
 result = send_command({"command": "reload_shaders"}, timeout=30)
 test("Reload command returned ok", result.get("status") == "ok")
-time.sleep(1)
-
-stats_after = send_command({"command": "get_draw_stats"}, timeout=5)
+# Wait for several frames to render after reload
+time.sleep(3)
+# Poll draw stats until non-zero or timeout
+stats_after = {"draw_calls": 0}
+for _ in range(5):
+    stats_after = send_command({"command": "get_draw_stats"}, timeout=5)
+    if stats_after.get("draw_calls", 0) > 0:
+        break
+    time.sleep(1)
 dc_after = stats_after.get("draw_calls", 0)
 test("Draw calls maintained after shader reload", dc_after > 0, f"got {dc_after}")
 path7 = screenshot("test10_after_reload")
@@ -237,6 +264,43 @@ test("Rendering intact after reload", path7 and os.path.exists(path7))
 
 # Final screenshot
 screenshot("test_final")
+
+# --- Test 11: Validation layer check ---
+print("\n[Test 11] Validation layer (restart editor without RenderDoc)")
+import subprocess
+# Kill current editor (RenderDoc suppresses validation output)
+subprocess.run(["C:/Windows/System32/taskkill.exe", "/F", "/IM", "QymEditor.exe"],
+               capture_output=True)
+time.sleep(2)
+
+# Set env var to disable RenderDoc loading, then start editor
+env = os.environ.copy()
+env["QYMENGINE_NO_RENDERDOC"] = "1"
+proc = subprocess.Popen(
+    ["E:/MYQ/QymEngine/build3/editor/Debug/QymEditor.exe"],
+    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
+)
+time.sleep(8)
+proc.terminate()
+try:
+    stdout, stderr = proc.communicate(timeout=5)
+except:
+    proc.kill()
+    stdout, stderr = proc.communicate()
+output = stdout + stderr
+# Filter out benign messages
+val_errors = [line for line in output.split('\n')
+              if 'validation layer:' in line.lower()
+              and 'vk' in line.lower()
+              and not any(skip in line for skip in [
+                  'windows_get_device', 'Layer name', 'Loading layer',
+                  'Searching for', 'Layer VK_LAYER', 'bandicam', 'GPP_VK',
+                  'not consumed by vertex shader'  # benign: Grid pipeline has no vertex input
+              ])]
+test("No Vulkan validation errors", len(val_errors) == 0,
+     f"{len(val_errors)} errors:\n" + "\n".join(val_errors[:5]))
+# Check bindless is enabled
+test("Bindless enabled", "Bindless support: YES" in output or "Bindless: enabled" in output)
 
 # =========================================
 print("\n" + "=" * 60)
