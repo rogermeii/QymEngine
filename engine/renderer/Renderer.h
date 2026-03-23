@@ -45,6 +45,7 @@ public:
     void setSwapChainRecreatedCallback(SwapChainRecreatedCallback cb) { m_swapChainRecreatedCb = std::move(cb); }
 
     void setCamera(const Camera* camera) { m_camera = camera; }
+    void setForceBindless(bool enabled) { m_forceBindless = enabled; }
 
     // Shader hot reload: recompile shaders and rebuild pipelines
     void reloadShaders();
@@ -161,6 +162,7 @@ private:
 
     // --- Bindless resources (PC only) ---
     bool m_bindlessEnabled = false;
+    bool m_forceBindless = false;
     VkDescriptorSetLayout m_bindlessSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_bindlessSet = VK_NULL_HANDLE;
     VkDescriptorPool m_bindlessPool = VK_NULL_HANDLE;
@@ -196,6 +198,23 @@ private:
     VkBuffer         m_wireframeMaterialParamBuffer = VK_NULL_HANDLE;
     VkDeviceMemory   m_wireframeMaterialParamMemory = VK_NULL_HANDLE;
     void*            m_wireframeMaterialParamMapped = nullptr;
+
+    // --- Shadow map resources ---
+    VkImage          m_shadowImage       = VK_NULL_HANDLE;
+    VkDeviceMemory   m_shadowMemory      = VK_NULL_HANDLE;
+    VkImageView      m_shadowImageView   = VK_NULL_HANDLE;
+    VkImage          m_shadowDepthImage      = VK_NULL_HANDLE;
+    VkDeviceMemory   m_shadowDepthMemory     = VK_NULL_HANDLE;
+    VkImageView      m_shadowDepthImageView  = VK_NULL_HANDLE;
+    VkSampler        m_shadowSampler     = VK_NULL_HANDLE;
+    VkRenderPass     m_shadowRenderPass  = VK_NULL_HANDLE;
+    VkFramebuffer    m_shadowFramebuffer = VK_NULL_HANDLE;
+    VkPipeline       m_shadowVkPipeline      = VK_NULL_HANDLE;
+    VkPipelineLayout m_shadowPipelineLayout  = VK_NULL_HANDLE;
+
+    void createShadowResources();
+    void destroyShadowResources();
+    void renderShadowPass(VkCommandBuffer cmd, Scene& scene);
 };
 
 } // namespace QymEngine

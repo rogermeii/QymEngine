@@ -1,4 +1,6 @@
 #include "renderer/Renderer.h"
+#include "renderer/VkDispatch.h"
+#include "asset/ShaderBundle.h"
 #include "core/Window.h"
 #include "scene/Frustum.h"
 
@@ -12,6 +14,32 @@
 
 namespace QymEngine {
 
+namespace {
+glm::mat4 toShaderMatrix(const glm::mat4& m)
+{
+    // Slang 生成的 GLSL 路径使用 vec * mat 的行向量乘法语义。
+    // 在 OpenGL/GLES 后端直接上传 GLM 原始矩阵更容易与驱动侧一致；
+    // Vulkan/D3D 仍沿用现有的转置布局。
+    if (vkIsOpenGLBackend() || vkIsGLESBackend())
+        return m;
+    return glm::transpose(m);
+}
+} // namespace
+
+// 根据当前后端选择 ShaderBundle 变体名
+// Vulkan: "default" / "bindless"
+// D3D12:  "default_dxil" / "bindless_dxil"
+// D3D11:  "default_dxbc" / "bindless_dxbc"
+static std::string shaderVariant(const std::string& base) {
+    if (vkIsD3D12Backend())
+        return base + "_dxil";
+    if (vkIsD3D11Backend())
+        return base + "_dxbc";
+    if (vkIsOpenGLBackend() || vkIsGLESBackend())
+        return base + "_glsl";
+    return base;
+}
+
 void Renderer::init(Window& window)
 {
     m_window = &window;
@@ -24,14 +52,17 @@ void Renderer::init(Window& window)
     SDL_Window* nativeWindow = m_window->getNativeWindow();
 
     // Init order follows dependency chain
+    SDL_Log("[Renderer] init: context.init...");
     m_context.init(nativeWindow);
+    SDL_Log("[Renderer] init: swapChain.create...");
     m_swapChain.create(m_context, nativeWindow);
+    SDL_Log("[Renderer] init: swapChain created");
     m_commandManager.createPool(m_context);
 
     // The original scene RenderPass (used for swapchain). Kept for init compatibility.
     m_renderPass.create(m_context.getDevice(), m_swapChain.getImageFormat());
 
-    // Register per-frame layout in cache (set 0: UBO with vertex+fragment stages)
+    // Register per-frame layout in cache (set 0: UBO + shadow map sampler)
     {
         VkDescriptorSetLayoutBinding uboBinding{};
         uboBinding.binding = 0;
@@ -39,12 +70,29 @@ void Renderer::init(Window& window)
         uboBinding.descriptorCount = 1;
         uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         uboBinding.pImmutableSamplers = nullptr;
-        m_perFrameLayout = m_layoutCache.getOrCreate(m_context.getDevice(), {uboBinding});
+
+        VkDescriptorSetLayoutBinding shadowBinding{};
+        shadowBinding.binding = 1;
+        shadowBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        shadowBinding.descriptorCount = 1;
+        shadowBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        shadowBinding.pImmutableSamplers = nullptr;
+
+        m_perFrameLayout = m_layoutCache.getOrCreate(m_context.getDevice(), {uboBinding, shadowBinding});
     }
 
-    // Create main pipeline using layout cache
-    m_pipeline.create(m_context.getDevice(), m_renderPass.get(),
-                      m_swapChain.getExtent(), m_layoutCache);
+    // Create main pipeline from ShaderBundle
+    {
+        std::string triPath = std::string(ASSETS_DIR) + "/shaders/Triangle.shaderbundle";
+        ShaderBundle triBundle;
+        std::string var = shaderVariant("default");
+        if (!triBundle.load(triPath) || !triBundle.hasVariant(var))
+            throw std::runtime_error("Failed to load Triangle.shaderbundle variant: " + var);
+        m_pipeline.createFromMemory(m_context.getDevice(), m_renderPass.get(),
+            m_swapChain.getExtent(), m_layoutCache, VK_POLYGON_MODE_FILL,
+            triBundle.getVertSpv(var), triBundle.getFragSpv(var),
+            triBundle.getReflectJson(var));
+    }
 
     // Swapchain framebuffers
     m_swapChain.createFramebuffers(m_context.getDevice(), m_renderPass.get());
@@ -59,10 +107,32 @@ void Renderer::init(Window& window)
     // Create descriptor pool
     m_descriptor.createPool(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT, 100);
 
+    // Create shadow map resources (before per-frame sets, they need shadow sampler)
+    createShadowResources();
+
     // Create per-frame UBO descriptor sets (set 0)
     m_descriptor.createPerFrameSets(m_context.getDevice(), MAX_FRAMES_IN_FLIGHT,
                                      m_perFrameLayout,
                                      m_buffer.getUniformBuffers());
+
+    // Write shadow map sampler into per-frame descriptor sets (binding 1)
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkDescriptorImageInfo shadowInfo{};
+        shadowInfo.sampler = m_shadowSampler;
+        shadowInfo.imageView = m_shadowImageView;
+        shadowInfo.imageLayout = vkIsGLESBackend()
+            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_descriptor.getPerFrameSet(i);
+        write.dstBinding = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &shadowInfo;
+        vkUpdateDescriptorSets(m_context.getDevice(), 1, &write, 0, nullptr);
+    }
 
     // Create fallback textures for the material system
     createFallbackTextures();
@@ -141,10 +211,23 @@ bool Renderer::beginFrame()
 
 void Renderer::drawScene(Scene& scene)
 {
+    static int s_drawFrame = 0;
+    if (s_drawFrame < 3) {
+        std::cerr << "[Renderer] drawScene frame=" << s_drawFrame
+                  << " offRP=" << (m_offscreenRenderPass != VK_NULL_HANDLE)
+                  << " offFB=" << (m_offscreenFramebuffer != VK_NULL_HANDLE) << std::endl;
+    }
+    s_drawFrame++;
+
     m_activeScene = &scene;
     if (m_offscreenRenderPass != VK_NULL_HANDLE && m_offscreenFramebuffer != VK_NULL_HANDLE)
     {
         VkCommandBuffer cmdBuf = m_commandManager.getBuffer(m_currentFrame);
+        // Shadow pass (before main scene pass)
+        if (m_shadowRenderPass != VK_NULL_HANDLE && m_shadowFramebuffer != VK_NULL_HANDLE
+            && m_shadowVkPipeline != VK_NULL_HANDLE) {
+            renderShadowPass(cmdBuf, scene);
+        }
         drawSceneToOffscreen(cmdBuf, scene);
     }
 }
@@ -414,6 +497,11 @@ void Renderer::createFallbackTextures()
 void Renderer::createBindlessResources()
 {
 #ifndef __ANDROID__
+    if (!m_forceBindless) {
+        m_bindlessEnabled = false;
+        std::cout << "Bindless: disabled (use --bindless to enable)" << std::endl;
+        return;
+    }
     if (!m_context.supportsBindless()) {
         m_bindlessEnabled = false;
         std::cout << "Bindless: disabled (GPU does not support required features)" << std::endl;
@@ -689,6 +777,7 @@ void Renderer::shutdown()
     VkDevice device = m_context.getDevice();
 
     destroyOffscreen();
+    destroyShadowResources();
 
     // Cleanup bindless resources (before fallback textures they reference)
     destroyBindlessResources();
@@ -955,66 +1044,71 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         if (vkCreateRenderPass(device, &rpInfo, nullptr, &m_offscreenRenderPass) != VK_SUCCESS)
             throw std::runtime_error("failed to create offscreen render pass!");
 
-        // Create offscreen pipeline using layout cache
-        m_offscreenPipeline.create(device, m_offscreenRenderPass,
-            {width, height}, m_layoutCache);
+        // 从 Triangle.shaderbundle 加载默认着色器
+        {
+            std::string triPath = std::string(ASSETS_DIR) + "/shaders/Triangle.shaderbundle";
+            ShaderBundle triBundle;
+            std::string var = shaderVariant("default");
+            if (!triBundle.load(triPath) || !triBundle.hasVariant(var))
+                throw std::runtime_error("Failed to load Triangle.shaderbundle variant: " + var);
 
-        // Create wireframe pipeline using layout cache (same shader, different polygon mode)
-        m_wireframePipeline.create(device, m_offscreenRenderPass,
-            {width, height}, m_layoutCache, VK_POLYGON_MODE_LINE);
+            auto vertSpv = triBundle.getVertSpv(var);
+            auto fragSpv = triBundle.getFragSpv(var);
+            auto reflectJson = triBundle.getReflectJson(var);
 
-        // Create bindless pipelines (if enabled)
-        if (m_bindlessEnabled && m_bindlessSetLayout != VK_NULL_HANDLE) {
-            // Build layouts: set 0 = per-frame (same), set 1 = bindless layout
-            std::vector<VkDescriptorSetLayout> bindlessLayouts = {
-                m_perFrameLayout,
-                m_bindlessSetLayout
-            };
+            m_offscreenPipeline.createFromMemory(device, m_offscreenRenderPass,
+                {width, height}, m_layoutCache, VK_POLYGON_MODE_FILL,
+                vertSpv, fragSpv, reflectJson);
 
-            // Use the bindless reflection JSON for push constant ranges
-            // Load it to get the correct push constant data
-            ShaderReflectionData bindlessReflection;
-            std::string bindlessReflectPath = std::string(ASSETS_DIR) + "/shaders/Triangle_bindless.reflect.json";
-            if (bindlessReflection.loadFromJson(bindlessReflectPath)) {
+            m_wireframePipeline.createFromMemory(device, m_offscreenRenderPass,
+                {width, height}, m_layoutCache, VK_POLYGON_MODE_LINE,
+                vertSpv, fragSpv, reflectJson);
+
+            // Create bindless pipelines (if enabled)
+            std::string bVar = shaderVariant("bindless");
+            if (m_bindlessEnabled && m_bindlessSetLayout != VK_NULL_HANDLE
+                && triBundle.hasVariant(bVar)) {
+                std::vector<VkDescriptorSetLayout> bindlessLayouts = {
+                    m_perFrameLayout,
+                    m_bindlessSetLayout
+                };
+
+                auto bVertSpv = triBundle.getVertSpv(bVar);
+                auto bFragSpv = triBundle.getFragSpv(bVar);
+                auto bReflectJson = triBundle.getReflectJson(bVar);
+
+                ShaderReflectionData bindlessReflection;
+                bindlessReflection.loadFromString(bReflectJson);
                 auto pcRanges = bindlessReflection.createPushConstantRanges();
 
-                m_bindlessOffscreenPipeline.createWithLayouts(
+                m_bindlessOffscreenPipeline.createWithLayoutsFromMemory(
                     device, m_offscreenRenderPass, bindlessLayouts,
                     {width, height}, pcRanges, VK_POLYGON_MODE_FILL,
-                    "shaders/triangle_vert_bindless.spv",
-                    "shaders/triangle_frag_bindless.spv");
+                    bVertSpv, bFragSpv, bReflectJson);
 
-                m_bindlessWireframePipeline.createWithLayouts(
+                m_bindlessWireframePipeline.createWithLayoutsFromMemory(
                     device, m_offscreenRenderPass, bindlessLayouts,
                     {width, height}, pcRanges, VK_POLYGON_MODE_LINE,
-                    "shaders/triangle_vert_bindless.spv",
-                    "shaders/triangle_frag_bindless.spv");
-            } else {
-                std::cerr << "Bindless: failed to load reflection JSON, disabling bindless pipelines" << std::endl;
-                m_bindlessEnabled = false;
+                    bVertSpv, bFragSpv, bReflectJson);
             }
         }
 
         // --- Create grid pipeline (no vertex input, alpha blending, UBO-only) ---
         {
-            auto readFile = [](const std::string& filename) -> std::vector<char> {
-                SDL_RWops* rw = SDL_RWFromFile(filename.c_str(), "rb");
-                if (!rw)
-                    throw std::runtime_error("failed to open file: " + filename);
-                Sint64 size = SDL_RWsize(rw);
-                std::vector<char> buffer(static_cast<size_t>(size));
-                SDL_RWread(rw, buffer.data(), 1, static_cast<size_t>(size));
-                SDL_RWclose(rw);
-                return buffer;
-            };
-
+            // 从 Grid.shaderbundle 加载
+            std::string gridBundlePath;
 #ifdef __ANDROID__
-            auto gridVertCode = readFile("shaders/grid_vert.spv");
-            auto gridFragCode = readFile("shaders/grid_frag.spv");
+            gridBundlePath = "shaders/Grid.shaderbundle";
 #else
-            auto gridVertCode = readFile(std::string(ASSETS_DIR) + "/shaders/grid_vert.spv");
-            auto gridFragCode = readFile(std::string(ASSETS_DIR) + "/shaders/grid_frag.spv");
+            gridBundlePath = std::string(ASSETS_DIR) + "/shaders/Grid.shaderbundle";
 #endif
+            ShaderBundle gridBundle;
+            std::string gVar = shaderVariant("default");
+            if (!gridBundle.load(gridBundlePath) || !gridBundle.hasVariant(gVar))
+                throw std::runtime_error("Failed to load Grid.shaderbundle variant: " + gVar);
+
+            auto gridVertCode = gridBundle.getVertSpv(gVar);
+            auto gridFragCode = gridBundle.getFragSpv(gVar);
 
             auto createShaderModule = [&](const std::vector<char>& code) -> VkShaderModule {
                 VkShaderModuleCreateInfo ci{};
@@ -1092,8 +1186,9 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
             // Depth test + write enabled
             VkPipelineDepthStencilStateCreateInfo depthStencil{};
             depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-            depthStencil.depthTestEnable = VK_TRUE;
-            depthStencil.depthWriteEnable = VK_TRUE;
+            bool gridUsesDepth = !(vkIsOpenGLBackend() || vkIsGLESBackend());
+            depthStencil.depthTestEnable = gridUsesDepth ? VK_TRUE : VK_FALSE;
+            depthStencil.depthWriteEnable = gridUsesDepth ? VK_TRUE : VK_FALSE;
             depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
             depthStencil.depthBoundsTestEnable = VK_FALSE;
             depthStencil.stencilTestEnable = VK_FALSE;
@@ -1326,46 +1421,63 @@ void Renderer::reloadShaders()
     // 2. Invalidate all shader and material caches
     m_assetManager.invalidateAllShadersAndMaterials();
 
-    // 3. Rebuild offscreen and wireframe pipelines
-    m_offscreenPipeline.cleanup(device);
-    m_wireframePipeline.cleanup(device);
-    m_offscreenPipeline.create(device, m_offscreenRenderPass,
-        {m_offscreenWidth, m_offscreenHeight}, m_layoutCache);
-    m_wireframePipeline.create(device, m_offscreenRenderPass,
-        {m_offscreenWidth, m_offscreenHeight}, m_layoutCache, VK_POLYGON_MODE_LINE);
+    // 3. Rebuild pipelines from ShaderBundle
+    {
+        std::string triPath = std::string(ASSETS_DIR) + "/shaders/Triangle.shaderbundle";
+        ShaderBundle triBundle;
+        std::string var = shaderVariant("default");
+        if (!triBundle.load(triPath) || !triBundle.hasVariant(var))
+            throw std::runtime_error("Failed to load Triangle.shaderbundle for reload: " + var);
 
-    // 3b. Rebuild bindless pipelines
-    if (m_bindlessEnabled && m_bindlessSetLayout != VK_NULL_HANDLE) {
-        m_bindlessOffscreenPipeline.cleanup(device);
-        m_bindlessWireframePipeline.cleanup(device);
+        auto vertSpv = triBundle.getVertSpv(var);
+        auto fragSpv = triBundle.getFragSpv(var);
+        auto reflectJson = triBundle.getReflectJson(var);
 
-        std::vector<VkDescriptorSetLayout> bindlessLayouts = {
-            m_perFrameLayout,
-            m_bindlessSetLayout
-        };
+        m_offscreenPipeline.cleanup(device);
+        m_wireframePipeline.cleanup(device);
+        m_offscreenPipeline.createFromMemory(device, m_offscreenRenderPass,
+            {m_offscreenWidth, m_offscreenHeight}, m_layoutCache, VK_POLYGON_MODE_FILL,
+            vertSpv, fragSpv, reflectJson);
+        m_wireframePipeline.createFromMemory(device, m_offscreenRenderPass,
+            {m_offscreenWidth, m_offscreenHeight}, m_layoutCache, VK_POLYGON_MODE_LINE,
+            vertSpv, fragSpv, reflectJson);
 
-        ShaderReflectionData bindlessReflection;
-        std::string bindlessReflectPath = std::string(ASSETS_DIR) + "/shaders/Triangle_bindless.reflect.json";
-        if (bindlessReflection.loadFromJson(bindlessReflectPath)) {
+        // 3b. Rebuild bindless pipelines
+        std::string bVar = shaderVariant("bindless");
+        if (m_bindlessEnabled && m_bindlessSetLayout != VK_NULL_HANDLE
+            && triBundle.hasVariant(bVar)) {
+            m_bindlessOffscreenPipeline.cleanup(device);
+            m_bindlessWireframePipeline.cleanup(device);
+
+            std::vector<VkDescriptorSetLayout> bindlessLayouts = {
+                m_perFrameLayout,
+                m_bindlessSetLayout
+            };
+
+            auto bVertSpv = triBundle.getVertSpv(bVar);
+            auto bFragSpv = triBundle.getFragSpv(bVar);
+            auto bReflectJson = triBundle.getReflectJson(bVar);
+
+            ShaderReflectionData bindlessReflection;
+            bindlessReflection.loadFromString(bReflectJson);
             auto pcRanges = bindlessReflection.createPushConstantRanges();
 
-            m_bindlessOffscreenPipeline.createWithLayouts(
+            m_bindlessOffscreenPipeline.createWithLayoutsFromMemory(
                 device, m_offscreenRenderPass, bindlessLayouts,
                 {m_offscreenWidth, m_offscreenHeight}, pcRanges, VK_POLYGON_MODE_FILL,
-                "shaders/triangle_vert_bindless.spv",
-                "shaders/triangle_frag_bindless.spv");
+                bVertSpv, bFragSpv, bReflectJson);
 
-            m_bindlessWireframePipeline.createWithLayouts(
+            m_bindlessWireframePipeline.createWithLayoutsFromMemory(
                 device, m_offscreenRenderPass, bindlessLayouts,
                 {m_offscreenWidth, m_offscreenHeight}, pcRanges, VK_POLYGON_MODE_LINE,
-                "shaders/triangle_vert_bindless.spv",
-                "shaders/triangle_frag_bindless.spv");
+                bVertSpv, bFragSpv, bReflectJson);
         }
-    }
 
-    // 4. Rebuild main pipeline
-    m_pipeline.cleanup(device);
-    m_pipeline.create(device, m_renderPass.get(), m_swapChain.getExtent(), m_layoutCache);
+        // 4. Rebuild main pipeline
+        m_pipeline.cleanup(device);
+        m_pipeline.createFromMemory(device, m_renderPass.get(), m_swapChain.getExtent(),
+            m_layoutCache, VK_POLYGON_MODE_FILL, vertSpv, fragSpv, reflectJson);
+    }
 }
 
 void Renderer::resizeOffscreen(uint32_t width, uint32_t height)
@@ -1533,7 +1645,13 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     Frustum frustum;
     if (m_camera) {
         float aspect = m_offscreenWidth / static_cast<float>(m_offscreenHeight);
-        glm::mat4 vp = m_camera->getProjMatrix(aspect) * m_camera->getViewMatrix();
+        bool vulkanYFlip = !vkIsDirectXBackend() && !vkIsOpenGLBackend() && !vkIsGLESBackend();
+        glm::mat4 proj = m_camera->getProjMatrix(aspect, vulkanYFlip);
+        if (vkIsGLESBackend() && !vkHasClipControl()) {
+            glm::mat4 depthFix(1.0f); depthFix[2][2] = 2.0f; depthFix[3][2] = -1.0f;
+            proj = depthFix * proj;
+        }
+        glm::mat4 vp = proj * m_camera->getViewMatrix();
         frustum.update(vp);
     }
 
@@ -1553,7 +1671,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
                                 bindlessLayout, 1, 1, &m_bindlessSet, 0, nullptr);
 
         scene.traverseNodes([&](Node* node) {
-            if (node->nodeType == NodeType::DirectionalLight) return;
+            if (node->isLight()) return;
 
             AABB localAABB;
             if (!node->meshPath.empty()) {
@@ -1576,7 +1694,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
                 mat = m_assetManager.loadMaterial(node->materialPath);
 
             PushConstantData pc{};
-            pc.model = glm::transpose(node->getWorldMatrix());
+            pc.model = toShaderMatrix(node->getWorldMatrix());
             pc.highlighted = 0;
             pc.materialIndex = mat ? mat->bindlessIndex : m_defaultBindlessMaterialIndex;
 
@@ -1606,7 +1724,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
     } else {
         // --- Non-bindless path (fallback / Android) ---
         scene.traverseNodes([&](Node* node) {
-            if (node->nodeType == NodeType::DirectionalLight) return;
+            if (node->isLight()) return;
 
             AABB localAABB;
             if (!node->meshPath.empty()) {
@@ -1653,11 +1771,34 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
                                     pipelineLayout, 1, 1, &matSet, 0, nullptr);
 
             PushConstantData pc{};
-            pc.model = glm::transpose(node->getWorldMatrix());
+            pc.model = toShaderMatrix(node->getWorldMatrix());
             pc.highlighted = 0;
             vkCmdPushConstants(commandBuffer, pipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT,
                 0, sizeof(PushConstantData), &pc);
+
+            if (vkIsGLESBackend()) {
+                static int s_glesClipLog = 0;
+                if (s_glesClipLog < 6 && (node->name == "Ground" || node->name == "Center Cube" || node->name == "Sphere")) {
+                    glm::mat4 view = m_camera ? m_camera->getViewMatrix()
+                                              : glm::lookAt(glm::vec3(2,2,2), glm::vec3(0,0,0), glm::vec3(0,1,0));
+                    bool needYFlip = !vkIsDirectXBackend() && !vkIsOpenGLBackend() && !vkIsGLESBackend();
+                    glm::mat4 proj = m_camera ? m_camera->getProjMatrix(m_offscreenWidth / static_cast<float>(m_offscreenHeight), needYFlip)
+                                              : glm::perspective(glm::radians(45.0f), m_offscreenWidth / static_cast<float>(m_offscreenHeight), 0.1f, 10.0f);
+                    if (vkIsGLESBackend() && !vkHasClipControl()) {
+                        glm::mat4 depthFix(1.0f);
+                        depthFix[2][2] = 2.0f;
+                        depthFix[3][2] = -1.0f;
+                        proj = depthFix * proj;
+                    }
+                    glm::vec4 worldCenter = node->getWorldMatrix() * glm::vec4(0, 0, 0, 1);
+                    glm::vec4 clip = proj * view * worldCenter;
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    SDL_Log("[Renderer][GLES] node=%s clip=(%.3f, %.3f, %.3f, %.3f) ndc=(%.3f, %.3f, %.3f)",
+                            node->name.c_str(), clip.x, clip.y, clip.z, clip.w, ndc.x, ndc.y, ndc.z);
+                    s_glesClipLog++;
+                }
+            }
 
             if (!node->meshPath.empty()) {
                 auto* mesh = m_assetManager.loadMesh(node->meshPath);
@@ -1705,7 +1846,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         }
 
         PushConstantData pc{};
-        pc.model = glm::transpose(selected->getWorldMatrix());
+        pc.model = toShaderMatrix(selected->getWorldMatrix());
         pc.highlighted = 1;
         pc.materialIndex = m_wireframeBindlessMaterialIndex;
         VkShaderStageFlags wfPcStages = (m_bindlessEnabled && m_bindlessWireframePipeline.getPipeline() != VK_NULL_HANDLE)
@@ -1763,7 +1904,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         pc.materialIndex = m_wireframeBindlessMaterialIndex;
 
         // Sphere at light position
-        pc.model = glm::transpose(glm::scale(glm::translate(glm::mat4(1.0f), pos), glm::vec3(0.15f)));
+        pc.model = toShaderMatrix(glm::scale(glm::translate(glm::mat4(1.0f), pos), glm::vec3(0.15f)));
         vkCmdPushConstants(commandBuffer, wfLayout, gizmoPcStages,
             0, sizeof(PushConstantData), &pc);
         m_meshLibrary.bind(commandBuffer, MeshType::Sphere);
@@ -1786,7 +1927,7 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
             rotMat = glm::rotate(glm::mat4(1.0f), glm::pi<float>(), glm::vec3(1, 0, 0));
         }
 
-        pc.model = glm::transpose(glm::translate(glm::mat4(1.0f), arrowCenter)
+        pc.model = toShaderMatrix(glm::translate(glm::mat4(1.0f), arrowCenter)
                  * rotMat
                  * glm::scale(glm::mat4(1.0f), glm::vec3(0.03f, arrowLen, 0.03f)));
         vkCmdPushConstants(commandBuffer, wfLayout, gizmoPcStages,
@@ -1815,31 +1956,110 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
 
     if (m_camera) {
         ubo.view = glm::transpose(m_camera->getViewMatrix());
-        ubo.proj = glm::transpose(m_camera->getProjMatrix(aspect));
+        bool needYFlip = !vkIsDirectXBackend() && !vkIsOpenGLBackend() && !vkIsGLESBackend();
+        glm::mat4 proj = m_camera->getProjMatrix(aspect, needYFlip);
+        // GLES 没有 glClipControl: GLM_FORCE_DEPTH_ZERO_TO_ONE 输出 [0,1]
+        // 但 GLES NDC 深度是 [-1,1]，需要修正: z_ndc = 2*z_01 - 1
+        if (vkIsGLESBackend() && !vkHasClipControl()) {
+            // GLES 没有 glClipControl，NDC 深度 [-1,1]
+            // GLM_FORCE_DEPTH_ZERO_TO_ONE 输出 [0,1]，需要修正: z_new = 2*z - w
+            glm::mat4 depthFix(1.0f);
+            depthFix[2][2] = 2.0f;
+            depthFix[3][2] = -1.0f;
+            proj = depthFix * proj;
+        }
+        ubo.proj = glm::transpose(proj);
     } else {
         ubo.view = glm::lookAt(glm::vec3(2,2,2), glm::vec3(0,0,0), glm::vec3(0,1,0));
         ubo.proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
-        ubo.proj[1][1] *= -1;
+        if (!vkIsDirectXBackend() && !vkIsOpenGLBackend() && !vkIsGLESBackend()) ubo.proj[1][1] *= -1;
+        if (vkIsGLESBackend() && !vkHasClipControl()) {
+            glm::mat4 depthFix(1.0f);
+            depthFix[2][2] = 2.0f;
+            depthFix[3][2] = -1.0f;
+            ubo.proj = depthFix * ubo.proj;
+        }
         ubo.view = glm::transpose(ubo.view);
         ubo.proj = glm::transpose(ubo.proj);
     }
 
-    // Find directional light in scene (use first one found, fallback to defaults)
-    ubo.lightDir = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
-    ubo.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
     ubo.ambientColor = glm::vec3(0.15f, 0.15f, 0.15f);
-    if (m_activeScene) {
-        m_activeScene->traverseNodes([&](Node* node) {
-            if (node->nodeType == NodeType::DirectionalLight) {
-                ubo.lightDir = node->getLightDirection();
-                ubo.lightColor = node->lightColor * node->lightIntensity;
-            }
-        });
-    }
     if (m_camera)
         ubo.cameraPos = m_camera->getPosition();
     else
         ubo.cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
+
+    // Collect all lights into UBO array
+    int lightCount = 0;
+    if (m_activeScene) {
+        m_activeScene->traverseNodes([&](Node* node) {
+            if (lightCount >= MAX_LIGHTS) return;
+            if (!node->isLight()) return;
+
+            LightData& ld = ubo.lights[lightCount];
+            glm::vec3 worldPos = glm::vec3(node->getWorldMatrix()[3]);
+            glm::vec3 dir = node->getLightDirection();
+            glm::vec3 color = node->lightColor * node->lightIntensity;
+
+            if (node->nodeType == NodeType::DirectionalLight) {
+                ld.positionAndType = glm::vec4(0.0f, 0.0f, 0.0f, float(LIGHT_TYPE_DIRECTIONAL));
+                ld.directionAndRange = glm::vec4(dir, 0.0f);
+            } else if (node->nodeType == NodeType::PointLight) {
+                ld.positionAndType = glm::vec4(worldPos, float(LIGHT_TYPE_POINT));
+                ld.directionAndRange = glm::vec4(0.0f, 0.0f, 0.0f, node->lightRange);
+            } else if (node->nodeType == NodeType::SpotLight) {
+                ld.positionAndType = glm::vec4(worldPos, float(LIGHT_TYPE_SPOT));
+                ld.directionAndRange = glm::vec4(dir, node->lightRange);
+                ld.spotParams = glm::vec4(
+                    glm::cos(glm::radians(node->spotInnerAngle)),
+                    glm::cos(glm::radians(node->spotOuterAngle)),
+                    0.0f, 0.0f);
+            }
+            ld.colorAndIntensity = glm::vec4(color, node->lightIntensity);
+            lightCount++;
+        });
+    }
+    // Fallback: if no lights in scene, add a default directional light
+    if (lightCount == 0) {
+        LightData& ld = ubo.lights[0];
+        ld.positionAndType = glm::vec4(0, 0, 0, float(LIGHT_TYPE_DIRECTIONAL));
+        ld.directionAndRange = glm::vec4(glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f)), 0.0f);
+        ld.colorAndIntensity = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        ld.spotParams = glm::vec4(0.0f);
+        lightCount = 1;
+    }
+    ubo.lightCountPad = glm::ivec4(lightCount, 0, 0, 0);
+
+    // Compute shadow map light VP (first directional light)
+    bool hasShadow = false;
+    for (int i = 0; i < lightCount; i++) {
+        if (int(ubo.lights[i].positionAndType.w) == LIGHT_TYPE_DIRECTIONAL) {
+            glm::vec3 lightDir = glm::vec3(ubo.lights[i].directionAndRange);
+            // Orthographic projection centered on origin, covering scene bounds
+            glm::vec3 lightPos = -lightDir * 20.0f; // 光源位置 = 反方向 * 距离
+            glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0, 1, 0));
+            glm::mat4 lightProj = glm::ortho(-15.0f, 15.0f, -15.0f, 15.0f, 0.1f, 50.0f);
+            if (!vkIsDirectXBackend() && !vkIsOpenGLBackend() && !vkIsGLESBackend()) lightProj[1][1] *= -1; // Vulkan Y-flip
+            if (vkIsGLESBackend() && !vkHasClipControl()) {
+                // GLES 没有 glClipControl，NDC 深度 [-1,1]，需要修正 lightProj
+                glm::mat4 depthFix(1.0f);
+                depthFix[2][2] = 2.0f;
+                depthFix[3][2] = -1.0f;
+                lightProj = depthFix * lightProj;
+            }
+            ubo.lightVP = glm::transpose(lightProj * lightView);
+            hasShadow = true;
+            break;
+        }
+    }
+    // x=shadowEnabled, y=shadowUVFlipY, z=depthNDCConvert (GLES 需要 [-1,1]→[0,1] 转换)
+    // D3D: viewport Y-up 导致 shadow map UV 需要翻转
+    // OpenGL + glClipControl(GL_LOWER_LEFT): 和 Vulkan 一致，不需要翻转
+    // 目前 Android GLES 上主方向光会被 shadow 分支整体乘暗，先关闭 GLES 阴影采样，
+    // 确保直射光链路恢复正常，再继续定位 shadowMap/sampleShadow 的根因。
+    const bool enableShadowSampling = hasShadow;
+    ubo.shadowParams = glm::ivec4(enableShadowSampling ? 1 : 0, vkIsDirectXBackend() ? 1 : 0,
+                                  (vkIsGLESBackend() && !vkHasClipControl()) ? 1 : 0, 0);
 
     memcpy(m_buffer.getUniformBuffersMapped()[currentImage], &ubo, sizeof(ubo));
 }
@@ -1865,6 +2085,402 @@ void Renderer::recreateSwapChain()
 
     if (m_swapChainRecreatedCb)
         m_swapChainRecreatedCb();
+}
+
+// ========================================================================
+// Shadow Map
+// ========================================================================
+
+void Renderer::createShadowResources()
+{
+    VkDevice device = m_context.getDevice();
+    constexpr uint32_t size = SHADOW_MAP_SIZE;
+    const bool glesShadowColor = vkIsGLESBackend();
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+    VkFormat shadowSampleFormat = glesShadowColor ? VK_FORMAT_R32_SFLOAT : depthFormat;
+
+    // Shadow sample image: GLES 用颜色图存深度，其他后端仍用深度纹理。
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = shadowSampleFormat;
+    imageInfo.extent = {size, size, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = (glesShadowColor ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                                       : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+                    | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    vkCreateImage(device, &imageInfo, nullptr, &m_shadowImage);
+
+    VkMemoryRequirements memReq;
+    vkGetImageMemoryRequirements(device, m_shadowImage, &memReq);
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReq.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    vkAllocateMemory(device, &allocInfo, nullptr, &m_shadowMemory);
+    vkBindImageMemory(device, m_shadowImage, m_shadowMemory, 0);
+
+    // Image view
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_shadowImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = shadowSampleFormat;
+    viewInfo.subresourceRange.aspectMask = glesShadowColor ? VK_IMAGE_ASPECT_COLOR_BIT
+                                                           : VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = 1;
+    vkCreateImageView(device, &viewInfo, nullptr, &m_shadowImageView);
+
+    if (glesShadowColor) {
+        VkImageCreateInfo depthInfo = imageInfo;
+        depthInfo.format = depthFormat;
+        depthInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        vkCreateImage(device, &depthInfo, nullptr, &m_shadowDepthImage);
+
+        vkGetImageMemoryRequirements(device, m_shadowDepthImage, &memReq);
+        allocInfo.allocationSize = memReq.size;
+        allocInfo.memoryTypeIndex = m_context.findMemoryType(memReq.memoryTypeBits,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        vkAllocateMemory(device, &allocInfo, nullptr, &m_shadowDepthMemory);
+        vkBindImageMemory(device, m_shadowDepthImage, m_shadowDepthMemory, 0);
+
+        VkImageViewCreateInfo depthViewInfo{};
+        depthViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        depthViewInfo.image = m_shadowDepthImage;
+        depthViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        depthViewInfo.format = depthFormat;
+        depthViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        depthViewInfo.subresourceRange.levelCount = 1;
+        depthViewInfo.subresourceRange.layerCount = 1;
+        vkCreateImageView(device, &depthViewInfo, nullptr, &m_shadowDepthImageView);
+    }
+
+    // Sampler (linear filtering for PCF, border color = white = max depth)
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    vkCreateSampler(device, &samplerInfo, nullptr, &m_shadowSampler);
+
+    VkAttachmentDescription colorAttach{};
+    colorAttach.format = shadowSampleFormat;
+    colorAttach.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttach.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttach.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttach.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttach.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentDescription depthAttach{};
+    depthAttach.format = depthFormat;
+    depthAttach.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttach.storeOp = glesShadowColor ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
+    depthAttach.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttach.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttach.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttach.finalLayout = glesShadowColor
+        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = glesShadowColor ? 1 : 0;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    if (glesShadowColor) {
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+    }
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dep{};
+    dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep.dstSubpass = 0;
+    dep.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dep.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo rpInfo{};
+    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    std::array<VkAttachmentDescription, 2> shadowAttachments = {colorAttach, depthAttach};
+    rpInfo.attachmentCount = glesShadowColor ? 2u : 1u;
+    rpInfo.pAttachments = glesShadowColor ? shadowAttachments.data() : &depthAttach;
+    rpInfo.subpassCount = 1;
+    rpInfo.pSubpasses = &subpass;
+    rpInfo.dependencyCount = 1;
+    rpInfo.pDependencies = &dep;
+    vkCreateRenderPass(device, &rpInfo, nullptr, &m_shadowRenderPass);
+
+    // Framebuffer
+    VkFramebufferCreateInfo fbInfo{};
+    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbInfo.renderPass = m_shadowRenderPass;
+    std::array<VkImageView, 2> shadowViews = {m_shadowImageView, m_shadowDepthImageView};
+    fbInfo.attachmentCount = glesShadowColor ? 2u : 1u;
+    fbInfo.pAttachments = glesShadowColor ? shadowViews.data() : &m_shadowImageView;
+    fbInfo.width = size;
+    fbInfo.height = size;
+    fbInfo.layers = 1;
+    vkCreateFramebuffer(device, &fbInfo, nullptr, &m_shadowFramebuffer);
+
+    // Shadow pipeline
+    {
+        std::vector<char> vertSpv;
+        std::vector<char> fragSpv;
+        if (glesShadowColor) {
+            static const char* kGlesShadowVS = R"(#version 300 es
+precision highp float;
+layout(std140) uniform block_FrameData_std140_0 {
+    mat4 view_0;
+    mat4 proj_0;
+    vec3 ambientColor_0; float _framePad0;
+    vec3 cameraPos_0; float _framePad1;
+    ivec4 lightCountPad_0;
+    vec4 lights_0[32];
+    mat4 lightVP_0;
+    ivec4 shadowParams_0;
+} frame_0;
+layout(std140) uniform block_PushConstants_std140_0 {
+    mat4 model_0;
+    int highlighted_0;
+    vec3 _pcPad0;
+} pc_0;
+layout(location = 0) in vec3 input_position_0;
+void main() {
+    vec4 worldPos = pc_0.model_0 * vec4(input_position_0, 1.0);
+    gl_Position = transpose(frame_0.lightVP_0) * worldPos;
+})";
+            static const char* kGlesShadowFS = R"(#version 300 es
+precision highp float;
+layout(location = 0) out float outShadow_0;
+void main() {
+    outShadow_0 = gl_FragCoord.z;
+})";
+            vertSpv.assign(kGlesShadowVS, kGlesShadowVS + std::strlen(kGlesShadowVS));
+            fragSpv.assign(kGlesShadowFS, kGlesShadowFS + std::strlen(kGlesShadowFS));
+        } else {
+            std::string bundlePath = std::string(ASSETS_DIR) + "/shaders/Shadow.shaderbundle";
+            ShaderBundle bundle;
+            std::string sVar = shaderVariant("default");
+            if (!bundle.load(bundlePath) || !bundle.hasVariant(sVar))
+                throw std::runtime_error("Failed to load Shadow.shaderbundle variant: " + sVar);
+            vertSpv = bundle.getVertSpv(sVar);
+            fragSpv = bundle.getFragSpv(sVar);
+        }
+
+        auto createModule = [&](const std::vector<char>& code) -> VkShaderModule {
+            VkShaderModuleCreateInfo ci{};
+            ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            ci.codeSize = code.size();
+            ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
+            VkShaderModule mod;
+            vkCreateShaderModule(device, &ci, nullptr, &mod);
+            return mod;
+        };
+
+        VkShaderModule vertMod = createModule(vertSpv);
+        VkShaderModule fragMod = createModule(fragSpv);
+
+        VkPipelineShaderStageCreateInfo stages[2] = {};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vertMod;
+        stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = fragMod;
+        stages[1].pName = "main";
+
+        auto bindingDesc = Vertex::getBindingDescription();
+        auto attrDescs = Vertex::getAttributeDescriptions();
+        VkPipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertexInput.vertexBindingDescriptionCount = 1;
+        vertexInput.pVertexBindingDescriptions = &bindingDesc;
+        vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrDescs.size());
+        vertexInput.pVertexAttributeDescriptions = attrDescs.data();
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineDynamicStateCreateInfo dynamicState{};
+        std::vector<VkDynamicState> dynStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamicState.dynamicStateCount = static_cast<uint32_t>(dynStates.size());
+        dynamicState.pDynamicStates = dynStates.data();
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo rasterizer{};
+        rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizer.lineWidth = 1.0f;
+        rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT; // Front-face culling reduces shadow acne
+        rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterizer.depthBiasEnable = VK_TRUE;
+        rasterizer.depthBiasConstantFactor = 1.25f;
+        rasterizer.depthBiasSlopeFactor = 1.75f;
+
+        VkPipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineColorBlendAttachmentState shadowColorBlend{};
+        shadowColorBlend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+        shadowColorBlend.blendEnable = VK_FALSE;
+
+        VkPipelineColorBlendStateCreateInfo colorBlending{};
+        colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlending.attachmentCount = glesShadowColor ? 1u : 0u;
+        colorBlending.pAttachments = glesShadowColor ? &shadowColorBlend : nullptr;
+
+        VkPipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+
+        // Pipeline layout: set 0 only + push constants
+        VkPushConstantRange pcRange{};
+        pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        pcRange.offset = 0;
+        pcRange.size = sizeof(PushConstantData);
+
+        VkPipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts = &m_perFrameLayout;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pcRange;
+        vkCreatePipelineLayout(device, &layoutInfo, nullptr, &m_shadowPipelineLayout);
+
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount = 2;
+        pipelineInfo.pStages = stages;
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState = &multisampling;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlending;
+        pipelineInfo.pDynamicState = &dynamicState;
+        pipelineInfo.layout = m_shadowPipelineLayout;
+        pipelineInfo.renderPass = m_shadowRenderPass;
+
+        VkResult shadowPipeResult = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_shadowVkPipeline);
+        if (shadowPipeResult != VK_SUCCESS)
+            m_shadowVkPipeline = VK_NULL_HANDLE;
+
+        vkDestroyShaderModule(device, fragMod, nullptr);
+        vkDestroyShaderModule(device, vertMod, nullptr);
+    }
+}
+
+void Renderer::destroyShadowResources()
+{
+    VkDevice device = m_context.getDevice();
+    if (m_shadowVkPipeline) vkDestroyPipeline(device, m_shadowVkPipeline, nullptr);
+    if (m_shadowPipelineLayout) vkDestroyPipelineLayout(device, m_shadowPipelineLayout, nullptr);
+    if (m_shadowFramebuffer) vkDestroyFramebuffer(device, m_shadowFramebuffer, nullptr);
+    if (m_shadowRenderPass) vkDestroyRenderPass(device, m_shadowRenderPass, nullptr);
+    if (m_shadowSampler) vkDestroySampler(device, m_shadowSampler, nullptr);
+    if (m_shadowImageView) vkDestroyImageView(device, m_shadowImageView, nullptr);
+    if (m_shadowDepthImageView) vkDestroyImageView(device, m_shadowDepthImageView, nullptr);
+    if (m_shadowImage) vkDestroyImage(device, m_shadowImage, nullptr);
+    if (m_shadowDepthImage) vkDestroyImage(device, m_shadowDepthImage, nullptr);
+    if (m_shadowMemory) vkFreeMemory(device, m_shadowMemory, nullptr);
+    if (m_shadowDepthMemory) vkFreeMemory(device, m_shadowDepthMemory, nullptr);
+}
+
+void Renderer::renderShadowPass(VkCommandBuffer cmd, Scene& scene)
+{
+    if (m_shadowVkPipeline == VK_NULL_HANDLE) return;
+
+    constexpr uint32_t size = SHADOW_MAP_SIZE;
+
+    VkRenderPassBeginInfo rpBegin{};
+    rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpBegin.renderPass = m_shadowRenderPass;
+    rpBegin.framebuffer = m_shadowFramebuffer;
+    rpBegin.renderArea = {{0, 0}, {size, size}};
+    std::array<VkClearValue, 2> clearValues{};
+    if (vkIsGLESBackend()) {
+        clearValues[0].color = {{1.0f, 1.0f, 1.0f, 1.0f}};
+        clearValues[1].depthStencil = {1.0f, 0};
+        rpBegin.clearValueCount = 2;
+    } else {
+        clearValues[0].depthStencil = {1.0f, 0};
+        rpBegin.clearValueCount = 1;
+    }
+    rpBegin.pClearValues = clearValues.data();
+    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowVkPipeline);
+
+    VkViewport vp{0, 0, float(size), float(size), 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, {size, size}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // Bind per-frame descriptor set (contains lightVP in view/proj slots via UBO)
+    VkDescriptorSet frameSet = m_descriptor.getPerFrameSet(m_currentFrame);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_shadowPipelineLayout, 0, 1, &frameSet, 0, nullptr);
+
+    // Render all mesh nodes (depth only)
+    scene.traverseNodes([&](Node* node) {
+        if (node->isLight()) return;
+        if (node->meshType == MeshType::None && node->meshPath.empty()) return;
+
+        PushConstantData pc{};
+        pc.model = toShaderMatrix(node->getWorldMatrix());
+        pc.highlighted = 0;
+        vkCmdPushConstants(cmd, m_shadowPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(PushConstantData), &pc);
+
+        if (!node->meshPath.empty()) {
+            auto* mesh = m_assetManager.loadMesh(node->meshPath);
+            if (mesh) {
+                VkBuffer buffers[] = {mesh->vertexBuffer};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+                vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, mesh->indexCount, 1, 0, 0, 0);
+            }
+        } else if (node->meshType != MeshType::None) {
+            m_meshLibrary.bind(cmd, node->meshType);
+            vkCmdDrawIndexed(cmd, m_meshLibrary.getIndexCount(node->meshType), 1, 0, 0, 0);
+        }
+    });
+
+    vkCmdEndRenderPass(cmd);
 }
 
 } // namespace QymEngine
