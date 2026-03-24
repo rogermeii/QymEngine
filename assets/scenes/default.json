@@ -160,6 +160,70 @@
         "lightColor": [1.0, 0.95, 0.85],
         "lightIntensity": 1.5,
         "children": []
+      },
+      {
+        "name": "Warm Fill",
+        "nodeType": "PointLight",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [2.4, 1.6, 2.6],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "lightColor": [1.0, 0.58, 0.28],
+        "lightIntensity": 12.0,
+        "lightRange": 7.0,
+        "children": []
+      },
+      {
+        "name": "Cool Rim",
+        "nodeType": "PointLight",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [-3.2, 1.4, -1.8],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "lightColor": [0.26, 0.56, 1.0],
+        "lightIntensity": 10.0,
+        "lightRange": 6.5,
+        "children": []
+      },
+      {
+        "name": "Accent Pink",
+        "nodeType": "PointLight",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [0.0, 2.8, -3.2],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "lightColor": [1.0, 0.30, 0.62],
+        "lightIntensity": 9.0,
+        "lightRange": 8.0,
+        "children": []
+      },
+      {
+        "name": "Floor Bounce",
+        "nodeType": "PointLight",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [0.0, 0.35, 1.4],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "lightColor": [0.95, 0.86, 0.58],
+        "lightIntensity": 6.0,
+        "lightRange": 4.5,
+        "children": []
       }
     ]
   }

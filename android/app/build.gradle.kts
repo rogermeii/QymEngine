@@ -5,6 +5,8 @@ plugins {
 val repoRootDir = rootProject.projectDir.parentFile
 val hostBuildDir = File(repoRootDir, "build3")
 val shaderSourceDir = File(repoRootDir, "assets/shaders")
+val externalAssetsDir = File(repoRootDir, "assets")
+val generatedAssetsDir = layout.buildDirectory.dir("generated/qymAssets/main").get().asFile
 val isWindowsHost = System.getProperty("os.name").lowercase().contains("windows")
 val hostConfigureArgs = mutableListOf(
     "cmake",
@@ -75,6 +77,14 @@ val compileShaderBundles by tasks.registering(Exec::class) {
     )
 }
 
+val syncExternalAssets by tasks.registering(Sync::class) {
+    group = "build"
+    description = "同步仓库根目录的 assets 到 Android 构建目录"
+    dependsOn(compileShaderBundles)
+    from(externalAssetsDir)
+    into(generatedAssetsDir)
+}
+
 android {
     namespace = "com.qymengine.app"
     compileSdk = 35
@@ -114,11 +124,12 @@ android {
 
     sourceSets {
         getByName("main") {
-            assets.srcDirs("../../assets")
+            assets.srcDirs(generatedAssetsDir)
         }
     }
 }
 
 tasks.named("preBuild") {
     dependsOn(compileShaderBundles)
+    dependsOn(syncExternalAssets)
 }
