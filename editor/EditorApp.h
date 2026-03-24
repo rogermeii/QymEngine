@@ -14,6 +14,7 @@
 #include "panels/ProjectPanel.h"
 #include "panels/ConsolePanel.h"
 #include "panels/ModelPreview.h"
+#include "panels/PostProcessPanel.h"
 
 #ifndef __ANDROID__
 #include <renderdoc_app.h>
@@ -55,12 +56,13 @@ private:
     UndoManager    m_undoManager;
     Clipboard      m_clipboard;
 
-    SceneViewPanel m_sceneViewPanel;
-    HierarchyPanel m_hierarchyPanel;
-    InspectorPanel m_inspectorPanel;
-    ProjectPanel   m_projectPanel;
-    ConsolePanel   m_consolePanel;
-    ModelPreview   m_modelPreview;
+    SceneViewPanel    m_sceneViewPanel;
+    HierarchyPanel    m_hierarchyPanel;
+    InspectorPanel    m_inspectorPanel;
+    ProjectPanel      m_projectPanel;
+    ConsolePanel      m_consolePanel;
+    ModelPreview      m_modelPreview;
+    PostProcessPanel  m_postProcessPanel;
 
     bool m_firstFrame = true;
     std::string m_currentScenePath;
