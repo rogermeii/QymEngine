@@ -50,8 +50,9 @@ float4 fragmentMain(VSOutput input) : SV_Target {
     color += inputTex.Sample(uv + float2(0, -ts.y)).rgb * 2.0;
     color += inputTex.Sample(uv + float2(ts.x, -ts.y)).rgb;
 
+    // tent filter 权重归一化后乘以 intensity
+    // intensity 由 C++ 侧设置为 1.0，bloom 强度在 Composite 中统一控制
     color /= 16.0;
-    color *= pc.intensity;
 
     return float4(color, 1.0);
 }

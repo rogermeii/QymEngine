@@ -992,7 +992,7 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
         pc.texelSize[0] = 1.0f / static_cast<float>(m_width);
         pc.texelSize[1] = 1.0f / static_cast<float>(m_height);
         pc.threshold = settings.bloomThreshold;
-        pc.intensity = settings.bloomIntensity;
+        pc.intensity = 1.0f;  // bright extract 不缩放，仅做阈值提取
         pc.mipLevel = 0;
         pc.useBrightPass = 1;
 
@@ -1042,7 +1042,7 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
         pc.texelSize[0] = 1.0f / static_cast<float>(srcW);
         pc.texelSize[1] = 1.0f / static_cast<float>(srcH);
         pc.threshold = settings.bloomThreshold;
-        pc.intensity = settings.bloomIntensity;
+        pc.intensity = 1.0f;  // downsample 不缩放，仅做模糊降采样
         pc.mipLevel = i;
         pc.useBrightPass = 0;
 
@@ -1118,7 +1118,7 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
         pc.texelSize[0] = 1.0f / static_cast<float>(srcW);
         pc.texelSize[1] = 1.0f / static_cast<float>(srcH);
         pc.threshold = settings.bloomThreshold;
-        pc.intensity = settings.bloomIntensity;
+        pc.intensity = 1.0f;  // upsample 固定为 1.0，最终缩放在 Composite 中用 bloomIntensity
         pc.mipLevel = i;
         pc.useBrightPass = 0;
 

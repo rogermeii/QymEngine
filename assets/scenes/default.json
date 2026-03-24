@@ -9,9 +9,21 @@
         "meshPath": "",
         "materialPath": "materials/default_lit.mat.json",
         "transform": {
-          "position": [0.0, -0.5, 0.0],
-          "rotation": [0.0, 0.0, 0.0],
-          "scale": [10.0, 1.0, 10.0]
+          "position": [
+            0.0,
+            -0.5,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            10.0,
+            1.0,
+            10.0
+          ]
         },
         "children": []
       },
@@ -22,9 +34,21 @@
         "meshPath": "",
         "materialPath": "materials/default_lit.mat.json",
         "transform": {
-          "position": [0.0, 0.5, 0.0],
-          "rotation": [0.0, 45.0, 0.0],
-          "scale": [1.0, 1.0, 1.0]
+          "position": [
+            0.0,
+            0.5,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            45.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
         },
         "children": []
       },
@@ -35,9 +59,21 @@
         "meshPath": "",
         "materialPath": "materials/default_lit.mat.json",
         "transform": {
-          "position": [-3.0, 1.0, -2.0],
-          "rotation": [0.0, 0.0, 0.0],
-          "scale": [0.5, 2.5, 0.5]
+          "position": [
+            -3.0,
+            1.0,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.5,
+            2.5,
+            0.5
+          ]
         },
         "children": []
       },
@@ -48,9 +84,21 @@
         "meshPath": "",
         "materialPath": "materials/default_lit.mat.json",
         "transform": {
-          "position": [2.5, 0.3, 1.0],
-          "rotation": [0.0, 0.0, 0.0],
-          "scale": [0.8, 0.8, 0.8]
+          "position": [
+            2.5,
+            0.3,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ]
         },
         "children": []
       },
@@ -61,9 +109,21 @@
         "meshPath": "",
         "materialPath": "materials/default_unlit.mat.json",
         "transform": {
-          "position": [-1.5, 0.7, 2.5],
-          "rotation": [25.0, -30.0, 15.0],
-          "scale": [0.6, 0.6, 0.6]
+          "position": [
+            -1.5,
+            0.7,
+            2.5
+          ],
+          "rotation": [
+            25.0,
+            -30.0,
+            15.0
+          ],
+          "scale": [
+            0.6,
+            0.6,
+            0.6
+          ]
         },
         "children": []
       },
@@ -74,9 +134,21 @@
         "meshPath": "models/pyramid.obj",
         "materialPath": "materials/default_lit.mat.json",
         "transform": {
-          "position": [3.0, 0.0, -2.5],
-          "rotation": [0.0, 60.0, 0.0],
-          "scale": [1.0, 1.0, 1.0]
+          "position": [
+            3.0,
+            0.0,
+            -2.5
+          ],
+          "rotation": [
+            0.0,
+            60.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
         },
         "children": []
       },
@@ -87,9 +159,21 @@
         "meshPath": "",
         "materialPath": "materials/default_lit.mat.json",
         "transform": {
-          "position": [0.0, 1.5, -4.0],
-          "rotation": [0.0, 0.0, 0.0],
-          "scale": [3.0, 2.0, 1.0]
+          "position": [
+            0.0,
+            1.5,
+            -4.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            3.0,
+            2.0,
+            1.0
+          ]
         },
         "children": []
       },
@@ -100,9 +184,21 @@
         "meshPath": "",
         "materialPath": "",
         "transform": {
-          "position": [-4.0, 0.0, 2.0],
-          "rotation": [0.0, 20.0, 0.0],
-          "scale": [1.0, 1.0, 1.0]
+          "position": [
+            -4.0,
+            0.0,
+            2.0
+          ],
+          "rotation": [
+            0.0,
+            20.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
         },
         "children": [
           {
@@ -112,9 +208,21 @@
             "meshPath": "",
             "materialPath": "materials/default_lit.mat.json",
             "transform": {
-              "position": [0.0, 0.5, 0.0],
-              "rotation": [0.0, 0.0, 0.0],
-              "scale": [0.4, 0.4, 0.4]
+              "position": [
+                0.0,
+                0.5,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "scale": [
+                0.4,
+                0.4,
+                0.4
+              ]
             },
             "children": []
           },
@@ -125,9 +233,21 @@
             "meshPath": "",
             "materialPath": "materials/default_unlit.mat.json",
             "transform": {
-              "position": [1.0, 0.5, 0.0],
-              "rotation": [0.0, 0.0, 0.0],
-              "scale": [0.4, 0.4, 0.4]
+              "position": [
+                1.0,
+                0.5,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "scale": [
+                0.4,
+                0.4,
+                0.4
+              ]
             },
             "children": []
           },
@@ -138,9 +258,21 @@
             "meshPath": "",
             "materialPath": "materials/default_lit.mat.json",
             "transform": {
-              "position": [0.5, 1.2, 0.0],
-              "rotation": [0.0, 45.0, 0.0],
-              "scale": [0.3, 0.3, 0.3]
+              "position": [
+                0.5,
+                1.2,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                45.0,
+                0.0
+              ],
+              "scale": [
+                0.3,
+                0.3,
+                0.3
+              ]
             },
             "children": []
           }
@@ -153,11 +285,27 @@
         "meshPath": "",
         "materialPath": "",
         "transform": {
-          "position": [0.0, 5.0, 0.0],
-          "rotation": [-50.0, -30.0, 0.0],
-          "scale": [1.0, 1.0, 1.0]
+          "position": [
+            0.0,
+            5.0,
+            0.0
+          ],
+          "rotation": [
+            -50.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
         },
-        "lightColor": [1.0, 0.95, 0.85],
+        "lightColor": [
+          1.0,
+          0.95,
+          0.85
+        ],
         "lightIntensity": 1.5,
         "children": []
       },
@@ -168,11 +316,27 @@
         "meshPath": "",
         "materialPath": "",
         "transform": {
-          "position": [2.4, 1.6, 2.6],
-          "rotation": [0.0, 0.0, 0.0],
-          "scale": [1.0, 1.0, 1.0]
+          "position": [
+            2.4,
+            1.6,
+            2.6
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
         },
-        "lightColor": [1.0, 0.58, 0.28],
+        "lightColor": [
+          1.0,
+          0.58,
+          0.28
+        ],
         "lightIntensity": 12.0,
         "lightRange": 7.0,
         "children": []
@@ -184,11 +348,27 @@
         "meshPath": "",
         "materialPath": "",
         "transform": {
-          "position": [-3.2, 1.4, -1.8],
-          "rotation": [0.0, 0.0, 0.0],
-          "scale": [1.0, 1.0, 1.0]
+          "position": [
+            -3.2,
+            1.4,
+            -1.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
         },
-        "lightColor": [0.26, 0.56, 1.0],
+        "lightColor": [
+          0.26,
+          0.56,
+          1.0
+        ],
         "lightIntensity": 10.0,
         "lightRange": 6.5,
         "children": []
@@ -200,11 +380,27 @@
         "meshPath": "",
         "materialPath": "",
         "transform": {
-          "position": [0.0, 2.8, -3.2],
-          "rotation": [0.0, 0.0, 0.0],
-          "scale": [1.0, 1.0, 1.0]
+          "position": [
+            0.0,
+            2.8,
+            -3.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
         },
-        "lightColor": [1.0, 0.30, 0.62],
+        "lightColor": [
+          1.0,
+          0.3,
+          0.62
+        ],
         "lightIntensity": 9.0,
         "lightRange": 8.0,
         "children": []
@@ -216,11 +412,27 @@
         "meshPath": "",
         "materialPath": "",
         "transform": {
-          "position": [0.0, 0.35, 1.4],
-          "rotation": [0.0, 0.0, 0.0],
-          "scale": [1.0, 1.0, 1.0]
+          "position": [
+            0.0,
+            0.35,
+            1.4
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
         },
-        "lightColor": [0.95, 0.86, 0.58],
+        "lightColor": [
+          0.95,
+          0.86,
+          0.58
+        ],
         "lightIntensity": 6.0,
         "lightRange": 4.5,
         "children": []
