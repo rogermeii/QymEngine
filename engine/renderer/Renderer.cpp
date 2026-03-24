@@ -1322,7 +1322,7 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
                 m_skyPipelineLayout,
                 "sky");
 
-            const bool gridUsesDepth = !(vkIsOpenGLBackend() || vkIsGLESBackend());
+            const bool gridUsesDepth = true;
             createFullscreenBundlePipeline(
                 device,
                 m_offscreenRenderPass,
@@ -1331,7 +1331,7 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
                 variant,
                 true,
                 gridUsesDepth,
-                gridUsesDepth,
+                false,
                 m_gridPipeline,
                 m_gridPipelineLayout,
                 "grid");
@@ -1590,7 +1590,7 @@ void Renderer::reloadShaders()
             m_skyPipelineLayout,
             "sky");
 
-        const bool gridUsesDepth = !(vkIsOpenGLBackend() || vkIsGLESBackend());
+        const bool gridUsesDepth = true;
         createFullscreenBundlePipeline(
             device,
             m_offscreenRenderPass,
@@ -1599,7 +1599,7 @@ void Renderer::reloadShaders()
             var,
             true,
             gridUsesDepth,
-            gridUsesDepth,
+            false,
             m_gridPipeline,
             m_gridPipelineLayout,
             "grid");
@@ -1766,14 +1766,6 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
         VkDescriptorSet skySets[] = {frameOnlySet, m_skySet};
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_skyPipelineLayout, 0, 2, skySets, 0, nullptr);
-        vkCmdDraw(commandBuffer, 6, 1, 0, 0);
-    }
-
-    if (m_gridPipeline != VK_NULL_HANDLE) {
-        VkDescriptorSet frameOnlySet = m_frameOnlySets[m_currentFrame];
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_gridPipeline);
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_gridPipelineLayout, 0, 1, &frameOnlySet, 0, nullptr);
         vkCmdDraw(commandBuffer, 6, 1, 0, 0);
     }
 
@@ -1956,6 +1948,14 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
                 m_lastTriangleCount += idxCount / 3;
             }
         });
+    }
+
+    if (m_gridPipeline != VK_NULL_HANDLE) {
+        VkDescriptorSet frameOnlySet = m_frameOnlySets[m_currentFrame];
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_gridPipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_gridPipelineLayout, 0, 1, &frameOnlySet, 0, nullptr);
+        vkCmdDraw(commandBuffer, 6, 1, 0, 0);
     }
 
     // Draw wireframe outline for selected node

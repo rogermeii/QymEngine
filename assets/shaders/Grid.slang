@@ -145,7 +145,11 @@ FSOutput fragmentMain(VSOutput input)
     output.depth = clipPos.z / clipPos.w;
     // GLES: depthFix 矩阵使 NDC z 在 [-1,1]，但 gl_FragDepth 需要 [0,1]
     // shadowParams.z != 0 表示需要手动转换
-    if (frame.shadowParams.z != 0)
+    if (frame.shadowParams.z != 0) {
         output.depth = output.depth * 0.5 + 0.5;
+        // 移动端 GLES 上 grid 与 ground 的深度非常接近，
+        // 轻微前推一点深度，保持与 Vulkan 一致的覆盖关系。
+        output.depth = max(output.depth - 0.0005, 0.0);
+    }
     return output;
 }
