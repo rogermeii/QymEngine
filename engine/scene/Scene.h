@@ -1,5 +1,6 @@
 #pragma once
 #include "Node.h"
+#include "renderer/PostProcess.h"
 #include <string>
 #include <vector>
 #include <unordered_set>
@@ -39,6 +40,10 @@ public:
     std::string toJsonString() const;
     void fromJsonString(const std::string& jsonStr);
 
+    // 后处理设置访问器
+    PostProcessSettings& getPostProcessSettings() { return m_postProcessSettings; }
+    const PostProcessSettings& getPostProcessSettings() const { return m_postProcessSettings; }
+
     // Serialize a single node subtree to JSON string (for copy/paste)
     std::string serializeNodeToString(Node* node) const;
     // Deserialize and add a node subtree as child of parent
@@ -53,6 +58,7 @@ private:
     std::unique_ptr<Node> m_root;
     Node* m_selectedNode = nullptr;
     std::unordered_set<Node*> m_selectedNodes;
+    PostProcessSettings m_postProcessSettings;
 };
 
 } // namespace QymEngine

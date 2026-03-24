@@ -180,6 +180,27 @@ void Scene::serialize(const std::string& path) const {
     for (auto& child : m_root->getChildren())
         j["scene"]["nodes"].push_back(serializeNode(child.get()));
 
+    // 序列化后处理设置
+    auto& pp = m_postProcessSettings;
+    j["scene"]["postProcess"] = {
+        {"bloomEnabled", pp.bloomEnabled},
+        {"bloomThreshold", pp.bloomThreshold},
+        {"bloomIntensity", pp.bloomIntensity},
+        {"bloomMipCount", pp.bloomMipCount},
+        {"toneMappingEnabled", pp.toneMappingEnabled},
+        {"exposure", pp.exposure},
+        {"colorGradingEnabled", pp.colorGradingEnabled},
+        {"contrast", pp.contrast},
+        {"saturation", pp.saturation},
+        {"temperature", pp.temperature},
+        {"tint", pp.tint},
+        {"brightness", pp.brightness},
+        {"fxaaEnabled", pp.fxaaEnabled},
+        {"fxaaSubpixQuality", pp.fxaaSubpixQuality},
+        {"fxaaEdgeThreshold", pp.fxaaEdgeThreshold},
+        {"fxaaEdgeThresholdMin", pp.fxaaEdgeThresholdMin}
+    };
+
     std::ofstream file(path);
     if (file.is_open())
         file << j.dump(2);
@@ -200,6 +221,28 @@ void Scene::deserialize(const std::string& path) {
         if (sceneJson.contains("nodes")) {
             for (auto& nodeJson : sceneJson["nodes"])
                 deserializeNode(m_root.get(), nodeJson);
+        }
+        // 反序列化后处理设置
+        if (sceneJson.contains("postProcess")) {
+            auto& ppj = sceneJson["postProcess"];
+            auto& pp = m_postProcessSettings;
+            pp.bloomEnabled = ppj.value("bloomEnabled", true);
+            pp.bloomThreshold = ppj.value("bloomThreshold", 1.0f);
+            pp.bloomIntensity = ppj.value("bloomIntensity", 0.5f);
+            pp.bloomMipCount = ppj.value("bloomMipCount", 5);
+            pp.toneMappingEnabled = ppj.value("toneMappingEnabled", true);
+            pp.exposure = ppj.value("exposure", 1.0f);
+            pp.colorGradingEnabled = ppj.value("colorGradingEnabled", true);
+            pp.contrast = ppj.value("contrast", 1.0f);
+            pp.saturation = ppj.value("saturation", 1.0f);
+            pp.temperature = ppj.value("temperature", 0.0f);
+            pp.tint = ppj.value("tint", 0.0f);
+            pp.brightness = ppj.value("brightness", 0.0f);
+            pp.fxaaEnabled = ppj.value("fxaaEnabled", true);
+            pp.fxaaSubpixQuality = ppj.value("fxaaSubpixQuality", 0.75f);
+            pp.fxaaEdgeThreshold = ppj.value("fxaaEdgeThreshold", 0.166f);
+            pp.fxaaEdgeThresholdMin = ppj.value("fxaaEdgeThresholdMin", 0.0833f);
+            pp.clampValues();
         }
     } catch (...) {
         return; // File not found or parse error
@@ -241,6 +284,28 @@ std::string Scene::toJsonString() const {
     j["scene"]["nodes"] = json::array();
     for (auto& child : m_root->getChildren())
         j["scene"]["nodes"].push_back(serializeNode(child.get()));
+
+    // 序列化后处理设置
+    auto& pp = m_postProcessSettings;
+    j["scene"]["postProcess"] = {
+        {"bloomEnabled", pp.bloomEnabled},
+        {"bloomThreshold", pp.bloomThreshold},
+        {"bloomIntensity", pp.bloomIntensity},
+        {"bloomMipCount", pp.bloomMipCount},
+        {"toneMappingEnabled", pp.toneMappingEnabled},
+        {"exposure", pp.exposure},
+        {"colorGradingEnabled", pp.colorGradingEnabled},
+        {"contrast", pp.contrast},
+        {"saturation", pp.saturation},
+        {"temperature", pp.temperature},
+        {"tint", pp.tint},
+        {"brightness", pp.brightness},
+        {"fxaaEnabled", pp.fxaaEnabled},
+        {"fxaaSubpixQuality", pp.fxaaSubpixQuality},
+        {"fxaaEdgeThreshold", pp.fxaaEdgeThreshold},
+        {"fxaaEdgeThresholdMin", pp.fxaaEdgeThresholdMin}
+    };
+
     return j.dump();
 }
 
@@ -257,6 +322,28 @@ void Scene::fromJsonString(const std::string& jsonStr) {
     if (sceneJson.contains("nodes")) {
         for (auto& nodeJson : sceneJson["nodes"])
             deserializeNode(m_root.get(), nodeJson);
+    }
+    // 反序列化后处理设置
+    if (sceneJson.contains("postProcess")) {
+        auto& ppj = sceneJson["postProcess"];
+        auto& pp = m_postProcessSettings;
+        pp.bloomEnabled = ppj.value("bloomEnabled", true);
+        pp.bloomThreshold = ppj.value("bloomThreshold", 1.0f);
+        pp.bloomIntensity = ppj.value("bloomIntensity", 0.5f);
+        pp.bloomMipCount = ppj.value("bloomMipCount", 5);
+        pp.toneMappingEnabled = ppj.value("toneMappingEnabled", true);
+        pp.exposure = ppj.value("exposure", 1.0f);
+        pp.colorGradingEnabled = ppj.value("colorGradingEnabled", true);
+        pp.contrast = ppj.value("contrast", 1.0f);
+        pp.saturation = ppj.value("saturation", 1.0f);
+        pp.temperature = ppj.value("temperature", 0.0f);
+        pp.tint = ppj.value("tint", 0.0f);
+        pp.brightness = ppj.value("brightness", 0.0f);
+        pp.fxaaEnabled = ppj.value("fxaaEnabled", true);
+        pp.fxaaSubpixQuality = ppj.value("fxaaSubpixQuality", 0.75f);
+        pp.fxaaEdgeThreshold = ppj.value("fxaaEdgeThreshold", 0.166f);
+        pp.fxaaEdgeThresholdMin = ppj.value("fxaaEdgeThresholdMin", 0.0833f);
+        pp.clampValues();
     }
 }
 
