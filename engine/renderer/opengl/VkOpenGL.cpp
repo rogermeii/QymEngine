@@ -148,6 +148,7 @@ static constexpr uint32_t SPIRV_MAGIC = 0x07230203;
 #define glNamedFramebufferTexture(fbo, att, tex, lv) ((void)0)
 #define glNamedFramebufferDrawBuffers(fbo, n, bufs) ((void)0)
 #define glCheckNamedFramebufferStatus(fbo, tgt) GL_FRAMEBUFFER_COMPLETE
+#define glGetBufferSubData(target, offset, size, data) ((void)0)
 #define glVertexArrayVertexBuffer(vao, slot, buf, off, stride) ((void)0)
 #define glVertexArrayElementBuffer(vao, buf) ((void)0)
 #define glVertexArrayAttribFormat(vao, idx, sz, tp, n, off) ((void)0)
