@@ -632,9 +632,11 @@ int main(int argc, char* argv[]) {
     std::cout << "DXIL:   " << (g_emitDxil ? "ON" : "OFF") << std::endl;
 
     int compiled = 0, failed = 0;
-    for (auto& entry : fs::directory_iterator(inputDir)) {
+    for (auto& entry : fs::recursive_directory_iterator(inputDir)) {
         if (entry.path().extension() == ".slang") {
-            if (compileShader(entry.path().string(), outputDir))
+            // 输出目录与源文件同级（保持子目录结构）
+            std::string shaderOutDir = entry.path().parent_path().string();
+            if (compileShader(entry.path().string(), shaderOutDir))
                 compiled++;
             else
                 failed++;
