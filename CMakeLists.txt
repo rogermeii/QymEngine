@@ -70,3 +70,59 @@ add_subdirectory(engine)
 
 # 编辑器
 add_subdirectory(editor)
+
+# ---------------------------------------------------------------------------
+# Shader bundle 自动编译
+# ---------------------------------------------------------------------------
+
+set(SHADER_SOURCE_DIR "${CMAKE_SOURCE_DIR}/assets/shaders")
+set(SHADER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/assets/shaders")
+set(SHADER_STAMP_FILE "${CMAKE_BINARY_DIR}/generated/shaders/shaderbundles.stamp")
+
+file(GLOB CONFIGURE_DEPENDS SHADER_SLANG_FILES
+    "${SHADER_SOURCE_DIR}/*.slang"
+)
+file(GLOB CONFIGURE_DEPENDS SHADER_COMPILER_FILES
+    "${CMAKE_SOURCE_DIR}/tools/shader_compiler/*.cpp"
+    "${CMAKE_SOURCE_DIR}/tools/shader_compiler/*.h"
+    "${CMAKE_SOURCE_DIR}/tools/shader_compiler/*.hpp"
+    "${CMAKE_SOURCE_DIR}/tools/shader_compiler/*.c"
+    "${CMAKE_SOURCE_DIR}/tools/shader_compiler/CMakeLists.txt"
+)
+
+set(SHADER_BUNDLE_OUTPUTS "")
+foreach(shader_file IN LISTS SHADER_SLANG_FILES)
+    get_filename_component(shader_name "${shader_file}" NAME_WE)
+    list(APPEND SHADER_BUNDLE_OUTPUTS
+        "${SHADER_OUTPUT_DIR}/${shader_name}.shaderbundle"
+    )
+endforeach()
+
+add_custom_command(
+    OUTPUT "${SHADER_STAMP_FILE}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/generated/shaders"
+    COMMAND $<TARGET_FILE:ShaderCompiler> "${SHADER_SOURCE_DIR}" "${SHADER_OUTPUT_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E touch "${SHADER_STAMP_FILE}"
+    DEPENDS
+        ShaderCompiler
+        ${SHADER_SLANG_FILES}
+        ${SHADER_COMPILER_FILES}
+    BYPRODUCTS
+        ${SHADER_BUNDLE_OUTPUTS}
+    COMMENT "Compiling shader bundles"
+    VERBATIM
+)
+
+add_custom_target(CompileShaders DEPENDS "${SHADER_STAMP_FILE}")
+
+if(TARGET QymEngineLib)
+    add_dependencies(QymEngineLib CompileShaders)
+endif()
+
+if(TARGET QymEngine)
+    add_dependencies(QymEngine CompileShaders)
+endif()
+
+if(TARGET QymEditor)
+    add_dependencies(QymEditor CompileShaders)
+endif()
