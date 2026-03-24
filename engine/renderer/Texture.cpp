@@ -1,5 +1,6 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#include "renderer/VkDispatch.h"
 
 #include "renderer/Texture.h"
 #include "renderer/VulkanContext.h"

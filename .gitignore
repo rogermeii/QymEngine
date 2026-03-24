@@ -423,3 +423,21 @@ fabric.properties
 
 # Allow .obj model files in assets (overrides *.obj rule above)
 !assets/models/*.obj
+
+# QymEngine local build outputs and diagnostics
+/build/
+/build2/
+/build3/
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+/captures/*
+!/captures/run_tests.py
+/.superpowers/
+/QymEngine.zip
+/imgui.ini
+/progress.md
+/task_plan.md
+/findings.md
+/temp_vertex_layout*

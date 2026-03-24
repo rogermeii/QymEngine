@@ -1,4 +1,5 @@
 #include "SceneViewPanel.h"
+#include "renderer/VkDispatch.h"
 #include "UIAutomation.h"
 #include "renderer/Renderer.h"
 #include "scene/Camera.h"
@@ -76,7 +77,12 @@ void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& sc
     if (m_descriptorSet != VK_NULL_HANDLE)
     {
         ImVec2 displaySize(static_cast<float>(m_width), static_cast<float>(m_height));
-        ImGui::Image(reinterpret_cast<ImTextureID>(m_descriptorSet), displaySize);
+        // OpenGL FBO 纹理 Y 轴是从下到上，ImGui UV (0,0) 在左上
+        // 需要翻转 UV Y: uv0=(0,1) uv1=(1,0)
+        if (QymEngine::vkIsOpenGLBackend() || QymEngine::vkIsGLESBackend())
+            ImGui::Image(reinterpret_cast<ImTextureID>(m_descriptorSet), displaySize, ImVec2(0,1), ImVec2(1,0));
+        else
+            ImGui::Image(reinterpret_cast<ImTextureID>(m_descriptorSet), displaySize);
     }
 
     // --- Orientation axis gizmo (top-right corner) ---

@@ -10,9 +10,16 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <cstring>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
+
+// 全局选项
+static bool g_emitDebugInfo = true;   // 默认开启调试符号
+static bool g_emitDxil = true;        // 默认编译 DXIL 变体（D3D12 后端用）
+static bool g_emitDxbc = true;        // 默认编译 DXBC/SM5.0 变体（D3D11 后端用）
+static bool g_emitGlsl = true;        // 默认编译 GLSL 变体（OpenGL 后端用）
 
 static std::string memberTypeStr(const SpvReflectBlockVariable& member) {
     if (!member.type_description) return "unknown";
@@ -189,12 +196,22 @@ static json reflectSpirv(const std::vector<uint8_t>& vertSpv, const std::vector<
     return result;
 }
 
-// Compile a single shader with optional preprocessor defines
-// outputSuffix: "" for normal, "_bindless" for bindless variant
-static bool compileShaderVariant(const std::string& inputPath, const std::string& outputDir,
+// 单个变体的编译结果
+struct VariantResult {
+    std::vector<uint8_t> vertSpv;
+    std::vector<uint8_t> fragSpv;
+    std::string reflectJson;
+};
+
+// 编译单个变体，返回编译结果而不直接写文件
+// targetFormat: SLANG_SPIRV 或 SLANG_DXIL
+// forceNoDebug: true = 强制禁用调试信息 (用于 OpenGL SPIR-V 兼容性)
+static bool compileShaderVariant(const std::string& inputPath,
                                   const std::string& baseName,
                                   const std::vector<slang::PreprocessorMacroDesc>& macros,
-                                  const std::string& outputSuffix) {
+                                  VariantResult& result,
+                                  SlangCompileTarget targetFormat = SLANG_SPIRV,
+                                  bool forceNoDebug = false) {
     Slang::ComPtr<slang::IGlobalSession> globalSession;
     slang_createGlobalSession(SLANG_API_VERSION, globalSession.writeRef());
     if (!globalSession) {
@@ -204,15 +221,48 @@ static bool compileShaderVariant(const std::string& inputPath, const std::string
 
     slang::SessionDesc sessionDesc = {};
     slang::TargetDesc targetDesc = {};
-    targetDesc.format = SLANG_SPIRV;
-    targetDesc.profile = globalSession->findProfile("glsl_450");
+    targetDesc.format = targetFormat;
+
+    if (targetFormat == SLANG_SPIRV) {
+        targetDesc.profile = globalSession->findProfile("glsl_450");
+        if (g_emitDebugInfo && !forceNoDebug)
+            targetDesc.flags = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY;
+    } else if (targetFormat == SLANG_DXIL) {
+        targetDesc.profile = globalSession->findProfile("sm_6_0");
+    } else if (targetFormat == SLANG_DXBC) {
+        targetDesc.profile = globalSession->findProfile("sm_5_0");
+    } else if (targetFormat == SLANG_GLSL) {
+        targetDesc.profile = globalSession->findProfile("glsl_450");
+        // Slang API 的 SessionDesc 默认是 row-major。
+        // 对 OpenGL/GLES 的 GLSL 变体，这会和当前引擎的矩阵上传/乘法约定打架，
+        // 导致场景 shader 里经 _MatrixStorage + unpackStorage 生成的矩阵链在 Adreno 上失效。
+        // 这里显式切到 column-major，与 glslc/slangc 的历史默认和 GLM 主序更一致。
+        sessionDesc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
+    }
 
     sessionDesc.targetCount = 1;
     sessionDesc.targets = &targetDesc;
 
-    // Set preprocessor macros
+    // 设置预处理器宏
     sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(macros.size());
     sessionDesc.preprocessorMacros = macros.empty() ? nullptr : macros.data();
+
+    // 设置编译选项：调试信息
+    std::vector<slang::CompilerOptionEntry> options;
+    if (g_emitDebugInfo && !forceNoDebug) {
+        slang::CompilerOptionEntry debugOpt = {};
+        debugOpt.name = slang::CompilerOptionName::DebugInformation;
+        debugOpt.value.intValue0 = SLANG_DEBUG_INFO_LEVEL_STANDARD;
+        options.push_back(debugOpt);
+    }
+    if (targetFormat == SLANG_GLSL) {
+        slang::CompilerOptionEntry matrixLayoutOpt = {};
+        matrixLayoutOpt.name = slang::CompilerOptionName::MatrixLayoutColumn;
+        matrixLayoutOpt.value.intValue0 = 1;
+        options.push_back(matrixLayoutOpt);
+    }
+    sessionDesc.compilerOptionEntryCount = static_cast<uint32_t>(options.size());
+    sessionDesc.compilerOptionEntries = options.empty() ? nullptr : options.data();
 
     Slang::ComPtr<slang::ISession> session;
     globalSession->createSession(sessionDesc, session.writeRef());
@@ -229,7 +279,7 @@ static bool compileShaderVariant(const std::string& inputPath, const std::string
         return false;
     }
 
-    // Find entry points
+    // 查找入口点
     struct EntryInfo { std::string name; std::string suffix; };
     std::vector<EntryInfo> entries;
 
@@ -253,18 +303,21 @@ static bool compileShaderVariant(const std::string& inputPath, const std::string
         return false;
     }
 
-    // Compile each entry point to SPIR-V
-    std::map<std::string, std::vector<uint8_t>> spvOutputs; // suffix -> spv data
+    // 编译入口点
+    std::map<std::string, std::vector<uint8_t>> spvOutputs;
 
-    for (auto& entry : entries) {
-        Slang::ComPtr<slang::IEntryPoint> entryPoint;
-        module->findEntryPointByName(entry.name.c_str(), entryPoint.writeRef());
-        if (!entryPoint) {
-            std::cerr << "Entry point not found: " << entry.name << std::endl;
-            return false;
+    if (targetFormat == SLANG_GLSL && entries.size() >= 2) {
+        // GLSL: 所有入口点一起链接，确保 struct 命名一致（避免 link 时 field mismatch）
+        std::vector<slang::IComponentType*> components = { module };
+        std::vector<Slang::ComPtr<slang::IEntryPoint>> epPtrs;
+        for (auto& entry : entries) {
+            Slang::ComPtr<slang::IEntryPoint> ep;
+            module->findEntryPointByName(entry.name.c_str(), ep.writeRef());
+            if (!ep) { std::cerr << "Entry point not found: " << entry.name << std::endl; return false; }
+            epPtrs.push_back(ep);
+            components.push_back(ep.get());
         }
 
-        std::vector<slang::IComponentType*> components = { module, entryPoint };
         Slang::ComPtr<slang::IComponentType> composedProgram;
         session->createCompositeComponentType(
             components.data(), (SlangInt)components.size(),
@@ -281,67 +334,268 @@ static bool compileShaderVariant(const std::string& inputPath, const std::string
             return false;
         }
 
-        Slang::ComPtr<slang::IBlob> spirvCode;
-        linkedProgram->getEntryPointCode(0, 0, spirvCode.writeRef(), diagnostics.writeRef());
-        if (!spirvCode) {
-            if (diagnostics) std::cerr << (const char*)diagnostics->getBufferPointer() << std::endl;
-            return false;
+        // 分别导出每个入口点的代码
+        for (size_t i = 0; i < entries.size(); i++) {
+            Slang::ComPtr<slang::IBlob> code;
+            linkedProgram->getEntryPointCode((SlangInt)i, 0, code.writeRef(), diagnostics.writeRef());
+            if (!code) {
+                if (diagnostics) std::cerr << (const char*)diagnostics->getBufferPointer() << std::endl;
+                return false;
+            }
+            auto* ptr = (const uint8_t*)code->getBufferPointer();
+            spvOutputs[entries[i].suffix] = std::vector<uint8_t>(ptr, ptr + code->getBufferSize());
         }
+    } else {
+        // 非 GLSL（SPIRV/DXIL/DXBC）: 每个入口点单独编译
+        for (auto& entry : entries) {
+            Slang::ComPtr<slang::IEntryPoint> entryPoint;
+            module->findEntryPointByName(entry.name.c_str(), entryPoint.writeRef());
+            if (!entryPoint) {
+                std::cerr << "Entry point not found: " << entry.name << std::endl;
+                return false;
+            }
 
-        // Save SPIR-V data for reflection
-        auto* ptr = (const uint8_t*)spirvCode->getBufferPointer();
-        spvOutputs[entry.suffix] = std::vector<uint8_t>(ptr, ptr + spirvCode->getBufferSize());
+            std::vector<slang::IComponentType*> components = { module, entryPoint };
+            Slang::ComPtr<slang::IComponentType> composedProgram;
+            session->createCompositeComponentType(
+                components.data(), (SlangInt)components.size(),
+                composedProgram.writeRef(), diagnostics.writeRef());
+            if (!composedProgram) {
+                if (diagnostics) std::cerr << (const char*)diagnostics->getBufferPointer() << std::endl;
+                return false;
+            }
 
-        // Write .spv file
-        std::string spvPath;
-        if (baseName == "Triangle" && outputSuffix.empty()) {
-            spvPath = outputDir + "/" + (entry.suffix == "_vert" ? "vert.spv" : "frag.spv");
-        } else {
-            std::string lower = baseName;
-            lower[0] = tolower(lower[0]);
-            spvPath = outputDir + "/" + lower + entry.suffix + outputSuffix + ".spv";
+            Slang::ComPtr<slang::IComponentType> linkedProgram;
+            composedProgram->link(linkedProgram.writeRef(), diagnostics.writeRef());
+            if (!linkedProgram) {
+                if (diagnostics) std::cerr << (const char*)diagnostics->getBufferPointer() << std::endl;
+                return false;
+            }
+
+            Slang::ComPtr<slang::IBlob> spirvCode;
+            linkedProgram->getEntryPointCode(0, 0, spirvCode.writeRef(), diagnostics.writeRef());
+            if (!spirvCode) {
+                if (diagnostics) std::cerr << (const char*)diagnostics->getBufferPointer() << std::endl;
+                return false;
+            }
+
+            auto* ptr = (const uint8_t*)spirvCode->getBufferPointer();
+            spvOutputs[entry.suffix] = std::vector<uint8_t>(ptr, ptr + spirvCode->getBufferSize());
         }
-
-        std::ofstream spvFile(spvPath, std::ios::binary);
-        spvFile.write((const char*)spirvCode->getBufferPointer(), spirvCode->getBufferSize());
-        spvFile.close();
-        std::cout << "  -> " << fs::path(spvPath).filename().string()
-                  << " (" << spirvCode->getBufferSize() << " bytes)" << std::endl;
     }
 
-    // Reflect using SPIRV-Reflect on the generated SPIR-V
-    if (spvOutputs.count("_vert") && spvOutputs.count("_frag")) {
-        json reflectJson = reflectSpirv(spvOutputs["_vert"], spvOutputs["_frag"]);
-        std::string jsonPath = outputDir + "/" + baseName + outputSuffix + ".reflect.json";
-        std::ofstream jsonFile(jsonPath);
-        jsonFile << reflectJson.dump(2);
-        jsonFile.close();
-        std::cout << "  -> " << baseName + outputSuffix << ".reflect.json" << std::endl;
+    // GLSL 后处理: 规范化 Slang 生成的 struct 字段名后缀
+    // Slang 为不同入口点生成 data_0, data_1, data_2 等不同后缀，
+    // 导致 OpenGL link 时 "struct fields mismatch" 错误。
+    // 统一将 data_N 替换为 data_0。
+    if (targetFormat == SLANG_GLSL) {
+        auto normalizeGlsl = [](std::vector<uint8_t>& code) {
+            std::string src(code.begin(), code.end());
+            // 替换所有 data_N (N>0) 为 data_0
+            for (int n = 9; n >= 1; n--) {
+                std::string from = "data_" + std::to_string(n);
+                std::string to = "data_0";
+                size_t pos = 0;
+                while ((pos = src.find(from, pos)) != std::string::npos) {
+                    src.replace(pos, from.length(), to);
+                    pos += to.length();
+                }
+            }
+            code.assign(src.begin(), src.end());
+        };
+        for (auto& [suffix, code] : spvOutputs)
+            normalizeGlsl(code);
     }
+
+    // 保存编译结果
+    if (spvOutputs.count("_vert")) result.vertSpv = spvOutputs["_vert"];
+    if (spvOutputs.count("_frag")) result.fragSpv = spvOutputs["_frag"];
+
+    // 反射 (仅 SPIRV 目标需要，DXIL 复用 SPIRV 的反射数据)
+    if (targetFormat == SLANG_SPIRV && !result.vertSpv.empty() && !result.fragSpv.empty()) {
+        json reflectJson = reflectSpirv(result.vertSpv, result.fragSpv);
+        result.reflectJson = reflectJson.dump(2);
+    }
+
+    return true;
+}
+
+// .shaderbundle 文件头魔数
+static constexpr uint8_t BUNDLE_MAGIC[4] = {'Q', 'S', 'H', 'D'};
+static constexpr uint32_t BUNDLE_VERSION = 1;
+
+// 写入 .shaderbundle 文件
+static bool writeShaderBundle(const std::string& outputPath,
+                               const std::map<std::string, VariantResult>& variants) {
+    // 计算变体表大小
+    size_t tableSize = 0;
+    for (auto& [name, _] : variants) {
+        tableSize += 2 + name.size() + 24; // nameLen(2) + name + 6*uint32(24)
+    }
+
+    // 数据段起始偏移 = header(12) + table
+    uint32_t dataOffset = 12 + static_cast<uint32_t>(tableSize);
+
+    // 收集数据段
+    std::vector<uint8_t> dataSection;
+    struct VariantOffsets {
+        uint32_t vertOff, vertSize;
+        uint32_t fragOff, fragSize;
+        uint32_t reflectOff, reflectSize;
+    };
+    std::map<std::string, VariantOffsets> offsets;
+
+    for (auto& [name, variant] : variants) {
+        VariantOffsets vo;
+        vo.vertOff = dataOffset + static_cast<uint32_t>(dataSection.size());
+        vo.vertSize = static_cast<uint32_t>(variant.vertSpv.size());
+        dataSection.insert(dataSection.end(), variant.vertSpv.begin(), variant.vertSpv.end());
+
+        vo.fragOff = dataOffset + static_cast<uint32_t>(dataSection.size());
+        vo.fragSize = static_cast<uint32_t>(variant.fragSpv.size());
+        dataSection.insert(dataSection.end(), variant.fragSpv.begin(), variant.fragSpv.end());
+
+        vo.reflectOff = dataOffset + static_cast<uint32_t>(dataSection.size());
+        vo.reflectSize = static_cast<uint32_t>(variant.reflectJson.size());
+        dataSection.insert(dataSection.end(), variant.reflectJson.begin(), variant.reflectJson.end());
+
+        offsets[name] = vo;
+    }
+
+    // 写入文件
+    std::ofstream out(outputPath, std::ios::binary);
+    if (!out) {
+        std::cerr << "Failed to create bundle: " << outputPath << std::endl;
+        return false;
+    }
+
+    // Header
+    out.write(reinterpret_cast<const char*>(BUNDLE_MAGIC), 4);
+    uint32_t version = BUNDLE_VERSION;
+    uint32_t variantCount = static_cast<uint32_t>(variants.size());
+    out.write(reinterpret_cast<const char*>(&version), 4);
+    out.write(reinterpret_cast<const char*>(&variantCount), 4);
+
+    // Variant table
+    for (auto& [name, vo] : offsets) {
+        uint16_t nameLen = static_cast<uint16_t>(name.size());
+        out.write(reinterpret_cast<const char*>(&nameLen), 2);
+        out.write(name.data(), nameLen);
+        out.write(reinterpret_cast<const char*>(&vo.vertOff), 4);
+        out.write(reinterpret_cast<const char*>(&vo.vertSize), 4);
+        out.write(reinterpret_cast<const char*>(&vo.fragOff), 4);
+        out.write(reinterpret_cast<const char*>(&vo.fragSize), 4);
+        out.write(reinterpret_cast<const char*>(&vo.reflectOff), 4);
+        out.write(reinterpret_cast<const char*>(&vo.reflectSize), 4);
+    }
+
+    // Data section
+    out.write(reinterpret_cast<const char*>(dataSection.data()), dataSection.size());
+    out.close();
 
     return true;
 }
 
 bool compileShader(const std::string& inputPath, const std::string& outputDir) {
     std::string baseName = fs::path(inputPath).stem().string();
-    std::cout << "Compiling: " << baseName << ".slang" << std::endl;
+    std::cout << "Compiling: " << baseName << ".slang"
+              << (g_emitDebugInfo ? " [debug]" : "") << std::endl;
 
-    // 1. Normal compilation (no defines)
-    bool ok = compileShaderVariant(inputPath, outputDir, baseName, {}, "");
-    if (!ok) return false;
+    std::map<std::string, VariantResult> variants;
 
-    // 2. Bindless compilation (USE_BINDLESS=1) -- skip Grid.slang (no set 1)
+    // 1. 默认变体
+    VariantResult defaultResult;
+    if (!compileShaderVariant(inputPath, baseName, {}, defaultResult))
+        return false;
+    std::cout << "  vert: " << defaultResult.vertSpv.size() << "B, frag: "
+              << defaultResult.fragSpv.size() << "B" << std::endl;
+    variants["default"] = std::move(defaultResult);
+
+    // 2. Bindless 变体 (Grid 没有 set 1，跳过)
     if (baseName != "Grid") {
         std::cout << "  [bindless variant]" << std::endl;
         slang::PreprocessorMacroDesc bindlessMacro;
         bindlessMacro.name = "USE_BINDLESS";
         bindlessMacro.value = "1";
         std::vector<slang::PreprocessorMacroDesc> macros = { bindlessMacro };
-        bool bindlessOk = compileShaderVariant(inputPath, outputDir, baseName, macros, "_bindless");
-        if (!bindlessOk) {
+
+        VariantResult bindlessResult;
+        if (compileShaderVariant(inputPath, baseName, macros, bindlessResult)) {
+            std::cout << "  vert: " << bindlessResult.vertSpv.size() << "B, frag: "
+                      << bindlessResult.fragSpv.size() << "B" << std::endl;
+            variants["bindless"] = std::move(bindlessResult);
+        } else {
             std::cerr << "  WARNING: Bindless variant failed for " << baseName << ", continuing..." << std::endl;
-            // Not fatal - non-bindless path still works
         }
+    }
+
+    // 3. DXIL 变体 (D3D12 后端用)
+    if (g_emitDxil) {
+        std::cout << "  [dxil default]" << std::endl;
+        VariantResult dxilDefault;
+        if (compileShaderVariant(inputPath, baseName, {}, dxilDefault, SLANG_DXIL)) {
+            // DXIL 变体复用 SPIRV 的反射数据
+            dxilDefault.reflectJson = variants["default"].reflectJson;
+            std::cout << "  vert: " << dxilDefault.vertSpv.size() << "B, frag: "
+                      << dxilDefault.fragSpv.size() << "B (DXIL)" << std::endl;
+            variants["default_dxil"] = std::move(dxilDefault);
+        } else {
+            std::cerr << "  WARNING: DXIL default variant failed for " << baseName << std::endl;
+        }
+
+        if (baseName != "Grid" && variants.count("bindless")) {
+            std::cout << "  [dxil bindless]" << std::endl;
+            slang::PreprocessorMacroDesc bindlessMacro;
+            bindlessMacro.name = "USE_BINDLESS";
+            bindlessMacro.value = "1";
+            std::vector<slang::PreprocessorMacroDesc> macros = { bindlessMacro };
+            VariantResult dxilBindless;
+            if (compileShaderVariant(inputPath, baseName, macros, dxilBindless, SLANG_DXIL)) {
+                dxilBindless.reflectJson = variants["bindless"].reflectJson;
+                std::cout << "  vert: " << dxilBindless.vertSpv.size() << "B, frag: "
+                          << dxilBindless.fragSpv.size() << "B (DXIL)" << std::endl;
+                variants["bindless_dxil"] = std::move(dxilBindless);
+            } else {
+                std::cerr << "  WARNING: DXIL bindless variant failed for " << baseName << std::endl;
+            }
+        }
+    }
+
+    // 4. DXBC/SM5.0 变体 (D3D11 后端用)
+    if (g_emitDxbc) {
+        std::cout << "  [dxbc default]" << std::endl;
+        VariantResult dxbcDefault;
+        if (compileShaderVariant(inputPath, baseName, {}, dxbcDefault, SLANG_DXBC)) {
+            dxbcDefault.reflectJson = variants["default"].reflectJson;
+            std::cout << "  vert: " << dxbcDefault.vertSpv.size() << "B, frag: "
+                      << dxbcDefault.fragSpv.size() << "B (DXBC)" << std::endl;
+            variants["default_dxbc"] = std::move(dxbcDefault);
+        } else {
+            std::cerr << "  WARNING: DXBC default variant failed for " << baseName << std::endl;
+        }
+    }
+
+    // 5. GLSL 450 文本变体 (OpenGL 后端用)
+    if (g_emitGlsl) {
+        std::cout << "  [glsl default]" << std::endl;
+        VariantResult glslDefault;
+        if (compileShaderVariant(inputPath, baseName, {}, glslDefault, SLANG_GLSL)) {
+            glslDefault.reflectJson = variants["default"].reflectJson;
+            std::cout << "  vert: " << glslDefault.vertSpv.size() << "B, frag: "
+                      << glslDefault.fragSpv.size() << "B (GLSL)" << std::endl;
+            variants["default_glsl"] = std::move(glslDefault);
+        } else {
+            std::cerr << "  WARNING: OpenGL SPIR-V variant failed for " << baseName << std::endl;
+        }
+    }
+
+    // 打包为 .shaderbundle（唯一输出格式）
+    std::string bundlePath = outputDir + "/" + baseName + ".shaderbundle";
+    if (writeShaderBundle(bundlePath, variants)) {
+        std::cout << "  => " << baseName << ".shaderbundle" << std::endl;
+    } else {
+        std::cerr << "  ERROR: Failed to write bundle for " << baseName << std::endl;
+        return false;
     }
 
     return true;
@@ -351,12 +605,31 @@ int main(int argc, char* argv[]) {
     std::string inputDir = "assets/shaders";
     std::string outputDir = "assets/shaders";
 
-    if (argc >= 2) inputDir = argv[1];
-    if (argc >= 3) outputDir = argv[2];
+    // 解析命令行参数
+    // 用法: ShaderCompiler [inputDir] [outputDir] [--no-debug]
+    std::vector<std::string> positionalArgs;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--no-debug" || arg == "-O") {
+            g_emitDebugInfo = false;
+        } else if (arg == "--no-dxbc") {
+            g_emitDxbc = false;
+        } else if (arg == "--no-dxil") {
+            g_emitDxil = false;
+        } else if (arg == "--no-glsl") {
+            g_emitGlsl = false;
+        } else {
+            positionalArgs.push_back(arg);
+        }
+    }
+    if (positionalArgs.size() >= 1) inputDir = positionalArgs[0];
+    if (positionalArgs.size() >= 2) outputDir = positionalArgs[1];
 
     std::cout << "=== QymEngine Shader Compiler ===" << std::endl;
     std::cout << "Input:  " << inputDir << std::endl;
     std::cout << "Output: " << outputDir << std::endl;
+    std::cout << "Debug:  " << (g_emitDebugInfo ? "ON" : "OFF") << std::endl;
+    std::cout << "DXIL:   " << (g_emitDxil ? "ON" : "OFF") << std::endl;
 
     int compiled = 0, failed = 0;
     for (auto& entry : fs::directory_iterator(inputDir)) {

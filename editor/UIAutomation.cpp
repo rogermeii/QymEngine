@@ -1,5 +1,6 @@
 #include "UIAutomation.h"
 #include "renderer/Renderer.h"
+#include "renderer/VkDispatch.h"
 #include "scene/Scene.h"
 #include "scene/Camera.h"
 #include "core/Log.h"
@@ -262,7 +263,14 @@ void UIAutomation::executeCommand(const std::string& jsonStr, Renderer& renderer
             scene.traverseNodes([&](Node* node) {
                 nlohmann::json nj;
                 nj["name"] = node->name;
-                nj["type"] = (node->nodeType == NodeType::DirectionalLight) ? "DirectionalLight" : "Mesh";
+                const char* typeStr = "Mesh";
+                switch (node->nodeType) {
+                    case NodeType::DirectionalLight: typeStr = "DirectionalLight"; break;
+                    case NodeType::PointLight:       typeStr = "PointLight"; break;
+                    case NodeType::SpotLight:        typeStr = "SpotLight"; break;
+                    default: break;
+                }
+                nj["type"] = typeStr;
                 nj["position"] = {
                     node->transform.position.x,
                     node->transform.position.y,
@@ -308,11 +316,8 @@ void UIAutomation::executeCommand(const std::string& jsonStr, Renderer& renderer
             writeResult(result.dump(2));
 
         } else if (command == "capture_frame") {
-            // Create the trigger file for RenderDoc capture
-            std::string triggerPath = std::string(ASSETS_DIR) + "/../captures/trigger";
-            std::filesystem::create_directories(std::string(ASSETS_DIR) + "/../captures");
-            std::ofstream trigger(triggerPath);
-            trigger.close();
+            if (m_captureFrameFn)
+                m_captureFrameFn();
             writeResult("{\"status\":\"ok\",\"command\":\"capture_frame\"}");
 
         } else if (command == "screenshot") {
@@ -333,6 +338,46 @@ void UIAutomation::executeCommand(const std::string& jsonStr, Renderer& renderer
         } else if (command == "reload_shaders") {
             renderer.reloadShaders();
             writeResult("{\"status\":\"ok\",\"command\":\"reload_shaders\"}");
+
+        } else if (command == "undo") {
+            if (m_undoFn) m_undoFn();
+            writeResult("{\"status\":\"ok\",\"command\":\"undo\"}");
+
+        } else if (command == "redo") {
+            if (m_redoFn) m_redoFn();
+            writeResult("{\"status\":\"ok\",\"command\":\"redo\"}");
+
+        } else if (command == "save_scene") {
+            std::string path = params.value("path", "");
+            if (!path.empty() && m_saveSceneAsFn) {
+                m_saveSceneAsFn(path);
+            } else if (m_saveSceneFn) {
+                m_saveSceneFn();
+            }
+            writeResult("{\"status\":\"ok\",\"command\":\"save_scene\"}");
+
+        } else if (command == "new_scene") {
+            if (m_newSceneFn) m_newSceneFn();
+            writeResult("{\"status\":\"ok\",\"command\":\"new_scene\"}");
+
+        } else if (command == "set_gizmo_mode") {
+            std::string mode = params.value("mode", "translate");
+            if (m_setGizmoModeFn) m_setGizmoModeFn(mode);
+            writeResult("{\"status\":\"ok\",\"command\":\"set_gizmo_mode\",\"mode\":\"" + mode + "\"}");
+
+        } else if (command == "get_gizmo_mode") {
+            std::string mode = m_getGizmoModeFn ? m_getGizmoModeFn() : "unknown";
+            writeResult("{\"status\":\"ok\",\"command\":\"get_gizmo_mode\",\"mode\":\"" + mode + "\"}");
+
+        } else if (command == "get_editor_state") {
+            nlohmann::json result;
+            result["status"] = "ok";
+            result["command"] = "get_editor_state";
+            result["can_undo"] = m_canUndoFn ? m_canUndoFn() : false;
+            result["can_redo"] = m_canRedoFn ? m_canRedoFn() : false;
+            result["dirty"] = m_isDirtyFn ? m_isDirtyFn() : false;
+            result["scene_path"] = m_scenePathFn ? m_scenePathFn() : "";
+            writeResult(result.dump(2));
 
         } else {
             writeResult("{\"status\":\"error\",\"message\":\"Unknown command: " + command + "\"}");

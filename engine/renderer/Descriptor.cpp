@@ -1,4 +1,5 @@
 #include "renderer/Descriptor.h"
+#include "renderer/VkDispatch.h"
 #include "renderer/Buffer.h"
 #include <array>
 #include <stdexcept>

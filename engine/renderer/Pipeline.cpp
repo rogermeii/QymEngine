@@ -1,7 +1,6 @@
 #include "renderer/Pipeline.h"
+#include "renderer/VkDispatch.h"
 #include "renderer/Buffer.h"
-#include "core/FileUtils.h"
-#include <SDL.h>
 #include <json.hpp>
 #include <stdexcept>
 
@@ -29,10 +28,9 @@ static VkShaderStageFlags stageStringsToFlags(const std::vector<std::string>& st
     return flags;
 }
 
-bool ShaderReflectionData::loadFromJson(const std::string& path) {
+bool ShaderReflectionData::loadFromString(const std::string& jsonStr) {
     try {
-        std::string content = readFileAsString(path);
-        json j = json::parse(content, nullptr, false);
+        json j = json::parse(jsonStr, nullptr, false);
         if (j.is_discarded()) return false;
 
         sets.clear();
@@ -128,25 +126,6 @@ std::vector<VkPushConstantRange> ShaderReflectionData::createPushConstantRanges(
 
 // --- Pipeline ---
 
-std::vector<char> Pipeline::readFile(const std::string& filename)
-{
-    SDL_RWops* rw = SDL_RWFromFile(filename.c_str(), "rb");
-    if (!rw)
-        throw std::runtime_error("failed to open file: " + filename + " (" + SDL_GetError() + ")");
-
-    Sint64 fileSize = SDL_RWsize(rw);
-    if (fileSize < 0) {
-        SDL_RWclose(rw);
-        throw std::runtime_error("failed to get file size: " + filename);
-    }
-
-    std::vector<char> buffer(static_cast<size_t>(fileSize));
-    SDL_RWread(rw, buffer.data(), 1, static_cast<size_t>(fileSize));
-    SDL_RWclose(rw);
-
-    return buffer;
-}
-
 VkShaderModule Pipeline::createShaderModule(VkDevice device, const std::vector<char>& code)
 {
     VkShaderModuleCreateInfo createInfo{};
@@ -161,64 +140,15 @@ VkShaderModule Pipeline::createShaderModule(VkDevice device, const std::vector<c
     return shaderModule;
 }
 
-static std::string resolveAssetPath(const std::string& path, const std::string& defaultName)
-{
-#ifdef __ANDROID__
-    return path.empty() ? std::string("shaders/") + defaultName : path;
-#else
-    return path.empty()
-        ? std::string(ASSETS_DIR) + "/shaders/" + defaultName
-        : std::string(ASSETS_DIR) + "/" + path;
-#endif
-}
-
-// Derive .reflect.json path from shader .spv path
-static std::string deriveReflectPath(const std::string& spvPath)
-{
-    std::string dir;
-    std::string filename;
-    auto lastSlash = spvPath.find_last_of("/\\");
-    if (lastSlash != std::string::npos) {
-        dir = spvPath.substr(0, lastSlash + 1);
-        filename = spvPath.substr(lastSlash + 1);
-    } else {
-        filename = spvPath;
-    }
-
-    // Remove _vert.spv or _frag.spv suffix
-    auto underscorePos = filename.find('_');
-    if (underscorePos != std::string::npos) {
-        filename = filename.substr(0, underscorePos);
-    } else {
-        // "vert.spv" → "Triangle"
-        filename = "Triangle";
-    }
-
-    // Capitalize first letter
-    if (!filename.empty())
-        filename[0] = toupper(filename[0]);
-
-    return dir + filename + ".reflect.json";
-}
-
-void Pipeline::create(VkDevice device, VkRenderPass renderPass,
+void Pipeline::createFromMemory(VkDevice device, VkRenderPass renderPass,
                       VkExtent2D extent, DescriptorLayoutCache& layoutCache,
                       VkPolygonMode polygonMode,
-                      const std::string& vertPath,
-                      const std::string& fragPath)
+                      const std::vector<char>& vertSpv,
+                      const std::vector<char>& fragSpv,
+                      const std::string& reflectJson)
 {
-    std::string vertFile = resolveAssetPath(vertPath, "vert.spv");
-    std::string fragFile = resolveAssetPath(fragPath, "frag.spv");
-
-    auto vertCode = readFile(vertFile);
-    auto fragCode = readFile(fragFile);
-
-    // Load reflection JSON
-    std::string reflectPath = deriveReflectPath(vertFile);
-    bool hasReflection = m_reflection.loadFromJson(reflectPath);
-
-    if (!hasReflection) {
-        throw std::runtime_error("No .reflect.json found for shader: " + reflectPath);
+    if (!m_reflection.loadFromString(reflectJson)) {
+        throw std::runtime_error("Failed to parse reflection JSON from ShaderBundle");
     }
 
     // Build layouts from reflection using cache
@@ -235,8 +165,8 @@ void Pipeline::create(VkDevice device, VkRenderPass renderPass,
 
     auto pcRanges = m_reflection.createPushConstantRanges();
 
-    VkShaderModule vertModule = createShaderModule(device, vertCode);
-    VkShaderModule fragModule = createShaderModule(device, fragCode);
+    VkShaderModule vertModule = createShaderModule(device, vertSpv);
+    VkShaderModule fragModule = createShaderModule(device, fragSpv);
 
     createPipelineCommon(device, renderPass, extent, polygonMode,
                          vertModule, fragModule, m_setLayouts, pcRanges);
@@ -245,28 +175,20 @@ void Pipeline::create(VkDevice device, VkRenderPass renderPass,
     vkDestroyShaderModule(device, vertModule, nullptr);
 }
 
-void Pipeline::createWithLayouts(VkDevice device, VkRenderPass renderPass,
+void Pipeline::createWithLayoutsFromMemory(VkDevice device, VkRenderPass renderPass,
                       const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts,
                       VkExtent2D extent,
                       const std::vector<VkPushConstantRange>& pushConstantRanges,
                       VkPolygonMode polygonMode,
-                      const std::string& vertPath,
-                      const std::string& fragPath)
+                      const std::vector<char>& vertSpv,
+                      const std::vector<char>& fragSpv,
+                      const std::string& reflectJson)
 {
-    std::string vertFile = resolveAssetPath(vertPath, "vert.spv");
-    std::string fragFile = resolveAssetPath(fragPath, "frag.spv");
-
-    auto vertCode = readFile(vertFile);
-    auto fragCode = readFile(fragFile);
-
-    // Try to load reflection for metadata (optional for createWithLayouts)
-    std::string reflectPath = deriveReflectPath(vertFile);
-    m_reflection.loadFromJson(reflectPath);
-
+    m_reflection.loadFromString(reflectJson);
     m_setLayouts = descriptorSetLayouts;
 
-    VkShaderModule vertModule = createShaderModule(device, vertCode);
-    VkShaderModule fragModule = createShaderModule(device, fragCode);
+    VkShaderModule vertModule = createShaderModule(device, vertSpv);
+    VkShaderModule fragModule = createShaderModule(device, fragSpv);
 
     createPipelineCommon(device, renderPass, extent, polygonMode,
                          vertModule, fragModule,

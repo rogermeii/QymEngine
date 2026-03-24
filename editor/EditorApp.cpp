@@ -1,10 +1,12 @@
 #include "EditorApp.h"
 #include "core/Log.h"
+#include "renderer/VkDispatch.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_sdl2.h>
 #include <SDL.h>
+#include <SDL_syswm.h>
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
@@ -18,17 +20,18 @@
 
 namespace QymEngine {
 
-EditorApp::EditorApp()
-    : Application({"QymEngine Editor", 1280, 720, true})
+EditorApp::EditorApp(RenderBackend backend)
+    : Application({"QymEngine Editor", 1280, 720, true, backend})
 {
 #ifndef __ANDROID__
-    // Must load RenderDoc BEFORE Vulkan initialization
     initRenderDoc();
 #endif
 }
 
 void EditorApp::onInit()
 {
+    // D3D12 和 Vulkan 统一走 VkDispatch 分发层，无需分开处理
+    m_renderer.setForceBindless(m_forceBindless);
     m_renderer.init(getWindow());
     m_renderer.setCamera(&m_camera);
     m_imguiLayer.init(m_renderer);
@@ -63,35 +66,53 @@ void EditorApp::onInit()
     m_consolePanel.init();
     m_modelPreview.init(m_renderer);
 
-    // Initialize undo manager (preserve selection across undo/redo)
+    // Initialize undo manager (preserve multi-selection across undo/redo)
     m_undoManager.init(
         [this]() {
-            // Encode selected node name into the snapshot
-            std::string selectedName;
-            if (m_scene.getSelectedNode())
-                selectedName = m_scene.getSelectedNode()->name;
-            return selectedName + "\n" + m_scene.toJsonString();
+            // Encode selected node names (tab-separated) + scene JSON
+            std::string selectedNames;
+            for (auto* n : m_scene.getSelectedNodes()) {
+                if (!selectedNames.empty()) selectedNames += '\t';
+                selectedNames += n->name;
+            }
+            return selectedNames + "\n" + m_scene.toJsonString();
         },
         [this](const std::string& snapshot) {
-            // Extract selected node name and scene JSON
             size_t sep = snapshot.find('\n');
-            std::string selectedName = snapshot.substr(0, sep);
+            std::string namesStr = snapshot.substr(0, sep);
             std::string json = snapshot.substr(sep + 1);
             m_scene.fromJsonString(json);
-            // Re-select node by name
-            if (!selectedName.empty()) {
+            // Restore multi-selection by name
+            if (!namesStr.empty()) {
+                // Parse tab-separated names
+                std::vector<std::string> names;
+                size_t pos = 0;
+                while (pos < namesStr.size()) {
+                    size_t tab = namesStr.find('\t', pos);
+                    if (tab == std::string::npos) {
+                        names.push_back(namesStr.substr(pos));
+                        break;
+                    }
+                    names.push_back(namesStr.substr(pos, tab - pos));
+                    pos = tab + 1;
+                }
+                bool first = true;
                 m_scene.traverseNodes([&](Node* n) {
-                    if (n->name == selectedName)
-                        m_scene.selectNode(n, false);
+                    for (auto& nm : names) {
+                        if (n->name == nm) {
+                            m_scene.selectNode(n, !first);
+                            first = false;
+                        }
+                    }
                 });
             }
         }
     );
 
     // Connect panels to undo
-    m_hierarchyPanel.setSaveStateFn([this]() { m_undoManager.saveState(); });
-    m_inspectorPanel.setSaveStateFn([this]() { m_undoManager.saveState(); });
-    m_sceneViewPanel.setSaveStateFn([this]() { m_undoManager.saveState(); });
+    m_hierarchyPanel.setSaveStateFn([this]() { m_undoManager.saveState(); m_sceneDirty = true; });
+    m_inspectorPanel.setSaveStateFn([this]() { m_undoManager.saveState(); m_sceneDirty = true; });
+    m_sceneViewPanel.setSaveStateFn([this]() { m_undoManager.saveState(); m_sceneDirty = true; });
 
 #ifdef __ANDROID__
     m_currentScenePath = "scenes/default.json";
@@ -100,6 +121,43 @@ void EditorApp::onInit()
 #endif
 
 #ifndef __ANDROID__
+    // Register automation callbacks
+    m_uiAutomation.setUndoFn([this]() { m_undoManager.undo(); });
+    m_uiAutomation.setRedoFn([this]() { m_undoManager.redo(); });
+    m_uiAutomation.setSaveSceneFn([this]() {
+        if (!m_currentScenePath.empty()) {
+            m_scene.serialize(m_currentScenePath);
+            m_sceneDirty = false;
+        }
+    });
+    m_uiAutomation.setSaveSceneAsFn([this](const std::string& path) {
+        m_currentScenePath = path;
+        m_scene.serialize(m_currentScenePath);
+        m_sceneDirty = false;
+    });
+    m_uiAutomation.setNewSceneFn([this]() {
+        m_undoManager.saveState(); m_sceneDirty = true;
+        m_scene.clearSelection();
+        m_scene.fromJsonString("{\"scene\":{\"name\":\"Untitled\",\"nodes\":[]}}");
+        m_currentScenePath.clear();
+    });
+    m_uiAutomation.setCaptureFrameFn([this]() { m_captureRequested = true; });
+    m_uiAutomation.setGetGizmoModeFn([this]() -> std::string {
+        auto op = m_sceneViewPanel.getGizmoOperation();
+        if (op == ImGuizmo::ROTATE) return "rotate";
+        if (op == ImGuizmo::SCALE) return "scale";
+        return "translate";
+    });
+    m_uiAutomation.setSetGizmoModeFn([this](const std::string& mode) {
+        if (mode == "rotate") m_sceneViewPanel.setGizmoOperation(ImGuizmo::ROTATE);
+        else if (mode == "scale") m_sceneViewPanel.setGizmoOperation(ImGuizmo::SCALE);
+        else m_sceneViewPanel.setGizmoOperation(ImGuizmo::TRANSLATE);
+    });
+    m_uiAutomation.setCanUndoFn([this]() { return m_undoManager.canUndo(); });
+    m_uiAutomation.setCanRedoFn([this]() { return m_undoManager.canRedo(); });
+    m_uiAutomation.setIsDirtyFn([this]() { return m_sceneDirty; });
+    m_uiAutomation.setScenePathFn([this]() { return m_currentScenePath; });
+
     if (m_rdocApi)
         Log::info("RenderDoc: ready (press F12 to capture)");
 #endif
@@ -119,17 +177,21 @@ void EditorApp::onUpdate()
     m_capturingThisFrame = m_captureRequested && m_rdocApi;
     if (m_capturingThisFrame) {
         m_captureRequested = false;
-        // Clean old captures (keep last 5)
+        // Clean old auto-captures (只删除 qymengine_*_capture.rdc, 保留手动命名的)
         {
             std::vector<std::string> rdcFiles;
             std::string captureDir = std::string(ASSETS_DIR) + "/../captures";
             for (auto& entry : std::filesystem::directory_iterator(captureDir)) {
-                if (entry.path().extension() == ".rdc")
+                auto fname = entry.path().filename().string();
+                if (entry.path().extension() == ".rdc" && fname.find("qymengine_") == 0
+                    && fname.find("_capture.rdc") != std::string::npos) {
                     rdcFiles.push_back(entry.path().string());
+                }
             }
             std::sort(rdcFiles.begin(), rdcFiles.end());
             while (rdcFiles.size() > 5) {
-                std::filesystem::remove(rdcFiles.front());
+                std::error_code ec;
+                std::filesystem::remove(rdcFiles.front(), ec); // 忽略删除失败
                 rdcFiles.erase(rdcFiles.begin());
             }
         }
@@ -141,7 +203,16 @@ void EditorApp::onUpdate()
             std::string capturePath = std::string(ASSETS_DIR) + "/../captures/qymengine_" + std::to_string(secs);
             m_rdocApi->SetCaptureFilePathTemplate(capturePath.c_str());
         }
-        m_rdocApi->StartFrameCapture(nullptr, nullptr);
+        // OpenGL 通过 LoadLibrary 加载 RenderDoc 无法 hook GL context，
+        // 必须从 RenderDoc UI 启动才能截帧。这里仍然尝试 TriggerCapture 作为最佳努力。
+        if (QymEngine::vkIsOpenGLBackend() || QymEngine::vkIsGLESBackend()) {
+            m_rdocApi->TriggerCapture();
+        } else {
+            RENDERDOC_DevicePointer rdocDevice = QymEngine::vkIsDirectXBackend()
+                ? nullptr
+                : RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE(m_renderer.getContext().getInstance());
+            m_rdocApi->StartFrameCapture(rdocDevice, nullptr);
+        }
     }
 #endif
 
@@ -180,15 +251,16 @@ void EditorApp::onUpdate()
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
-                m_undoManager.saveState();
+                m_undoManager.saveState(); m_sceneDirty = true;
                 m_scene.clearSelection();
                 m_scene.fromJsonString("{\"scene\":{\"name\":\"Untitled\",\"nodes\":[]}}");
                 m_currentScenePath.clear();
             }
             if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
-                if (!m_currentScenePath.empty())
+                if (!m_currentScenePath.empty()) {
                     m_scene.serialize(m_currentScenePath);
-                else
+                    m_sceneDirty = false;
+                } else
                     m_showSaveAsPopup = true;
             }
             if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {
@@ -196,7 +268,7 @@ void EditorApp::onUpdate()
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Load Scene")) {
-                m_undoManager.saveState();
+                m_undoManager.saveState(); m_sceneDirty = true;
 #ifdef __ANDROID__
                 m_scene.deserialize("scenes/default.json");
 #else
@@ -218,7 +290,7 @@ void EditorApp::onUpdate()
                 m_clipboard.copyNodes(jsons);
             }
             if (ImGui::MenuItem("Paste", "Ctrl+V", false, m_clipboard.hasContent())) {
-                m_undoManager.saveState();
+                m_undoManager.saveState(); m_sceneDirty = true;
                 Node* parent = m_scene.getSelectedNode()
                     ? m_scene.getSelectedNode()->getParent()
                     : m_scene.getRoot();
@@ -226,7 +298,7 @@ void EditorApp::onUpdate()
                     m_scene.deserializeNodeFromString(json, parent);
             }
             if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, m_scene.getSelectedNode() != nullptr)) {
-                m_undoManager.saveState();
+                m_undoManager.saveState(); m_sceneDirty = true;
                 for (auto* n : m_scene.getSelectedNodes()) {
                     std::string json = m_scene.serializeNodeToString(n);
                     m_scene.deserializeNodeFromString(json, n->getParent());
@@ -234,7 +306,7 @@ void EditorApp::onUpdate()
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Delete", "Del", false, m_scene.getSelectedNode() != nullptr)) {
-                m_undoManager.saveState();
+                m_undoManager.saveState(); m_sceneDirty = true;
                 auto selected = m_scene.getSelectedNodes();
                 for (auto* n : selected)
                     m_scene.removeNode(n);
@@ -271,6 +343,7 @@ void EditorApp::onUpdate()
                     filename += ".json";
                 m_currentScenePath = std::string(ASSETS_DIR) + "/scenes/" + filename;
                 m_scene.serialize(m_currentScenePath);
+                m_sceneDirty = false;
                 Log::info("Saved scene to: " + m_currentScenePath);
             }
             ImGui::CloseCurrentPopup();
@@ -279,6 +352,18 @@ void EditorApp::onUpdate()
         if (ImGui::Button("Cancel"))
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
+    }
+
+    // Update window title with scene name, backend, and dirty indicator
+    {
+        const char* backendName = "Vulkan";
+        if (QymEngine::vkIsD3D12Backend()) backendName = "D3D12";
+        else if (QymEngine::vkIsD3D11Backend()) backendName = "D3D11";
+        else if (QymEngine::vkIsGLESBackend()) backendName = "GLES";
+        else if (QymEngine::vkIsOpenGLBackend()) backendName = "OpenGL";
+        std::string title = "QymEngine Editor [" + std::string(backendName) + "] - " + m_scene.name;
+        if (m_sceneDirty) title += " *";
+        SDL_SetWindowTitle(getWindow().getNativeWindow(), title.c_str());
     }
 
     // Keyboard shortcuts
@@ -294,6 +379,24 @@ void EditorApp::onUpdate()
     if (m_captureAndExit && !m_autoCaptureDone && m_rdocApi && m_frameCount == 5) {
         m_captureRequested = true;
         m_autoCaptureDone = true;
+        Log::info("RenderDoc: auto-capture triggered at frame " + std::to_string(m_frameCount));
+    }
+    // OpenGL TriggerCapture 模式: 捕获在下一帧完成，延迟检查结果
+    if (m_captureAndExit && m_autoCaptureDone && m_rdocApi
+        && (QymEngine::vkIsOpenGLBackend() || QymEngine::vkIsGLESBackend()) && m_frameCount == 8) {
+        uint32_t numCaptures = m_rdocApi->GetNumCaptures();
+        if (numCaptures > 0) {
+            char path[512]; uint32_t pathLen = sizeof(path);
+            m_rdocApi->GetCapture(numCaptures - 1, path, &pathLen, nullptr);
+            Log::info(std::string("RenderDoc: captured to ") + path);
+            std::string resultPath = std::string(ASSETS_DIR) + "/../captures/result.txt";
+            { std::ofstream f(resultPath); f << path; }
+            std::string outPath = m_captureOutputPath.empty()
+                ? std::string(ASSETS_DIR) + "/../capture_path.txt" : m_captureOutputPath;
+            { std::ofstream f(outPath); f << path; f.close(); }
+            Log::info("RenderDoc: capture-and-exit mode (OpenGL), shutting down");
+            m_window->requestClose();
+        }
     }
 #endif
 
@@ -315,10 +418,18 @@ void EditorApp::onUpdate()
 
 #ifndef __ANDROID__
     if (m_capturingThisFrame) {
-        m_rdocApi->EndFrameCapture(nullptr, nullptr);
         m_capturingThisFrame = false;
 
+        if (QymEngine::vkIsOpenGLBackend() || QymEngine::vkIsGLESBackend()) {
+            // OpenGL/GLES TriggerCapture 模式: 结果在帧8延迟检查中处理，这里跳过
+        } else {
+        RENDERDOC_DevicePointer rdocDevice = QymEngine::vkIsDirectXBackend()
+            ? nullptr
+            : RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE(m_renderer.getContext().getInstance());
+        uint32_t endRet = m_rdocApi->EndFrameCapture(rdocDevice, nullptr);
+
         uint32_t numCaptures = m_rdocApi->GetNumCaptures();
+        Log::info("RenderDoc: GetNumCaptures = " + std::to_string(numCaptures));
         if (numCaptures > 0) {
             char path[512];
             uint32_t pathLen = sizeof(path);
@@ -342,7 +453,14 @@ void EditorApp::onUpdate()
                 Log::info("RenderDoc: capture-and-exit mode, shutting down");
                 m_window->requestClose();
             }
+        } else {
+            Log::warn("RenderDoc: EndFrameCapture succeeded but no captures available");
+            if (m_captureAndExit) {
+                Log::warn("RenderDoc: capture-and-exit mode, no capture produced, shutting down anyway");
+                m_window->requestClose();
+            }
         }
+        } // end else (non-OpenGL)
     }
 #endif
 }
@@ -478,7 +596,7 @@ void EditorApp::handleShortcuts()
 
     // Ctrl+V: Paste
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V) && m_clipboard.hasContent()) {
-        m_undoManager.saveState();
+        m_undoManager.saveState(); m_sceneDirty = true;
         Node* parent = m_scene.getSelectedNode()
             ? m_scene.getSelectedNode()->getParent()
             : m_scene.getRoot();
@@ -490,7 +608,7 @@ void EditorApp::handleShortcuts()
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
         auto& selected = m_scene.getSelectedNodes();
         if (!selected.empty()) {
-            m_undoManager.saveState();
+            m_undoManager.saveState(); m_sceneDirty = true;
             // Copy first to avoid modifying the set while iterating
             std::vector<Node*> nodes(selected.begin(), selected.end());
             for (auto* n : nodes) {
@@ -502,7 +620,7 @@ void EditorApp::handleShortcuts()
 
     // Ctrl+N: New Scene
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N)) {
-        m_undoManager.saveState();
+        m_undoManager.saveState(); m_sceneDirty = true;
         m_scene.clearSelection();
         m_scene.fromJsonString("{\"scene\":{\"name\":\"Untitled\",\"nodes\":[]}}");
         m_currentScenePath.clear();
@@ -510,9 +628,10 @@ void EditorApp::handleShortcuts()
 
     // Ctrl+S: Save
     if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_S)) {
-        if (!m_currentScenePath.empty())
+        if (!m_currentScenePath.empty()) {
             m_scene.serialize(m_currentScenePath);
-        else
+            m_sceneDirty = false;
+        } else
             m_showSaveAsPopup = true;
     }
 

@@ -1,4 +1,5 @@
 #include "renderer/MeshLibrary.h"
+#include "renderer/VkDispatch.h"
 #include "renderer/MeshData.h"
 #include "renderer/Buffer.h"
 #include "renderer/VulkanContext.h"

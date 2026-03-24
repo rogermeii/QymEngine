@@ -1,5 +1,7 @@
 #include "core/Application.h"
+#include "core/Window.h"
 #include "renderer/Renderer.h"
+#include "renderer/VkDispatch.h"
 #include "scene/Scene.h"
 #include "scene/Camera.h"
 #include "VirtualJoystick.h"
@@ -257,9 +259,27 @@ int main(int argc, char* argv[]) {
     SDL_SetHint("SDL_ANDROID_HIDE_SYSTEM_BARS", "1");
 
     bool runtimePlayer = false;
+    bool useGLES = false;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-runtime-player") == 0)
             runtimePlayer = true;
+        if (strcmp(argv[i], "-gles") == 0 || strcmp(argv[i], "--gles") == 0)
+            useGLES = true;
+    }
+
+    // 确保 SDL 视频子系统初始化 (vkInitDispatch 需要 SDL 来加载 Vulkan)
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        SDL_Log("[QymEngine] SDL_Init failed: %s", SDL_GetError());
+        return 1;
+    }
+
+    // Android: 默认使用 Vulkan，可通过 -gles/--gles 参数切换到 GLES 后端
+    if (useGLES) {
+        QymEngine::vkInitDispatch(4); // GLES backend
+        SDL_Log("[QymEngine] Using GLES backend");
+    } else {
+        QymEngine::vkInitDispatch(0); // Vulkan backend
+        SDL_Log("[QymEngine] Using Vulkan backend");
     }
 
     try {
@@ -267,7 +287,8 @@ int main(int argc, char* argv[]) {
             RuntimeApp app;
             app.run();
         } else {
-            QymEngine::EditorApp app;
+            auto backend = useGLES ? QymEngine::RenderBackend::GLES : QymEngine::RenderBackend::Vulkan;
+            QymEngine::EditorApp app(backend);
             app.run();
         }
     } catch (const std::exception& e) {

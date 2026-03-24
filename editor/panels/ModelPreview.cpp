@@ -1,4 +1,5 @@
 #include "ModelPreview.h"
+#include "renderer/VkDispatch.h"
 #include "renderer/Renderer.h"
 
 #include <imgui_impl_vulkan.h>
@@ -10,6 +11,15 @@
 #include <algorithm>
 
 namespace QymEngine {
+
+namespace {
+glm::mat4 toShaderMatrix(const glm::mat4& m)
+{
+    if (vkIsOpenGLBackend() || vkIsGLESBackend())
+        return m;
+    return glm::transpose(m);
+}
+} // namespace
 
 void ModelPreview::init(Renderer& renderer)
 {
@@ -269,10 +279,15 @@ void ModelPreview::writePreviewUbo(const glm::vec3& boundsMin, const glm::vec3& 
     auto projMat = glm::perspective(fovY, 1.0f, 0.01f, distance * 3.0f);
     projMat[1][1] *= -1;  // Vulkan Y-flip
     previewUbo.proj = glm::transpose(projMat);
-    previewUbo.lightDir = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
-    previewUbo.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
     previewUbo.ambientColor = glm::vec3(0.2f, 0.2f, 0.2f);
     previewUbo.cameraPos = eye;
+    // Preview uses a single default directional light
+    previewUbo.lightCountPad = glm::ivec4(1, 0, 0, 0);
+    LightData& previewLight = previewUbo.lights[0];
+    previewLight.positionAndType = glm::vec4(0, 0, 0, float(LIGHT_TYPE_DIRECTIONAL));
+    previewLight.directionAndRange = glm::vec4(glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f)), 0.0f);
+    previewLight.colorAndIntensity = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+    previewLight.spotParams = glm::vec4(0.0f);
     memcpy(m_uboMapped, &previewUbo, sizeof(UniformBufferObject));
 }
 

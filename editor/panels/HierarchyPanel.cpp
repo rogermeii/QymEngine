@@ -24,9 +24,10 @@ void HierarchyPanel::onImGuiRender(Scene& scene, UndoManager* undo, Clipboard* c
                 auto* n = scene.createNode(label);
                 n->meshType = mt;
                 n->nodeType = nt;
-                if (nt == NodeType::DirectionalLight) {
+                if (nt != NodeType::Mesh) {
                     n->meshType = MeshType::None;
-                    n->transform.rotation = glm::vec3(-50.0f, -30.0f, 0.0f);
+                    if (nt == NodeType::DirectionalLight)
+                        n->transform.rotation = glm::vec3(-50.0f, -30.0f, 0.0f);
                 }
             }
         };
@@ -37,6 +38,8 @@ void HierarchyPanel::onImGuiRender(Scene& scene, UndoManager* undo, Clipboard* c
         addNode("Quad", MeshType::Quad);
         ImGui::Separator();
         addNode("Directional Light", MeshType::None, NodeType::DirectionalLight);
+        addNode("Point Light", MeshType::None, NodeType::PointLight);
+        addNode("Spot Light", MeshType::None, NodeType::SpotLight);
         ImGui::EndPopup();
     }
 

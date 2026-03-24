@@ -1,6 +1,8 @@
 #include "renderer/VulkanContext.h"
+#include "renderer/VkDispatch.h"
 #include <SDL.h>
 #include <SDL_vulkan.h>
+#include <SDL_syswm.h>
 #include <iostream>
 #include <map>
 #include <set>
@@ -135,7 +137,6 @@ void VulkanContext::createInstance()
     createInfo.pApplicationInfo = &appInfo;
 
     printInstanceExtensions();
-
     auto extensions = getRequiredExtensions();
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
@@ -157,6 +158,9 @@ void VulkanContext::createInstance()
 
     if (vkCreateInstance(&createInfo, nullptr, &m_instance) != VK_SUCCESS)
         throw std::runtime_error("failed to create instance!");
+
+    // Android/Linux Vulkan: instance 创建后加载实例级函数
+    vkPostInstanceInit(m_instance);
 }
 
 void VulkanContext::printInstanceExtensions()
@@ -215,10 +219,20 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanContext::debugCallback(
 
 std::vector<const char*> VulkanContext::getRequiredExtensions()
 {
-    unsigned int count = 0;
-    SDL_Vulkan_GetInstanceExtensions(m_window, &count, nullptr);
-    std::vector<const char*> extensions(count);
-    SDL_Vulkan_GetInstanceExtensions(m_window, &count, extensions.data());
+    std::vector<const char*> extensions;
+
+    if (vkIsDirectXBackend() || vkIsOpenGLBackend() || vkIsGLESBackend()) {
+        // DirectX / OpenGL / GLES 后端: 只需要 surface 扩展声明 (实际不使用 Vulkan)
+        extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+        extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+#endif
+    } else {
+        unsigned int count = 0;
+        SDL_Vulkan_GetInstanceExtensions(m_window, &count, nullptr);
+        extensions.resize(count);
+        SDL_Vulkan_GetInstanceExtensions(m_window, &count, extensions.data());
+    }
 
     if (s_enableValidationLayers)
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -253,6 +267,28 @@ void VulkanContext::setupDebugMessenger()
 
 void VulkanContext::createSurface()
 {
+    if (vkIsDirectXBackend() || vkIsOpenGLBackend() || vkIsGLESBackend()) {
+#ifdef _WIN32
+        // Windows: 绕过 SDL_Vulkan，直接从 HWND 创建 surface
+        SDL_SysWMinfo wm;
+        SDL_VERSION(&wm.version);
+        SDL_GetWindowWMInfo(m_window, &wm);
+
+        VkWin32SurfaceCreateInfoKHR ci{};
+        ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+        ci.hwnd = wm.info.win.window;
+        ci.hinstance = GetModuleHandle(nullptr);
+
+        if (vkCreateWin32SurfaceKHR(m_instance, &ci, nullptr, &m_surface) != VK_SUCCESS)
+            throw std::runtime_error("failed to create DirectX/OpenGL/GLES surface!");
+#else
+        // Android/Linux: OpenGL/GLES 后端不需要 Vulkan surface
+        // VkDispatch shim 层会直接使用 SDL OpenGL context
+        m_surface = VK_NULL_HANDLE;
+#endif
+        return;
+    }
+
     if (SDL_Vulkan_CreateSurface(m_window, m_instance, &m_surface) != SDL_TRUE)
         throw std::runtime_error("failed to create Vulkan surface!");
 }

@@ -1,4 +1,5 @@
 #include "renderer/CommandManager.h"
+#include "renderer/VkDispatch.h"
 #include "renderer/VulkanContext.h"
 #include <stdexcept>
 

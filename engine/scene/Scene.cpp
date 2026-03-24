@@ -96,12 +96,26 @@ static json serializeNode(const Node* node) {
     j["transform"]["position"] = {node->transform.position.x, node->transform.position.y, node->transform.position.z};
     j["transform"]["rotation"] = {node->transform.rotation.x, node->transform.rotation.y, node->transform.rotation.z};
     j["transform"]["scale"] = {node->transform.scale.x, node->transform.scale.y, node->transform.scale.z};
-    j["nodeType"] = (node->nodeType == NodeType::DirectionalLight) ? "DirectionalLight" : "Mesh";
+    // NodeType 序列化
+    const char* ntStr = "Mesh";
+    switch (node->nodeType) {
+        case NodeType::DirectionalLight: ntStr = "DirectionalLight"; break;
+        case NodeType::PointLight:       ntStr = "PointLight"; break;
+        case NodeType::SpotLight:        ntStr = "SpotLight"; break;
+        default: break;
+    }
+    j["nodeType"] = ntStr;
     j["meshPath"] = node->meshPath;
     j["materialPath"] = node->materialPath;
-    if (node->nodeType == NodeType::DirectionalLight) {
+    if (node->isLight()) {
         j["lightColor"] = {node->lightColor.r, node->lightColor.g, node->lightColor.b};
         j["lightIntensity"] = node->lightIntensity;
+        if (node->nodeType == NodeType::PointLight || node->nodeType == NodeType::SpotLight)
+            j["lightRange"] = node->lightRange;
+        if (node->nodeType == NodeType::SpotLight) {
+            j["spotInnerAngle"] = node->spotInnerAngle;
+            j["spotOuterAngle"] = node->spotOuterAngle;
+        }
     }
     j["children"] = json::array();
     for (auto& child : node->getChildren())
@@ -132,7 +146,10 @@ static void deserializeNode(Node* parent, const json& j, int insertIndex = -1) {
     }
     if (j.contains("nodeType")) {
         std::string nt = j["nodeType"].get<std::string>();
-        node->nodeType = (nt == "DirectionalLight") ? NodeType::DirectionalLight : NodeType::Mesh;
+        if (nt == "DirectionalLight")    node->nodeType = NodeType::DirectionalLight;
+        else if (nt == "PointLight")     node->nodeType = NodeType::PointLight;
+        else if (nt == "SpotLight")      node->nodeType = NodeType::SpotLight;
+        else                             node->nodeType = NodeType::Mesh;
     }
     if (j.contains("meshPath"))
         node->meshPath = j["meshPath"].get<std::string>();
@@ -144,6 +161,12 @@ static void deserializeNode(Node* parent, const json& j, int insertIndex = -1) {
     }
     if (j.contains("lightIntensity"))
         node->lightIntensity = j["lightIntensity"].get<float>();
+    if (j.contains("lightRange"))
+        node->lightRange = j["lightRange"].get<float>();
+    if (j.contains("spotInnerAngle"))
+        node->spotInnerAngle = j["spotInnerAngle"].get<float>();
+    if (j.contains("spotOuterAngle"))
+        node->spotOuterAngle = j["spotOuterAngle"].get<float>();
     if (j.contains("children")) {
         for (auto& childJson : j["children"])
             deserializeNode(node, childJson);

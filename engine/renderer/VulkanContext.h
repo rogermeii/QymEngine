@@ -71,7 +71,8 @@ private:
 
     static const std::vector<const char*> s_validationLayers;
     static const std::vector<const char*> s_deviceExtensions;
-#ifdef NDEBUG
+#if defined(NDEBUG) || defined(__ANDROID__)
+    // Release 构建或 Android: 不启用 validation layers
     static constexpr bool s_enableValidationLayers = false;
 #else
     static constexpr bool s_enableValidationLayers = true;

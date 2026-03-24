@@ -4,10 +4,10 @@ project(QymEngineAndroid LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Empty ASSETS_DIR on Android (SDL_RWFromFile reads from APK assets)
-add_compile_definitions(ASSETS_DIR="")
+# Android: ASSETS_DIR="." 使路径拼接为 "./shaders/..." (SDL_RWFromFile 从 APK assets 读取)
+add_compile_definitions(ASSETS_DIR=".")
 
-# Vulkan (from NDK)
+# Vulkan (from NDK) — 仍需要 Vulkan 头文件用于 VkDispatch shim 层的类型定义
 find_package(Vulkan REQUIRED)
 
 # GLM (header-only)
@@ -45,7 +45,11 @@ target_include_directories(imgui PUBLIC
 )
 target_sources(imgui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../3rd-party/imguizmo/ImGuizmo.cpp")
 target_include_directories(imgui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../3rd-party/imguizmo")
-target_link_libraries(imgui PUBLIC Vulkan::Vulkan SDL2::SDL2)
+# Android: ImGui 必须使用 VK_NO_PROTOTYPES 并通过函数指针调用 Vulkan
+# 直接链接 Vulkan::Vulkan 会与 VkDispatch 的全局变量发生符号冲突
+target_link_libraries(imgui PUBLIC SDL2::SDL2)
+target_include_directories(imgui PUBLIC ${Vulkan_INCLUDE_DIRS})
+target_compile_definitions(imgui PUBLIC VK_NO_PROTOTYPES)
 
 # Engine library
 file(GLOB_RECURSE ENGINE_SOURCES
@@ -57,12 +61,19 @@ file(GLOB_RECURSE ENGINE_SOURCES
 
 add_library(QymEngineLib STATIC ${ENGINE_SOURCES})
 target_include_directories(QymEngineLib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../engine")
+# Android: 不链接 Vulkan::Vulkan (避免与 VkDispatch 全局变量符号冲突)
+# 只包含 Vulkan 头文件路径，函数通过 VkDispatch 动态加载
 target_link_libraries(QymEngineLib PUBLIC
-    Vulkan::Vulkan
     SDL2::SDL2
+    GLESv3 EGL  # GLES 3.0+ 后端需要
     glm stb nlohmann_json tinyobjloader
+    dl  # dlopen/dlsym for libvulkan.so
 )
+target_include_directories(QymEngineLib PUBLIC ${Vulkan_INCLUDE_DIRS})
+# Android: VK_NO_PROTOTYPES 通过 VkDispatch.h 定义
+# 每个使用 vk* 函数的 .cpp 文件需要 #include "renderer/VkDispatch.h"
 target_compile_definitions(QymEngineLib PUBLIC
+    VK_NO_PROTOTYPES
     VK_USE_PLATFORM_ANDROID_KHR
     GLM_FORCE_RADIANS
     GLM_FORCE_DEFAULT_ALIGNED_GENTYPES

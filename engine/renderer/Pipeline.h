@@ -35,8 +35,8 @@ struct ShaderReflectionData {
     std::map<uint32_t, std::vector<ReflectedBinding>> sets;
     std::vector<ReflectedPushConstant> pushConstants;
 
-    // Load from .reflect.json
-    bool loadFromJson(const std::string& path);
+    // Load from JSON string
+    bool loadFromString(const std::string& jsonStr);
 
     // Build Vulkan descriptor set layout bindings for a given set
     std::vector<VkDescriptorSetLayoutBinding> buildBindings(uint32_t setIndex) const;
@@ -47,21 +47,23 @@ struct ShaderReflectionData {
 
 class Pipeline {
 public:
-    // Create with reflection JSON + layout cache (main path)
-    void create(VkDevice device, VkRenderPass renderPass,
+    // Create from in-memory SPIR-V + reflection JSON (ShaderBundle)
+    void createFromMemory(VkDevice device, VkRenderPass renderPass,
                 VkExtent2D extent, DescriptorLayoutCache& layoutCache,
-                VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL,
-                const std::string& vertPath = "",
-                const std::string& fragPath = "");
+                VkPolygonMode polygonMode,
+                const std::vector<char>& vertSpv,
+                const std::vector<char>& fragSpv,
+                const std::string& reflectJson);
 
-    // Create with explicit layouts (for special pipelines like grid)
-    void createWithLayouts(VkDevice device, VkRenderPass renderPass,
+    // Create with explicit layouts and in-memory SPIR-V (bindless/grid)
+    void createWithLayoutsFromMemory(VkDevice device, VkRenderPass renderPass,
                 const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts,
                 VkExtent2D extent,
-                const std::vector<VkPushConstantRange>& pushConstantRanges = {},
-                VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL,
-                const std::string& vertPath = "",
-                const std::string& fragPath = "");
+                const std::vector<VkPushConstantRange>& pushConstantRanges,
+                VkPolygonMode polygonMode,
+                const std::vector<char>& vertSpv,
+                const std::vector<char>& fragSpv,
+                const std::string& reflectJson = "");
 
     void cleanup(VkDevice device);
 
@@ -70,8 +72,6 @@ public:
 
     const ShaderReflectionData& getReflection() const { return m_reflection; }
     const std::vector<VkDescriptorSetLayout>& getDescriptorSetLayouts() const { return m_setLayouts; }
-
-    static std::vector<char> readFile(const std::string& filename);
 
 private:
     VkShaderModule createShaderModule(VkDevice device, const std::vector<char>& code);

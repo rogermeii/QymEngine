@@ -1,22 +1,35 @@
 // Infinite grid shader (no vertex input, fullscreen quad)
 
+static const int MAX_LIGHTS = 8;
+
+struct LightData
+{
+    float4 positionAndType;
+    float4 directionAndRange;
+    float4 colorAndIntensity;
+    float4 spotParams;
+};
+
 struct FrameData
 {
     float4x4 view;
     float4x4 proj;
-    float3 lightDir;
-    float3 lightColor;
     float3 ambientColor;
     float3 cameraPos;
+    int4 lightCountPad;
+    LightData lights[MAX_LIGHTS];
+    float4x4 lightVP;
+    int4 shadowParams;
 };
 
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
+[[vk::binding(1, 0)]] Sampler2D shadowMap;
 
 struct VSOutput
 {
     float4 sv_position : SV_Position;
-    [[vk::location(0)]] float3 nearPoint;
-    [[vk::location(1)]] float3 farPoint;
+    [[vk::location(0)]] float3 nearPoint : TEXCOORD0;
+    [[vk::location(1)]] float3 farPoint : TEXCOORD1;
 };
 
 static const float3 positions[6] = {
@@ -138,5 +151,9 @@ FSOutput fragmentMain(VSOutput input)
 
     float4 clipPos = mul(frame.proj, mul(frame.view, float4(fragPos, 1.0)));
     output.depth = clipPos.z / clipPos.w;
+    // GLES: depthFix 矩阵使 NDC z 在 [-1,1]，但 gl_FragDepth 需要 [0,1]
+    // shadowParams.z != 0 表示需要手动转换
+    if (frame.shadowParams.z != 0)
+        output.depth = output.depth * 0.5 + 0.5;
     return output;
 }

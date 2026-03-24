@@ -18,8 +18,7 @@ struct ShaderProperty {
 
 struct ShaderAsset {
     std::string name;
-    std::string vertPath;       // relative to ASSETS_DIR
-    std::string fragPath;
+    std::string bundlePath;     // relative to ASSETS_DIR (.shaderbundle)
     std::vector<ShaderProperty> properties;
     Pipeline pipeline;          // owns VkPipeline + VkPipelineLayout
 };

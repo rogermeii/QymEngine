@@ -15,6 +15,7 @@ public:
 
 private:
     SaveStateFn m_saveState;
-    bool m_wasDragging = false; // Track drag start for undo
+    bool m_wasDragging = false;      // Transform drag undo tracking
+    bool m_wasLightDragging = false;  // Light property drag undo tracking
 };
 }

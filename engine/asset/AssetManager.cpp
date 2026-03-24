@@ -1,10 +1,12 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
+#include "renderer/VkDispatch.h"
 
 #include <stb_image.h>
 #include <json.hpp>
 
 #include "asset/AssetManager.h"
+#include "asset/ShaderBundle.h"
 #include "core/FileUtils.h"
 #include "renderer/VulkanContext.h"
 #include "renderer/CommandManager.h"
@@ -330,8 +332,7 @@ const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
 
     ShaderAsset shader;
     shader.name = j.value("name", "");
-    shader.vertPath = j.value("vert", "");
-    shader.fragPath = j.value("frag", "");
+    shader.bundlePath = j.value("bundle", "");
 
     // Parse properties
     if (j.contains("properties") && j["properties"].is_array()) {
@@ -365,17 +366,26 @@ const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
         }
     }
 
-    // Create pipeline using layout cache (reflection-driven)
-    if (m_offscreenRenderPass != VK_NULL_HANDLE && m_layoutCache) {
-        shader.pipeline.create(
-            m_ctx->getDevice(),
-            m_offscreenRenderPass,
-            m_offscreenExtent,
-            *m_layoutCache,
-            VK_POLYGON_MODE_FILL,
-            shader.vertPath,
-            shader.fragPath
-        );
+    // Create pipeline from ShaderBundle
+    if (m_offscreenRenderPass != VK_NULL_HANDLE && m_layoutCache && !shader.bundlePath.empty()) {
+        std::string bundleFullPath = m_assetsDir.empty()
+            ? shader.bundlePath
+            : (m_assetsDir + "/" + shader.bundlePath);
+        ShaderBundle bundle;
+        std::string var = vkIsD3D12Backend() ? "default_dxil" : (vkIsD3D11Backend() ? "default_dxbc" : ((vkIsOpenGLBackend() || vkIsGLESBackend()) ? "default_glsl" : "default"));
+        if (bundle.load(bundleFullPath) && bundle.hasVariant(var)) {
+            auto vertSpv = bundle.getVertSpv(var);
+            auto fragSpv = bundle.getFragSpv(var);
+            auto reflectJson = bundle.getReflectJson(var);
+            shader.pipeline.createFromMemory(
+                m_ctx->getDevice(),
+                m_offscreenRenderPass,
+                m_offscreenExtent,
+                *m_layoutCache,
+                VK_POLYGON_MODE_FILL,
+                vertSpv, fragSpv, reflectJson
+            );
+        }
     }
 
     m_shaderCache[relativePath] = std::move(shader);

@@ -1,4 +1,5 @@
 #include "renderer/SwapChain.h"
+#include "renderer/VkDispatch.h"
 #include "renderer/VulkanContext.h"
 #include <SDL.h>
 #include <SDL_vulkan.h>
@@ -39,6 +40,7 @@ void SwapChain::create(VulkanContext& ctx, SDL_Window* window)
     SwapChainSupportDetails swapChainSupport = querySupport(ctx.getPhysicalDevice(), ctx.getSurface());
 
     VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
+    SDL_Log("[SwapChain] Chosen format: %d colorSpace: %d", surfaceFormat.format, surfaceFormat.colorSpace);
     VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
     VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities, window);
 
@@ -184,9 +186,12 @@ void SwapChain::cleanupSyncObjects(VkDevice device, int maxFramesInFlight)
 // --- Private helpers ---
 VkSurfaceFormatKHR SwapChain::chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
 {
+    // 优先选择 sRGB 格式 (B8G8R8A8 或 R8G8B8A8)
+    // Android GPU 通常只支持 R8G8B8A8，不支持 B8G8R8A8
     for (const auto& availableFormat : availableFormats)
     {
-        if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB &&
+        if ((availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB ||
+             availableFormat.format == VK_FORMAT_R8G8B8A8_SRGB) &&
             availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
         {
             return availableFormat;

@@ -1,4 +1,5 @@
 #include "renderer/Buffer.h"
+#include "renderer/VkDispatch.h"
 #include "renderer/VulkanContext.h"
 #include <stdexcept>
 #include <cstring>

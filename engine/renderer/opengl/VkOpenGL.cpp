@@ -898,7 +898,7 @@ static std::string fixupGLSL(const std::string& source,
         pass2 = std::move(fixFlat);
     }
 
-    if (s_isGLES) {
+    {
         replaceAll(pass2, "layout(row_major) uniform;\n", "");
         replaceAll(pass2, "layout(row_major) buffer;\n", "");
         replaceAll(pass2,
@@ -2923,17 +2923,25 @@ static void flushGraphicsState(GL_CommandBuffer* cb)
             if (set0 && set0->uboBuffers[0]) {
                 float data[4] = {0};
                 glBindBuffer(GL_UNIFORM_BUFFER, set0->uboBuffers[0]);
-                void* mapped = glMapBufferRange(GL_UNIFORM_BUFFER, 0, 16, GL_MAP_READ_BIT);
-                if (mapped) {
-                    memcpy(data, mapped, 16);
-                    glUnmapBuffer(GL_UNIFORM_BUFFER);
+                if (s_isGLES) {
+                    void* mapped = glMapBufferRange(GL_UNIFORM_BUFFER, 0, 16, GL_MAP_READ_BIT);
+                    if (mapped) {
+                        memcpy(data, mapped, 16);
+                        glUnmapBuffer(GL_UNIFORM_BUFFER);
+                    }
+                } else {
+                    glGetBufferSubData(GL_UNIFORM_BUFFER, 0, 16, data);
                 }
                 SDL_Log("[VkOpenGL] FrameData UBO first 16B: %.3f %.3f %.3f %.3f", data[0], data[1], data[2], data[3]);
                 int shadowParams[4] = {0};
-                mapped = glMapBufferRange(GL_UNIFORM_BUFFER, 752, 16, GL_MAP_READ_BIT);
-                if (mapped) {
-                    memcpy(shadowParams, mapped, 16);
-                    glUnmapBuffer(GL_UNIFORM_BUFFER);
+                if (s_isGLES) {
+                    void* mapped = glMapBufferRange(GL_UNIFORM_BUFFER, 752, 16, GL_MAP_READ_BIT);
+                    if (mapped) {
+                        memcpy(shadowParams, mapped, 16);
+                        glUnmapBuffer(GL_UNIFORM_BUFFER);
+                    }
+                } else {
+                    glGetBufferSubData(GL_UNIFORM_BUFFER, 752, 16, shadowParams);
                 }
                 SDL_Log("[VkOpenGL] FrameData shadowParams: %d %d %d %d",
                         shadowParams[0], shadowParams[1], shadowParams[2], shadowParams[3]);
@@ -3170,8 +3178,12 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdDrawIndexed(
                 if (pcBuf > 0) {
                     glBindBuffer(GL_UNIFORM_BUFFER, pcBuf);
                     float pc[16] = {0};
-                    void* m = glMapBufferRange(GL_UNIFORM_BUFFER, 0, 64, GL_MAP_READ_BIT);
-                    if (m) { memcpy(pc, m, 64); glUnmapBuffer(GL_UNIFORM_BUFFER); }
+                    if (s_isGLES) {
+                        void* m = glMapBufferRange(GL_UNIFORM_BUFFER, 0, 64, GL_MAP_READ_BIT);
+                        if (m) { memcpy(pc, m, 64); glUnmapBuffer(GL_UNIFORM_BUFFER); }
+                    } else {
+                        glGetBufferSubData(GL_UNIFORM_BUFFER, 0, 64, pc);
+                    }
                     SDL_Log("[VkOpenGL] PushConst model rows: [%.3f %.3f %.3f %.3f] [%.3f %.3f %.3f %.3f] [%.3f %.3f %.3f %.3f] [%.3f %.3f %.3f %.3f]",
                             pc[0], pc[1], pc[2], pc[3],
                             pc[4], pc[5], pc[6], pc[7],
@@ -3185,15 +3197,22 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdDrawIndexed(
             if (vbuf > 0) {
                 glBindBuffer(GL_ARRAY_BUFFER, vbuf);
                 float vtx[11] = {0};  // 44 bytes = 11 floats
-                void* mapped = glMapBufferRange(GL_ARRAY_BUFFER, 0, 44, GL_MAP_READ_BIT);
-                if (mapped) {
-                    memcpy(vtx, mapped, 44);
-                    glUnmapBuffer(GL_ARRAY_BUFFER);
+                if (s_isGLES) {
+                    void* mapped = glMapBufferRange(GL_ARRAY_BUFFER, 0, 44, GL_MAP_READ_BIT);
+                    if (mapped) {
+                        memcpy(vtx, mapped, 44);
+                        glUnmapBuffer(GL_ARRAY_BUFFER);
+                        SDL_Log("[VkOpenGL] VTX0: pos(%.2f,%.2f,%.2f) col(%.2f,%.2f,%.2f) uv(%.2f,%.2f) n(%.2f,%.2f,%.2f)",
+                                vtx[0], vtx[1], vtx[2], vtx[3], vtx[4], vtx[5],
+                                vtx[6], vtx[7], vtx[8], vtx[9], vtx[10]);
+                    } else {
+                        SDL_Log("[VkOpenGL] VTX: mapBuffer failed err=0x%x", glGetError());
+                    }
+                } else {
+                    glGetBufferSubData(GL_ARRAY_BUFFER, 0, 44, vtx);
                     SDL_Log("[VkOpenGL] VTX0: pos(%.2f,%.2f,%.2f) col(%.2f,%.2f,%.2f) uv(%.2f,%.2f) n(%.2f,%.2f,%.2f)",
                             vtx[0], vtx[1], vtx[2], vtx[3], vtx[4], vtx[5],
                             vtx[6], vtx[7], vtx[8], vtx[9], vtx[10]);
-                } else {
-                    SDL_Log("[VkOpenGL] VTX: mapBuffer failed err=0x%x", glGetError());
                 }
             }
         }
@@ -3690,19 +3709,26 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateShaderModule(
                 // 诊断: 输出 GLSL 的前几个 "in " 和 "layout" 行
                 {
                 static int s_shaderDumpCount = 0;
-                if (s_isGLES && s_shaderDumpCount < 1) {
+                if (s_shaderDumpCount < 2) {
                     // 输出所有 struct 定义和 UBO 声明
                     size_t pp = 0;
                     int found = 0;
                     bool inStruct = false;
-                    while (pp < mod->glslSource.size() && found < 60) {
+                    while (pp < mod->glslSource.size() && found < 120) {
                         size_t eol = mod->glslSource.find('\n', pp);
                         if (eol == std::string::npos) eol = mod->glslSource.size();
                         std::string ln = mod->glslSource.substr(pp, eol - pp);
                         pp = eol + 1;
                         if (ln.find("struct ") != std::string::npos || ln.find("uniform block_") != std::string::npos)
                             inStruct = true;
-                        if (inStruct) {
+                        if (inStruct ||
+                            ln.find("worldPos_1") != std::string::npos ||
+                            ln.find("worldPos_0") != std::string::npos ||
+                            ln.find("gl_Position =") != std::string::npos ||
+                            ln.find("viewProjInv_0") != std::string::npos ||
+                            ln.find("unprojected_0") != std::string::npos ||
+                            ln.find("clipPos_0") != std::string::npos ||
+                            ln.find("lightClip_0") != std::string::npos) {
                             SDL_Log("[SRC#%d] %s", s_shaderDumpCount, ln.c_str());
                             found++;
                             if (ln.find("};") != std::string::npos) inStruct = false;

@@ -20,11 +20,16 @@
 #include "UIAutomation.h"
 #endif
 
+#ifdef _WIN32
+#include "renderer/d3d12/D3D12Context.h"
+#endif
+
 namespace QymEngine {
 
 class EditorApp : public Application {
 public:
-    EditorApp();
+    EditorApp(RenderBackend backend = RenderBackend::Vulkan);
+    void setBindlessEnabled(bool enabled) { m_forceBindless = enabled; }
 #ifndef __ANDROID__
     void setCaptureAndExit(bool enabled, const std::string& outputPath = "");
 #endif
@@ -61,6 +66,7 @@ private:
     std::string m_currentScenePath;
     bool m_showSaveAsPopup = false;
     char m_saveAsBuffer[256] = {};
+    bool m_sceneDirty = false;
 
 #ifndef __ANDROID__
     RENDERDOC_API_1_6_0* m_rdocApi = nullptr;
@@ -72,6 +78,12 @@ private:
     std::string m_captureOutputPath;
 
     UIAutomation m_uiAutomation;
+#endif
+
+    bool m_forceBindless = false;
+
+#ifdef _WIN32
+    D3D12Context m_d3d12Context;
 #endif
 };
 

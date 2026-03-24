@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <functional>
 
 struct SDL_Window;
 
@@ -19,6 +20,25 @@ struct WidgetRect {
 
 class UIAutomation {
 public:
+    // Editor operation callbacks (set by EditorApp)
+    using VoidFn = std::function<void()>;
+    using BoolFn = std::function<bool()>;
+    using StringFn = std::function<std::string()>;
+    using SaveFn = std::function<void(const std::string&)>;
+
+    void setUndoFn(VoidFn fn) { m_undoFn = std::move(fn); }
+    void setRedoFn(VoidFn fn) { m_redoFn = std::move(fn); }
+    void setSaveSceneFn(VoidFn fn) { m_saveSceneFn = std::move(fn); }
+    void setSaveSceneAsFn(SaveFn fn) { m_saveSceneAsFn = std::move(fn); }
+    void setNewSceneFn(VoidFn fn) { m_newSceneFn = std::move(fn); }
+    void setCanUndoFn(BoolFn fn) { m_canUndoFn = std::move(fn); }
+    void setCanRedoFn(BoolFn fn) { m_canRedoFn = std::move(fn); }
+    void setIsDirtyFn(BoolFn fn) { m_isDirtyFn = std::move(fn); }
+    void setScenePathFn(StringFn fn) { m_scenePathFn = std::move(fn); }
+    void setCaptureFrameFn(VoidFn fn) { m_captureFrameFn = std::move(fn); }
+    void setGetGizmoModeFn(std::function<std::string()> fn) { m_getGizmoModeFn = std::move(fn); }
+    void setSetGizmoModeFn(std::function<void(const std::string&)> fn) { m_setGizmoModeFn = std::move(fn); }
+
     // Call each frame to check for and execute commands
     void pollAndExecute(Renderer& renderer, Scene& scene, Camera& camera, SDL_Window* window);
 
@@ -60,6 +80,15 @@ private:
         uint16_t mod;
     };
     std::vector<DeferredEvent> m_deferredEvents;
+
+    // Editor operation callbacks
+    VoidFn m_undoFn, m_redoFn, m_saveSceneFn, m_newSceneFn;
+    SaveFn m_saveSceneAsFn;
+    VoidFn m_captureFrameFn;
+    std::function<std::string()> m_getGizmoModeFn;
+    std::function<void(const std::string&)> m_setGizmoModeFn;
+    BoolFn m_canUndoFn, m_canRedoFn, m_isDirtyFn;
+    StringFn m_scenePathFn;
 
     // Static widget registry (written by panels, read by query command)
     static std::vector<WidgetRect> s_widgets;

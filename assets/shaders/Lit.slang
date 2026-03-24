@@ -1,17 +1,33 @@
-// Lit PBR shader (Cook-Torrance GGX)
+// Lit PBR shader (Cook-Torrance GGX, multi-light)
+
+static const int LIGHT_DIRECTIONAL = 0;
+static const int LIGHT_POINT       = 1;
+static const int LIGHT_SPOT        = 2;
+static const int MAX_LIGHTS        = 8;
+
+struct LightData
+{
+    float4 positionAndType;     // xyz=position, w=type
+    float4 directionAndRange;   // xyz=direction, w=range
+    float4 colorAndIntensity;   // xyz=color*intensity, w=rawIntensity
+    float4 spotParams;          // x=cosInnerAngle, y=cosOuterAngle
+};
 
 // Set 0: per-frame (engine-managed, all shaders must match)
 struct FrameData
 {
     float4x4 view;
     float4x4 proj;
-    float3 lightDir;
-    float3 lightColor;
     float3 ambientColor;
     float3 cameraPos;
+    int4 lightCountPad;         // x=lightCount
+    LightData lights[MAX_LIGHTS];
+    float4x4 lightVP;           // Shadow map light view-projection
+    int4 shadowParams;          // x=shadowEnabled
 };
 
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
+[[vk::binding(1, 0)]] Sampler2D shadowMap;
 
 #ifdef USE_BINDLESS
 // --- Bindless path (PC) ---
@@ -68,23 +84,23 @@ struct PushConstants
 
 struct VSInput
 {
-    [[vk::location(0)]] float3 position;
-    [[vk::location(1)]] float3 color;
-    [[vk::location(2)]] float2 texCoord;
-    [[vk::location(3)]] float3 normal;
+    [[vk::location(0)]] float3 position : POSITION;
+    [[vk::location(1)]] float3 color : COLOR;
+    [[vk::location(2)]] float2 texCoord : TEXCOORD0;
+    [[vk::location(3)]] float3 normal : NORMAL;
 };
 
 struct VSOutput
 {
     float4 sv_position : SV_Position;
-    [[vk::location(0)]] float3 color;
-    [[vk::location(1)]] float2 texCoord;
-    [[vk::location(2)]] nointerpolation int highlighted;
-    [[vk::location(3)]] float3 normal;
-    [[vk::location(4)]] float3 worldPos;
-    [[vk::location(5)]] float4 baseColor;
-    [[vk::location(6)]] float metallic;
-    [[vk::location(7)]] float roughness;
+    [[vk::location(0)]] float3 color : COLOR;
+    [[vk::location(1)]] float2 texCoord : TEXCOORD0;
+    [[vk::location(2)]] float highlighted : BLENDINDICES;
+    [[vk::location(3)]] float3 normal : NORMAL;
+    [[vk::location(4)]] float3 worldPos : TEXCOORD1;
+    [[vk::location(5)]] float4 baseColor : TEXCOORD2;
+    [[vk::location(6)]] float metallic : TEXCOORD3;
+    [[vk::location(7)]] float roughness : TEXCOORD4;
 };
 
 [shader("vertex")]
@@ -95,10 +111,7 @@ VSOutput vertexMain(VSInput input)
     output.sv_position = mul(frame.proj, mul(frame.view, worldPos));
     output.color = input.color;
     output.texCoord = input.texCoord;
-    output.highlighted = pc.highlighted;
-    // Normal matrix = transpose(inverse(model))
-    // Approximate normal transform: use upper-left 3x3 of model matrix
-    // (correct for uniform scale; for non-uniform scale, should use inverse transpose)
+    output.highlighted = float(pc.highlighted);
     float3x3 modelMat3 = (float3x3)pc.model;
     output.normal = mul(modelMat3, input.normal);
     output.worldPos = worldPos.xyz;
@@ -142,11 +155,93 @@ float3 fresnelSchlick(float cosTheta, float3 F0)
     return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
 }
 
+// PCF shadow sampling (3x3 kernel)
+float sampleShadow(float3 worldPos)
+{
+    if (frame.shadowParams.x == 0) return 1.0;
+
+    float4 lightClip = mul(frame.lightVP, float4(worldPos, 1.0));
+    float3 lightNDC = lightClip.xyz / lightClip.w;
+    // NDC [-1,1] → UV [0,1]
+    float2 shadowUV = lightNDC.xy * 0.5 + 0.5;
+    // D3D12 viewport Y 与 Vulkan 相反，需要翻转 shadow UV Y
+    if (frame.shadowParams.y != 0) shadowUV.y = 1.0 - shadowUV.y;
+    float currentDepth = lightNDC.z;
+    // GLES: lightVP 有 depthFix 使 NDC z 在 [-1,1]，shadow map 存 [0,1]
+    // 需要转换 currentDepth 到 [0,1] 匹配 shadow map
+    if (frame.shadowParams.z != 0)
+        currentDepth = currentDepth * 0.5 + 0.5;
+
+    // Out of shadow map bounds → no shadow
+    if (shadowUV.x < 0.0 || shadowUV.x > 1.0 || shadowUV.y < 0.0 || shadowUV.y > 1.0)
+        return 1.0;
+
+    // PCF 3x3
+    float shadow = 0.0;
+    float2 texelSize = float2(1.0 / 2048.0, 1.0 / 2048.0);
+    float bias = 0.002;
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            float closestDepth = shadowMap.Sample(shadowUV + float2(x, y) * texelSize).r;
+            shadow += (currentDepth - bias > closestDepth) ? 0.0 : 1.0;
+        }
+    }
+    return shadow / 9.0;
+}
+
+// 计算单个光源对片元的贡献
+float3 evaluateLight(LightData light, float3 N, float3 V, float3 worldPos,
+                     float3 albedo, float metallic, float roughness, float3 F0,
+                     float shadow = 1.0)
+{
+    int lightType = int(light.positionAndType.w);
+    float3 lightColor = light.colorAndIntensity.xyz;
+    float3 L;
+    float attenuation = 1.0;
+
+    if (lightType == LIGHT_DIRECTIONAL) {
+        L = normalize(-light.directionAndRange.xyz);
+    } else {
+        // Point / Spot: 从光源位置到片元
+        float3 toLight = light.positionAndType.xyz - worldPos;
+        float dist = length(toLight);
+        L = toLight / max(dist, 0.0001);
+        // 距离衰减 (inverse square with range falloff)
+        float range = light.directionAndRange.w;
+        float distRatio = saturate(1.0 - pow(dist / range, 4.0));
+        attenuation = distRatio * distRatio / (dist * dist + 1.0);
+
+        if (lightType == LIGHT_SPOT) {
+            // 聚光灯锥形衰减
+            float cosAngle = dot(-L, normalize(light.directionAndRange.xyz));
+            float cosInner = light.spotParams.x;
+            float cosOuter = light.spotParams.y;
+            attenuation *= saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 0.0001));
+        }
+    }
+
+    float3 H = normalize(V + L);
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.001);
+    float NdotH = max(dot(N, H), 0.0);
+    float HdotV = max(dot(H, V), 0.0);
+
+    float D = distributionGGX(NdotH, roughness);
+    float G = geometrySmith(NdotV, NdotL, roughness);
+    float3 F = fresnelSchlick(HdotV, F0);
+
+    float3 specular = (D * G * F) / (4.0 * NdotV * NdotL + 0.0001);
+    float3 kD = (float3(1.0) - F) * (1.0 - metallic);
+    float3 diffuse = kD * albedo / PI;
+
+    return (diffuse + specular) * lightColor * NdotL * attenuation * shadow;
+}
+
 [shader("fragment")]
 float4 fragmentMain(VSOutput input) : SV_Target
 {
     // Wireframe highlight pass
-    if (input.highlighted == 1)
+    if (input.highlighted > 0.5)
         return input.baseColor;
 
 #ifdef USE_BINDLESS
@@ -177,28 +272,26 @@ float4 fragmentMain(VSOutput input) : SV_Target
     float roughness = max(input.roughness, 0.04);
 
     float3 V = normalize(frame.cameraPos - input.worldPos);
-    float3 L = normalize(-frame.lightDir);
-    float3 H = normalize(V + L);
-
-    float NdotL = max(dot(N, L), 0.0);
-    float NdotV = max(dot(N, V), 0.001);
-    float NdotH = max(dot(N, H), 0.0);
-    float HdotV = max(dot(H, V), 0.0);
-
     float3 F0 = lerp(float3(0.04), albedo, metallic);
 
-    float D = distributionGGX(NdotH, roughness);
-    float G = geometrySmith(NdotV, NdotL, roughness);
-    float3 F = fresnelSchlick(HdotV, F0);
+    // Shadow sampling (applied to first directional light only)
+    float shadowFactor = sampleShadow(input.worldPos);
 
-    float3 numerator = D * G * F;
-    float denominator = 4.0 * NdotV * NdotL + 0.0001;
-    float3 specular = numerator / denominator;
+    // 累加所有光源贡献
+    float3 Lo = float3(0.0);
+    int lightCount = frame.lightCountPad.x;
+    bool shadowApplied = false;
+    for (int i = 0; i < lightCount && i < MAX_LIGHTS; i++) {
+        float s = 1.0;
+        // Apply shadow to the first directional light
+        if (!shadowApplied && int(frame.lights[i].positionAndType.w) == LIGHT_DIRECTIONAL) {
+            s = shadowFactor;
+            shadowApplied = true;
+        }
+        Lo += evaluateLight(frame.lights[i], N, V, input.worldPos,
+                           albedo, metallic, roughness, F0, s);
+    }
 
-    float3 kD = (float3(1.0) - F) * (1.0 - metallic);
-    float3 diffuse = kD * albedo / PI;
-
-    float3 Lo = (diffuse + specular) * frame.lightColor * NdotL;
     float3 ambient = frame.ambientColor * albedo;
     float3 result = ambient + Lo;
 

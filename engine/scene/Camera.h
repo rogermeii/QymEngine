@@ -31,9 +31,9 @@ public:
         return glm::lookAt(getPosition(), target, glm::vec3(0.0f, 1.0f, 0.0f));
     }
 
-    glm::mat4 getProjMatrix(float aspect) const {
+    glm::mat4 getProjMatrix(float aspect, bool vulkanYFlip = true) const {
         glm::mat4 proj = glm::perspective(glm::radians(fov), aspect, nearPlane, farPlane);
-        proj[1][1] *= -1;
+        if (vulkanYFlip) proj[1][1] *= -1; // Vulkan NDC Y 向下，需要翻转
         return proj;
     }
 

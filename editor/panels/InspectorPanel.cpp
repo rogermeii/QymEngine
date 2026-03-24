@@ -240,12 +240,14 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
 
     // ===================== Node properties =====================
 
-    // Editable name
+    // Editable name (undo on commit)
     char buf[256];
     std::strncpy(buf, selected->name.c_str(), sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
-    if (ImGui::InputText("Name", buf, sizeof(buf)))
+    if (ImGui::InputText("Name", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
+        if (m_saveState) m_saveState();
         selected->name = buf;
+    }
 #ifndef __ANDROID__
     UIAutomation::recordWidget("inspector/Name", "Name");
 #endif
@@ -276,11 +278,32 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
         m_wasDragging = anyActive;
     }
 
-    // --- Light properties (only for DirectionalLight nodes) ---
-    if (selected->nodeType == NodeType::DirectionalLight) {
+    // --- Light properties (DirectionalLight / PointLight / SpotLight) ---
+    if (selected->isLight()) {
         if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::ColorEdit3("Light Color", &selected->lightColor.x);
+            bool lightActive = ImGui::IsItemActive();
             ImGui::SliderFloat("Intensity", &selected->lightIntensity, 0.0f, 10.0f);
+            lightActive |= ImGui::IsItemActive();
+
+            if (selected->nodeType == NodeType::PointLight || selected->nodeType == NodeType::SpotLight) {
+                ImGui::DragFloat("Range", &selected->lightRange, 0.1f, 0.1f, 100.0f);
+                lightActive |= ImGui::IsItemActive();
+            }
+            if (selected->nodeType == NodeType::SpotLight) {
+                ImGui::SliderFloat("Inner Angle", &selected->spotInnerAngle, 1.0f, 89.0f);
+                lightActive |= ImGui::IsItemActive();
+                ImGui::SliderFloat("Outer Angle", &selected->spotOuterAngle, 1.0f, 90.0f);
+                lightActive |= ImGui::IsItemActive();
+                // Ensure outer >= inner
+                if (selected->spotOuterAngle < selected->spotInnerAngle)
+                    selected->spotOuterAngle = selected->spotInnerAngle;
+            }
+
+            // Undo tracking for light properties
+            if (lightActive && !m_wasLightDragging && m_saveState)
+                m_saveState();
+            m_wasLightDragging = lightActive;
 
             glm::vec3 dir = selected->getLightDirection();
             ImGui::Text("Direction: (%.2f, %.2f, %.2f)", dir.x, dir.y, dir.z);
@@ -313,6 +336,7 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
             for (int i = 0; i < static_cast<int>(meshItems.size()); i++) {
                 bool isSel = (currentIdx == i);
                 if (ImGui::Selectable(meshItems[i].c_str(), isSel)) {
+                    if (m_saveState) m_saveState();
                     if (i < builtInCount) {
                         // Built-in mesh
                         selected->meshType = static_cast<MeshType>(i);
@@ -358,6 +382,7 @@ void InspectorPanel::onImGuiRender(Scene& scene, AssetManager& assetManager, Mod
             for (int i = 0; i < static_cast<int>(matItems.size()); i++) {
                 bool isSelected = (currentMat == i);
                 if (ImGui::Selectable(matItems[i].c_str(), isSelected)) {
+                    if (m_saveState) m_saveState();
                     selected->materialPath = (i == 0) ? "" : matItems[i];
                 }
             }

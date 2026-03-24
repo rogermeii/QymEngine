@@ -1,4 +1,5 @@
 #include "renderer/DescriptorLayoutCache.h"
+#include "renderer/VkDispatch.h"
 #include <algorithm>
 #include <stdexcept>
 

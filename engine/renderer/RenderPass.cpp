@@ -1,4 +1,5 @@
 #include "renderer/RenderPass.h"
+#include "renderer/VkDispatch.h"
 #include <stdexcept>
 
 namespace QymEngine {

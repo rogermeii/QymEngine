@@ -52,15 +52,34 @@ struct Vertex
     }
 };
 
+// 光源类型（需与着色器中的常量保持一致）
+static constexpr int LIGHT_TYPE_DIRECTIONAL = 0;
+static constexpr int LIGHT_TYPE_POINT       = 1;
+static constexpr int LIGHT_TYPE_SPOT        = 2;
+static constexpr int MAX_LIGHTS             = 8;
+
+// 单个光源数据（64 bytes，vec4 打包）
+struct LightData
+{
+    alignas(16) glm::vec4 positionAndType;     // xyz=世界位置, w=类型(0/1/2)
+    alignas(16) glm::vec4 directionAndRange;   // xyz=方向(归一化), w=衰减范围
+    alignas(16) glm::vec4 colorAndIntensity;   // xyz=颜色*强度, w=原始强度
+    alignas(16) glm::vec4 spotParams;          // x=cosInnerAngle, y=cosOuterAngle, zw=unused
+};
+
 struct UniformBufferObject
 {
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
-    alignas(16) glm::vec3 lightDir;
-    alignas(16) glm::vec3 lightColor;
     alignas(16) glm::vec3 ambientColor;
     alignas(16) glm::vec3 cameraPos;
+    alignas(16) glm::ivec4 lightCountPad;      // x=lightCount, yzw=unused
+    LightData lights[MAX_LIGHTS];
+    alignas(16) glm::mat4 lightVP;             // Shadow map light view-projection
+    alignas(16) glm::ivec4 shadowParams;       // x=shadowEnabled, yzw=unused
 };
+
+static constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
 struct PushConstantData
 {

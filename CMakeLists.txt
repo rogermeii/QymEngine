@@ -10,6 +10,10 @@ set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
 # 资源路径宏
 add_compile_definitions(ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets")
 
+# Vulkan: 全局禁止函数原型声明，所有 vk* 调用通过 VkDispatch 函数指针
+# ImGui 内建支持此模式（IMGUI_IMPL_VULKAN_USE_LOADER）
+add_compile_definitions(VK_NO_PROTOTYPES)
+
 # Vulkan
 find_package(Vulkan REQUIRED)
 
@@ -51,7 +55,8 @@ target_include_directories(imgui PUBLIC
     "${CMAKE_SOURCE_DIR}/3rd-party/imgui"
     "${CMAKE_SOURCE_DIR}/3rd-party/imgui/backends"
 )
-target_link_libraries(imgui PUBLIC Vulkan::Vulkan SDL2::SDL2-static)
+target_include_directories(imgui PUBLIC ${Vulkan_INCLUDE_DIRS})
+target_link_libraries(imgui PUBLIC SDL2::SDL2-static)
 
 # ImGuizmo (built as part of imgui since it depends on ImGui)
 target_sources(imgui PRIVATE "3rd-party/imguizmo/ImGuizmo.cpp")

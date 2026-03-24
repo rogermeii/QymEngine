@@ -1,4 +1,5 @@
 #include "ImGuiLayer.h"
+#include "renderer/VkDispatch.h"
 
 #include "renderer/Renderer.h"
 #include "renderer/VulkanContext.h"
@@ -80,6 +81,34 @@ void ImGuiLayer::init(Renderer& renderer)
         ImGui_ImplSDL2_ProcessEvent(&event);
     });
 
+    // VK_NO_PROTOTYPES 模式下，ImGui 需要手动加载 Vulkan 函数指针
+    {
+        VkInstance vkInstance = ctx.getInstance();
+#ifdef __ANDROID__
+        // Android: 优先用 SDL 的 vkGetInstanceProcAddr (Vulkan 后端)
+        // GLES 后端 fallback 到 VkDispatch 的 vkGetInstanceProcAddr (shim)
+        {
+            auto sdlGetProcAddr = (PFN_vkGetInstanceProcAddr)SDL_Vulkan_GetVkGetInstanceProcAddr();
+            auto getProc = sdlGetProcAddr ? sdlGetProcAddr : vkGetInstanceProcAddr;
+            if (getProc) {
+                ImGui_ImplVulkan_LoadFunctions(VK_API_VERSION_1_3,
+                    [](const char* name, void* ud) -> PFN_vkVoidFunction {
+                        auto* ctx = static_cast<void**>(ud);
+                        auto fn = reinterpret_cast<PFN_vkGetInstanceProcAddr>(ctx[0]);
+                        auto inst = reinterpret_cast<VkInstance>(ctx[1]);
+                        return fn(inst, name);
+                    }, (void*)(new void*[2]{(void*)getProc, (void*)vkInstance}));
+            }
+        }
+#else
+        // Windows: 通过 VkDispatch 的 vkGetInstanceProcAddr 加载
+        ImGui_ImplVulkan_LoadFunctions(VK_API_VERSION_1_3,
+            [](const char* name, void* ud) -> PFN_vkVoidFunction {
+                return vkGetInstanceProcAddr(static_cast<VkInstance>(ud), name);
+            }, vkInstance);
+#endif
+    }
+
     QueueFamilyIndices indices = ctx.findQueueFamilies(ctx.getPhysicalDevice());
 
     ImGui_ImplVulkan_InitInfo initInfo{};
@@ -130,7 +159,9 @@ void ImGuiLayer::shutdown()
 
 void ImGuiLayer::beginFrame()
 {
+    fprintf(stderr, "[ImGuiLayer] Before VulkanNewFrame\n");
     ImGui_ImplVulkan_NewFrame();
+    fprintf(stderr, "[ImGuiLayer] After VulkanNewFrame\n");
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
     ImGuizmo::BeginFrame();
@@ -152,7 +183,12 @@ void ImGuiLayer::endFrame(VkCommandBuffer cmd, uint32_t imageIndex)
     rpInfo.pClearValues      = &clearColor;
 
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+    auto* drawData = ImGui::GetDrawData();
+    fprintf(stderr, "[ImGuiLayer] RenderDrawData: valid=%d cmds=%d vtx=%d idx=%d textures=%d\n",
+            drawData->Valid, drawData->CmdListsCount, drawData->TotalVtxCount, drawData->TotalIdxCount,
+            drawData->Textures ? (int)drawData->Textures->Size : -1);
+    ImGui_ImplVulkan_RenderDrawData(drawData, cmd);
+    fprintf(stderr, "[ImGuiLayer] After RenderDrawData\n");
     vkCmdEndRenderPass(cmd);
 }
 

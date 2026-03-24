@@ -17,9 +17,7 @@ namespace QymEngine {
 namespace {
 glm::mat4 toShaderMatrix(const glm::mat4& m)
 {
-    // Slang 生成的 GLSL 路径使用 vec * mat 的行向量乘法语义。
-    // 在 OpenGL/GLES 后端直接上传 GLM 原始矩阵更容易与驱动侧一致；
-    // Vulkan/D3D 仍沿用现有的转置布局。
+    // OpenGL/GLES 的模型矩阵都走显式 GLSL 修正路径，直接上传 GLM 原始矩阵。
     if (vkIsOpenGLBackend() || vkIsGLESBackend())
         return m;
     return glm::transpose(m);
@@ -1777,9 +1775,9 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
                 VK_SHADER_STAGE_VERTEX_BIT,
                 0, sizeof(PushConstantData), &pc);
 
-            if (vkIsGLESBackend()) {
-                static int s_glesClipLog = 0;
-                if (s_glesClipLog < 6 && (node->name == "Ground" || node->name == "Center Cube" || node->name == "Sphere")) {
+            if (vkIsGLESBackend() || vkIsOpenGLBackend()) {
+                static int s_glClipLog = 0;
+                if (s_glClipLog < 8 && (node->name == "Ground" || node->name == "Center Cube" || node->name == "Sphere")) {
                     glm::mat4 view = m_camera ? m_camera->getViewMatrix()
                                               : glm::lookAt(glm::vec3(2,2,2), glm::vec3(0,0,0), glm::vec3(0,1,0));
                     bool needYFlip = !vkIsDirectXBackend() && !vkIsOpenGLBackend() && !vkIsGLESBackend();
@@ -1794,9 +1792,10 @@ void Renderer::drawSceneToOffscreen(VkCommandBuffer commandBuffer, Scene& scene)
                     glm::vec4 worldCenter = node->getWorldMatrix() * glm::vec4(0, 0, 0, 1);
                     glm::vec4 clip = proj * view * worldCenter;
                     glm::vec3 ndc = glm::vec3(clip) / clip.w;
-                    SDL_Log("[Renderer][GLES] node=%s clip=(%.3f, %.3f, %.3f, %.3f) ndc=(%.3f, %.3f, %.3f)",
+                    SDL_Log("[Renderer][%s] node=%s clip=(%.3f, %.3f, %.3f, %.3f) ndc=(%.3f, %.3f, %.3f)",
+                            vkIsGLESBackend() ? "GLES" : "OpenGL",
                             node->name.c_str(), clip.x, clip.y, clip.z, clip.w, ndc.x, ndc.y, ndc.z);
-                    s_glesClipLog++;
+                    s_glClipLog++;
                 }
             }
 
@@ -1955,7 +1954,7 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
         : 1.0f;
 
     if (m_camera) {
-        ubo.view = glm::transpose(m_camera->getViewMatrix());
+        glm::mat4 view = m_camera->getViewMatrix();
         bool needYFlip = !vkIsDirectXBackend() && !vkIsOpenGLBackend() && !vkIsGLESBackend();
         glm::mat4 proj = m_camera->getProjMatrix(aspect, needYFlip);
         // GLES 没有 glClipControl: GLM_FORCE_DEPTH_ZERO_TO_ONE 输出 [0,1]
@@ -1968,7 +1967,13 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
             depthFix[3][2] = -1.0f;
             proj = depthFix * proj;
         }
-        ubo.proj = glm::transpose(proj);
+        if (vkIsGLESBackend()) {
+            ubo.view = view;
+            ubo.proj = proj;
+        } else {
+            ubo.view = glm::transpose(view);
+            ubo.proj = glm::transpose(proj);
+        }
     } else {
         ubo.view = glm::lookAt(glm::vec3(2,2,2), glm::vec3(0,0,0), glm::vec3(0,1,0));
         ubo.proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
@@ -1979,8 +1984,10 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
             depthFix[3][2] = -1.0f;
             ubo.proj = depthFix * ubo.proj;
         }
-        ubo.view = glm::transpose(ubo.view);
-        ubo.proj = glm::transpose(ubo.proj);
+        if (!vkIsGLESBackend()) {
+            ubo.view = glm::transpose(ubo.view);
+            ubo.proj = glm::transpose(ubo.proj);
+        }
     }
 
     ubo.ambientColor = glm::vec3(0.15f, 0.15f, 0.15f);
@@ -2047,7 +2054,10 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
                 depthFix[3][2] = -1.0f;
                 lightProj = depthFix * lightProj;
             }
-            ubo.lightVP = glm::transpose(lightProj * lightView);
+            glm::mat4 lightVP = lightProj * lightView;
+            ubo.lightVP = vkIsGLESBackend()
+                ? lightVP
+                : glm::transpose(lightVP);
             hasShadow = true;
             break;
         }

@@ -28,6 +28,10 @@ public:
 
     void setSaveStateFn(SaveStateFn fn) { m_saveState = fn; }
 
+    // Gizmo mode access (for automation)
+    ImGuizmo::OPERATION getGizmoOperation() const { return m_gizmoOperation; }
+    void setGizmoOperation(ImGuizmo::OPERATION op) { m_gizmoOperation = op; }
+
 private:
     void recreateDescriptorSet(Renderer& renderer);
 
