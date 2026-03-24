@@ -1,0 +1,106 @@
+name: Android Debug Build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/android-debug-build.yml"
+      - "CMakeLists.txt"
+      - "android/**"
+      - "android-cmake/**"
+      - "engine/**"
+      - "editor/**"
+      - "scripts/**"
+      - "assets/shaders/**"
+      - "tools/shader_compiler/**"
+      - "3rd-party/glad/**"
+      - "3rd-party/spirv-reflect/**"
+  pull_request:
+    paths:
+      - ".github/workflows/android-debug-build.yml"
+      - "CMakeLists.txt"
+      - "android/**"
+      - "android-cmake/**"
+      - "engine/**"
+      - "editor/**"
+      - "scripts/**"
+      - "assets/shaders/**"
+      - "tools/shader_compiler/**"
+      - "3rd-party/glad/**"
+      - "3rd-party/spirv-reflect/**"
+
+jobs:
+  build:
+    name: Android debug APK
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=1.4.309.0 -y --no-progress
+          $vkDir = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $vkDir) {
+            throw "Vulkan SDK installation not found under C:\VulkanSDK"
+          }
+          "VULKAN_SDK=$($vkDir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$($vkDir.FullName)\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Android SDK components
+        shell: pwsh
+        run: |
+          $sdkRoot = $env:ANDROID_SDK_ROOT
+          if (-not $sdkRoot) { $sdkRoot = $env:ANDROID_HOME }
+          if (-not $sdkRoot -and (Test-Path "$env:LOCALAPPDATA\Android\Sdk")) { $sdkRoot = "$env:LOCALAPPDATA\Android\Sdk" }
+          if (-not $sdkRoot -and (Test-Path 'C:\Android\android-sdk')) { $sdkRoot = 'C:\Android\android-sdk' }
+          if (-not $sdkRoot) {
+            throw "Android SDK root not found"
+          }
+
+          "ANDROID_SDK_ROOT=$sdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ANDROID_HOME=$sdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $sdkManager = Get-ChildItem $sdkRoot -Recurse -Filter sdkmanager.bat | Sort-Object FullName | Select-Object -First 1
+          if (-not $sdkManager) {
+            throw "sdkmanager.bat not found under $sdkRoot"
+          }
+
+          1..20 | ForEach-Object { 'y' } | & $sdkManager.FullName "--sdk_root=$sdkRoot" "--licenses"
+          & $sdkManager.FullName "--sdk_root=$sdkRoot" `
+            "platform-tools" `
+            "platforms;android-35" `
+            "build-tools;35.0.0" `
+            "cmake;3.22.1" `
+            "ndk;27.0.12077973"
+
+          $sdkDir = $sdkRoot -replace '\\', '/'
+          "sdk.dir=$sdkDir" | Out-File -FilePath "android/local.properties" -Encoding ascii
+
+      - name: Build Android debug APK
+        shell: pwsh
+        run: |
+          .\gradlew.bat :app:assembleDebug
+        working-directory: android
+
+      - name: Upload Android artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-build
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/logs/**
+          if-no-files-found: warn

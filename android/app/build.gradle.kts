@@ -6,6 +6,24 @@ val repoRootDir = rootProject.projectDir.parentFile
 val hostBuildDir = File(repoRootDir, "build3")
 val shaderSourceDir = File(repoRootDir, "assets/shaders")
 val isWindowsHost = System.getProperty("os.name").lowercase().contains("windows")
+val hostConfigureArgs = mutableListOf(
+    "cmake",
+    "-S", repoRootDir.absolutePath,
+    "-B", hostBuildDir.absolutePath
+).apply {
+    if (isWindowsHost) {
+        addAll(listOf("-G", "Visual Studio 17 2022", "-A", "x64"))
+    }
+}
+val hostBuildArgs = mutableListOf(
+    "cmake",
+    "--build", hostBuildDir.absolutePath,
+    "--config", "Debug",
+    "--target", "ShaderCompiler",
+    "--"
+).apply {
+    add(if (isWindowsHost) "/m:4" else "-j4")
+}
 val shaderCompilerExe = if (isWindowsHost) {
     File(hostBuildDir, "tools/shader_compiler/Debug/ShaderCompiler.exe")
 } else {
@@ -32,11 +50,7 @@ val configureHostTools by tasks.registering(Exec::class) {
         File(repoRootDir, "tools/shader_compiler/CMakeLists.txt")
     )
     outputs.file(File(hostBuildDir, "CMakeCache.txt"))
-    commandLine(
-        "cmake",
-        "-S", repoRootDir.absolutePath,
-        "-B", hostBuildDir.absolutePath
-    )
+    commandLine(hostConfigureArgs)
 }
 
 val buildHostShaderCompiler by tasks.registering(Exec::class) {
@@ -45,13 +59,7 @@ val buildHostShaderCompiler by tasks.registering(Exec::class) {
     dependsOn(configureHostTools)
     inputs.files(shaderCompilerSourceFiles)
     outputs.file(shaderCompilerExe)
-    commandLine(
-        "cmake",
-        "--build", hostBuildDir.absolutePath,
-        "--config", "Debug",
-        "--target", "ShaderCompiler",
-        "--", "/m:4"
-    )
+    commandLine(hostBuildArgs)
 }
 
 val compileShaderBundles by tasks.registering(Exec::class) {
