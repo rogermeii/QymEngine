@@ -57,7 +57,9 @@ static void createFullscreenBundlePipeline(
     bool depthWriteEnable,
     VkPipeline& outPipeline,
     VkPipelineLayout& outLayout,
-    const char* debugName)
+    const char* debugName,
+    const VkPushConstantRange* pushConstantRange = nullptr,
+    const VkPipelineColorBlendAttachmentState* customBlendState = nullptr)
 {
     ShaderBundle bundle;
     if (!bundle.load(bundlePath) || !bundle.hasVariant(variant))
@@ -125,15 +127,19 @@ static void createFullscreenBundlePipeline(
     multisampling.sampleShadingEnable = VK_FALSE;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = blendEnable ? VK_TRUE : VK_FALSE;
-    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
-    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    if (customBlendState) {
+        colorBlendAttachment = *customBlendState;
+    } else {
+        colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                              VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttachment.blendEnable = blendEnable ? VK_TRUE : VK_FALSE;
+        colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+        colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    }
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -162,6 +168,8 @@ static void createFullscreenBundlePipeline(
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
     layoutInfo.pSetLayouts = setLayouts.data();
+    layoutInfo.pushConstantRangeCount = pushConstantRange ? 1 : 0;
+    layoutInfo.pPushConstantRanges = pushConstantRange;
 
     if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &outLayout) != VK_SUCCESS)
         throw std::runtime_error(std::string("failed to create ") + debugName + " pipeline layout!");
