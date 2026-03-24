@@ -17,7 +17,7 @@
 
 namespace QymEngine {
 
-void SceneViewPanel::applyPendingResize(Renderer& renderer)
+void SceneViewPanel::applyPendingResize(Renderer& renderer, Scene& scene)
 {
     if (!m_resizePending)
         return;
@@ -37,7 +37,7 @@ void SceneViewPanel::applyPendingResize(Renderer& renderer)
     renderer.resizeOffscreen(m_width, m_height);
 
     // Create new descriptor set for the new image view
-    recreateDescriptorSet(renderer);
+    recreateDescriptorSet(renderer, scene);
 }
 
 void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& scene)
@@ -70,7 +70,7 @@ void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& sc
     // Ensure we have a valid descriptor set
     if (m_descriptorSet == VK_NULL_HANDLE && renderer.isOffscreenReady())
     {
-        recreateDescriptorSet(renderer);
+        recreateDescriptorSet(renderer, scene);
     }
 
     // Display offscreen render result
@@ -292,10 +292,10 @@ void SceneViewPanel::cleanup()
     }
 }
 
-void SceneViewPanel::recreateDescriptorSet(Renderer& renderer)
+void SceneViewPanel::recreateDescriptorSet(Renderer& renderer, Scene& scene)
 {
-    VkImageView currentView = renderer.getOffscreenImageView();
-    VkSampler   sampler     = renderer.getOffscreenSampler();
+    VkImageView currentView = renderer.getDisplayImageView(scene);
+    VkSampler   sampler     = renderer.getDisplaySampler();
 
     if (currentView == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE)
         return;

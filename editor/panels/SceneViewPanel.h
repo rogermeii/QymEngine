@@ -21,7 +21,7 @@ public:
     void cleanup();
 
     /// Called before drawScene() each frame to apply pending resize.
-    void applyPendingResize(Renderer& renderer);
+    void applyPendingResize(Renderer& renderer, Scene& scene);
 
     /// Process SDL event for touch gestures. Call from event callback.
     void processEvent(const SDL_Event& event);
@@ -33,7 +33,7 @@ public:
     void setGizmoOperation(ImGuizmo::OPERATION op) { m_gizmoOperation = op; }
 
 private:
-    void recreateDescriptorSet(Renderer& renderer);
+    void recreateDescriptorSet(Renderer& renderer, Scene& scene);
 
     uint32_t        m_width  = 0;
     uint32_t        m_height = 0;

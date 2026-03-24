@@ -220,7 +220,7 @@ void EditorApp::onUpdate()
         return;
 
     // Apply any pending offscreen resize before rendering the scene
-    m_sceneViewPanel.applyPendingResize(m_renderer);
+    m_sceneViewPanel.applyPendingResize(m_renderer, m_scene);
 
     m_renderer.drawScene(m_scene);
 
@@ -406,6 +406,7 @@ void EditorApp::onUpdate()
     m_inspectorPanel.onImGuiRender(m_scene, m_renderer.getAssetManager(), m_modelPreview, m_projectPanel);
     m_projectPanel.onImGuiRender();
     m_consolePanel.onImGuiRender();
+    m_postProcessPanel.onImGuiRender(m_scene);
 
     m_imguiLayer.endFrame(m_renderer.getCurrentCommandBuffer(),
                           m_renderer.getImageIndex());
