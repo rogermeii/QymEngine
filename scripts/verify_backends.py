@@ -410,6 +410,8 @@ def run_android_backend(backend: dict[str, Any], adb: str, install_apk: bool) ->
 
 
 def main() -> int:
+    global VERIFY_DIR, RESULT_JSON, RESULT_TXT
+
     parser = argparse.ArgumentParser(description="QymEngine 多后端回归脚本")
     parser.add_argument("--windows-only", action="store_true", help="只跑 Windows 后端")
     parser.add_argument("--android-only", action="store_true", help="只跑 Android 后端")
@@ -418,8 +420,16 @@ def main() -> int:
         action="store_true",
         help="Android 测试前不执行 adb install -r",
     )
+    parser.add_argument(
+        "--output-dir",
+        default=str(VERIFY_DIR),
+        help="结果输出目录，默认写入 captures/verify/backend_regression",
+    )
     args = parser.parse_args()
 
+    VERIFY_DIR = Path(args.output_dir).resolve()
+    RESULT_JSON = VERIFY_DIR / "results.json"
+    RESULT_TXT = VERIFY_DIR / "summary.txt"
     ensure_dir(VERIFY_DIR)
 
     if args.windows_only and args.android_only:

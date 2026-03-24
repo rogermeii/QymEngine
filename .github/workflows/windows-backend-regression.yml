@@ -76,11 +76,38 @@ jobs:
         run: |
           python scripts/verify_backends.py --windows-only
 
-      - name: Upload regression artifacts
+      - name: Publish regression summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "captures/verify/backend_regression/summary.txt") {
+            Get-Content "captures/verify/backend_regression/summary.txt" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          }
+
+      - name: Upload regression summary artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-backend-regression
+          name: windows-backend-regression-summary
           path: |
-            captures/verify/backend_regression/**
+            captures/verify/backend_regression/results.json
+            captures/verify/backend_regression/summary.txt
+          if-no-files-found: warn
+
+      - name: Upload regression screenshots artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-backend-regression-screenshots
+          path: |
+            captures/verify/backend_regression/*.png
+          if-no-files-found: warn
+
+      - name: Upload regression logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-backend-regression-logs
+          path: |
+            captures/verify/backend_regression/*.log
           if-no-files-found: warn

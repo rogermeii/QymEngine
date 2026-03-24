@@ -95,12 +95,30 @@ jobs:
           .\gradlew.bat :app:assembleDebug
         working-directory: android
 
-      - name: Upload Android artifacts
+      - name: Publish Android build summary
+        if: always()
+        shell: pwsh
+        run: |
+          $apk = Get-ChildItem "android/app/build/outputs/apk/debug/*.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($apk) {
+            "Built APK: $($apk.Name)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "Size: $([Math]::Round($apk.Length / 1MB, 2)) MB" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          }
+
+      - name: Upload Android APK artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-debug-build
+          name: android-debug-apk
           path: |
             android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+
+      - name: Upload Android build logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-build-logs
+          path: |
             android/app/build/outputs/logs/**
           if-no-files-found: warn
