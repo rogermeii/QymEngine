@@ -1038,7 +1038,7 @@ void Renderer::shutdown()
 void Renderer::createOffscreen(uint32_t width, uint32_t height)
 {
     VkDevice device = m_context.getDevice();
-    VkFormat format = m_swapChain.getImageFormat();
+    VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
 
     m_offscreenWidth  = width;
     m_offscreenHeight = height;
