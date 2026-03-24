@@ -10,6 +10,7 @@
 #include "renderer/CommandManager.h"
 #include "renderer/MeshLibrary.h"
 #include "renderer/DescriptorLayoutCache.h"
+#include "renderer/PostProcess.h"
 #include "asset/AssetManager.h"
 #include "scene/Scene.h"
 #include "scene/Camera.h"
@@ -70,6 +71,10 @@ public:
     VkImage     getOffscreenImage()     const { return m_offscreenImage; }
     uint32_t    getOffscreenWidth()     const { return m_offscreenWidth; }
     uint32_t    getOffscreenHeight()    const { return m_offscreenHeight; }
+
+    VkImageView getDisplayImageView(const Scene& scene) const;
+    VkImage getDisplayImage(const Scene& scene) const;
+    VkSampler getDisplaySampler() const;
     bool        isOffscreenReady()      const { return m_offscreenRenderPass != VK_NULL_HANDLE
                                                     && m_offscreenFramebuffer != VK_NULL_HANDLE; }
 
@@ -135,6 +140,11 @@ private:
     VkRenderPass     m_offscreenRenderPass  = VK_NULL_HANDLE;
     uint32_t         m_offscreenWidth  = 0;
     uint32_t         m_offscreenHeight = 0;
+
+    // --- Post-processing ---
+    PostProcessPipeline m_postProcess;
+    VkImage m_displayImage = VK_NULL_HANDLE;
+    VkImageView m_displayImageView = VK_NULL_HANDLE;
 
     // Depth buffer for offscreen rendering
     VkImage          m_offscreenDepthImage      = VK_NULL_HANDLE;

@@ -405,6 +405,12 @@ void Renderer::drawScene(Scene& scene)
             renderShadowPass(cmdBuf, scene);
         }
         drawSceneToOffscreen(cmdBuf, scene);
+
+        // 后处理：在离屏渲染完成后执行
+        auto& ppSettings = scene.getPostProcessSettings();
+        m_postProcess.execute(cmdBuf, m_offscreenImageView, ppSettings);
+        m_displayImage = m_postProcess.getFinalImage(ppSettings);
+        m_displayImageView = m_postProcess.getFinalImageView(ppSettings);
     }
 }
 
@@ -412,17 +418,20 @@ void Renderer::blitToSwapchain()
 {
     if (!isOffscreenReady()) return;
 
+    // 使用后处理输出图像；若尚未执行后处理则回退到离屏图像
+    VkImage srcImage = (m_displayImage != VK_NULL_HANDLE) ? m_displayImage : m_offscreenImage;
+
     VkCommandBuffer cmd = m_commandManager.getBuffer(m_currentFrame);
     VkImage swapImage = m_swapChain.getImages()[m_currentImageIndex];
 
-    // Transition offscreen image: SHADER_READ_ONLY -> TRANSFER_SRC
+    // Transition display image: SHADER_READ_ONLY -> TRANSFER_SRC
     VkImageMemoryBarrier offscreenBarrier{};
     offscreenBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     offscreenBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     offscreenBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     offscreenBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     offscreenBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    offscreenBarrier.image = m_offscreenImage;
+    offscreenBarrier.image = srcImage;
     offscreenBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     offscreenBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     offscreenBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
@@ -444,7 +453,7 @@ void Renderer::blitToSwapchain()
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
         0, 0, nullptr, 0, nullptr, 2, barriers);
 
-    // Blit offscreen -> swapchain
+    // Blit display -> swapchain
     VkImageBlit blitRegion{};
     blitRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     blitRegion.srcOffsets[0] = {0, 0, 0};
@@ -455,11 +464,11 @@ void Renderer::blitToSwapchain()
     blitRegion.dstOffsets[1] = {(int32_t)swapExtent.width, (int32_t)swapExtent.height, 1};
 
     vkCmdBlitImage(cmd,
-        m_offscreenImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         1, &blitRegion, VK_FILTER_LINEAR);
 
-    // Transition offscreen back: TRANSFER_SRC -> SHADER_READ_ONLY
+    // Transition display image back: TRANSFER_SRC -> SHADER_READ_ONLY
     offscreenBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     offscreenBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     offscreenBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
@@ -478,6 +487,18 @@ void Renderer::blitToSwapchain()
     vkCmdPipelineBarrier(cmd,
         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         0, 0, nullptr, 0, nullptr, 1, &swapBarrier);
+}
+
+VkImageView Renderer::getDisplayImageView(const Scene& scene) const {
+    return m_displayImageView != VK_NULL_HANDLE ? m_displayImageView : m_offscreenImageView;
+}
+
+VkImage Renderer::getDisplayImage(const Scene& scene) const {
+    return m_displayImage != VK_NULL_HANDLE ? m_displayImage : m_offscreenImage;
+}
+
+VkSampler Renderer::getDisplaySampler() const {
+    return m_offscreenSampler;
 }
 
 void Renderer::endFrame()
@@ -951,6 +972,9 @@ void Renderer::shutdown()
     vkDeviceWaitIdle(m_context.getDevice());
 
     VkDevice device = m_context.getDevice();
+
+    // 销毁后处理管线资源
+    m_postProcess.destroy();
 
     destroyOffscreen();
     destroyShadowResources();
@@ -1505,6 +1529,9 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
 
     if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_offscreenFramebuffer) != VK_SUCCESS)
         throw std::runtime_error("failed to create offscreen framebuffer!");
+
+    // 初始化后处理管线
+    m_postProcess.init(m_context, m_layoutCache, m_offscreenWidth, m_offscreenHeight);
 }
 
 void Renderer::reloadShaders()
@@ -1612,6 +1639,9 @@ void Renderer::reloadShaders()
             m_gridPipelineLayout,
             "grid");
     }
+
+    // 重新加载后处理着色器
+    m_postProcess.reloadShaders();
 }
 
 void Renderer::resizeOffscreen(uint32_t width, uint32_t height)
@@ -1667,6 +1697,9 @@ void Renderer::resizeOffscreen(uint32_t width, uint32_t height)
 
     // Recreate with new size
     createOffscreen(width, height);
+
+    // 重新创建后处理资源
+    m_postProcess.resize(width, height);
 }
 
 void Renderer::destroyOffscreen()
