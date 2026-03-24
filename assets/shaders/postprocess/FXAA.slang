@@ -27,7 +27,6 @@ VSOutput vertexMain(uint vertexID : SV_VertexID) {
     float3 p = positions[vertexID];
     o.sv_position = float4(p, 1.0);
     o.uv = p.xy * 0.5 + 0.5;
-    o.uv.y = 1.0 - o.uv.y;
     return o;
 }
 
