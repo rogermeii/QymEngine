@@ -1967,13 +1967,8 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
             depthFix[3][2] = -1.0f;
             proj = depthFix * proj;
         }
-        if (vkIsGLESBackend()) {
-            ubo.view = view;
-            ubo.proj = proj;
-        } else {
-            ubo.view = glm::transpose(view);
-            ubo.proj = glm::transpose(proj);
-        }
+        ubo.view = glm::transpose(view);
+        ubo.proj = glm::transpose(proj);
     } else {
         ubo.view = glm::lookAt(glm::vec3(2,2,2), glm::vec3(0,0,0), glm::vec3(0,1,0));
         ubo.proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
@@ -1984,10 +1979,8 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
             depthFix[3][2] = -1.0f;
             ubo.proj = depthFix * ubo.proj;
         }
-        if (!vkIsGLESBackend()) {
-            ubo.view = glm::transpose(ubo.view);
-            ubo.proj = glm::transpose(ubo.proj);
-        }
+        ubo.view = glm::transpose(ubo.view);
+        ubo.proj = glm::transpose(ubo.proj);
     }
 
     ubo.ambientColor = glm::vec3(0.15f, 0.15f, 0.15f);
@@ -2055,9 +2048,7 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
                 lightProj = depthFix * lightProj;
             }
             glm::mat4 lightVP = lightProj * lightView;
-            ubo.lightVP = vkIsGLESBackend()
-                ? lightVP
-                : glm::transpose(lightVP);
+            ubo.lightVP = glm::transpose(lightVP);
             hasShadow = true;
             break;
         }

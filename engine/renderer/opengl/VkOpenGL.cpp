@@ -940,6 +940,9 @@ static std::string fixupGLSL(const std::string& source,
             "vec4 lightClip_0 = (((vec4(worldPos_0, 1.0)) * (unpackStorage_0(frame_0.lightVP_0))));",
             "vec4 lightClip_0 = (transpose(unpackStorage_0(frame_0.lightVP_0)) * vec4(worldPos_0, 1.0));");
         replaceAll(pass2,
+            "vec4 lightClip_0 = (((vec4(input_worldPos_0, 1.0)) * (unpackStorage_0(frame_0.lightVP_0))));",
+            "vec4 lightClip_0 = (transpose(unpackStorage_0(frame_0.lightVP_0)) * vec4(input_worldPos_0, 1.0));");
+        replaceAll(pass2,
             "mat4x4 viewProjInv_0 = mat4Inverse_0((((unpackStorage_0(frame_0.view_0)) * (unpackStorage_0(frame_0.proj_0)))));",
             "mat4x4 viewProjInv_0 = mat4Inverse_0((transpose(unpackStorage_0(frame_0.proj_0)) * transpose(unpackStorage_0(frame_0.view_0))));");
         replaceAll(pass2,
