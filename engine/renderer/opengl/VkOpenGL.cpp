@@ -4057,9 +4057,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateGraphicsPipelines(
                 pipe->dstBlendAlpha = vkBlendFactorToGL(att.dstAlphaBlendFactor);
                 pipe->blendOpAlpha = vkBlendOpToGL(att.alphaBlendOp);
             }
-            if (ci.pColorBlendState->blendConstants) {
-                memcpy(pipe->blendConstants, ci.pColorBlendState->blendConstants, 4 * sizeof(float));
-            }
+            memcpy(pipe->blendConstants, ci.pColorBlendState->blendConstants, 4 * sizeof(float));
         }
 
         pPipelines[i] = TO_VK(VkPipeline, pipe);
