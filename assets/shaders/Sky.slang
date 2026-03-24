@@ -1,6 +1,8 @@
-// Infinite grid shader (no vertex input, fullscreen quad)
+// Procedural skybox rendered from a single equirectangular panorama.
 
+static const int LIGHT_DIRECTIONAL = 0;
 static const int MAX_LIGHTS = 8;
+static const float PI = 3.14159265;
 
 struct LightData
 {
@@ -23,7 +25,7 @@ struct FrameData
 };
 
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
-[[vk::binding(1, 0)]] Sampler2D shadowMap;
+[[vk::binding(0, 1)]] Sampler2D skyPanorama;
 
 struct VSOutput
 {
@@ -37,7 +39,6 @@ static const float3 positions[6] = {
     float3(-1, -1, 0), float3(1, 1, 0), float3(-1, 1, 0)
 };
 
-// 4x4 matrix inverse (cofactor method)
 float4x4 mat4Inverse(float4x4 m)
 {
     float n11 = m[0][0], n12 = m[0][1], n13 = m[0][2], n14 = m[0][3];
@@ -80,6 +81,25 @@ float3 unprojectPoint(float3 p)
     return unprojected.xyz / unprojected.w;
 }
 
+float3 getPrimarySunDirection()
+{
+    int lightCount = frame.lightCountPad.x;
+    for (int i = 0; i < lightCount && i < MAX_LIGHTS; i++) {
+        if (int(frame.lights[i].positionAndType.w) == LIGHT_DIRECTIONAL) {
+            return normalize(-frame.lights[i].directionAndRange.xyz);
+        }
+    }
+    return normalize(float3(0.4, 0.8, 0.2));
+}
+
+float2 directionToPanoramaUV(float3 dir)
+{
+    float3 n = normalize(dir);
+    float u = atan2(n.z, n.x) / (2.0 * PI) + 0.5;
+    float v = acos(clamp(n.y, -1.0, 1.0)) / PI;
+    return float2(frac(u), saturate(v));
+}
+
 [shader("vertex")]
 VSOutput vertexMain(uint vertexID : SV_VertexID)
 {
@@ -91,61 +111,24 @@ VSOutput vertexMain(uint vertexID : SV_VertexID)
     return output;
 }
 
-struct FSOutput
-{
-    float4 color : SV_Target;
-    float depth : SV_Depth;
-};
-
-float4 gridLine(float3 fragPos, float scale, float4 color)
-{
-    float2 coord = fragPos.xz / scale;
-    float2 deriv = fwidth(coord);
-    float2 g = abs(frac(coord - 0.5) - 0.5) / (deriv * 0.5);
-    float line = min(g.x, g.y);
-    float alpha = 1.0 - min(line, 1.0);
-    return float4(color.rgb, alpha * color.a);
-}
-
 [shader("fragment")]
-FSOutput fragmentMain(VSOutput input)
+float4 fragmentMain(VSOutput input) : SV_Target
 {
-    FSOutput output;
+    float3 viewDir = normalize(input.farPoint - input.nearPoint);
+    float2 uv = directionToPanoramaUV(viewDir);
 
-    float t = -input.nearPoint.y / (input.farPoint.y - input.nearPoint.y);
+    float3 panorama = skyPanorama.Sample(uv).rgb;
 
-    if (t < 0.0 || t > 1.0)
-        discard;
+    float3 sunDir = getPrimarySunDirection();
+    float sunDot = saturate(dot(viewDir, sunDir));
+    float sunHalo = pow(sunDot, 64.0);
+    float sunDisk = pow(sunDot, 2048.0);
 
-    float3 fragPos = input.nearPoint + t * (input.farPoint - input.nearPoint);
+    float horizon = saturate(1.0 - abs(viewDir.y));
+    float3 horizonTint = lerp(float3(1.0, 1.0, 1.0), float3(1.08, 0.96, 0.86), horizon * 0.35);
+    float3 color = panorama * horizonTint;
+    color += float3(1.0, 0.78, 0.52) * sunHalo * 0.18;
+    color += float3(1.0, 0.95, 0.86) * sunDisk * 4.0;
 
-    float dist = length(fragPos.xz - frame.cameraPos.xz);
-    float fade = 1.0 - smoothstep(20.0, 50.0, dist);
-
-    float4 smallGrid = gridLine(fragPos, 0.5, float4(0.4, 0.4, 0.4, 0.4));
-    float4 largeGrid = gridLine(fragPos, 5.0, float4(0.5, 0.5, 0.5, 0.7));
-
-    float xAxis = 1.0 - min(abs(fragPos.z) / fwidth(fragPos.z), 1.0);
-    float zAxis = 1.0 - min(abs(fragPos.x) / fwidth(fragPos.x), 1.0);
-
-    float4 color = smallGrid;
-    color = lerp(color, largeGrid, largeGrid.a);
-
-    if (xAxis > 0.5) color = float4(1.0, 0.2, 0.2, 1.0);
-    if (zAxis > 0.5) color = float4(0.2, 0.2, 1.0, 1.0);
-
-    color.a *= fade;
-
-    if (color.a < 0.01)
-        discard;
-
-    output.color = color;
-
-    float4 clipPos = mul(frame.proj, mul(frame.view, float4(fragPos, 1.0)));
-    output.depth = clipPos.z / clipPos.w;
-    // GLES: depthFix 矩阵使 NDC z 在 [-1,1]，但 gl_FragDepth 需要 [0,1]
-    // shadowParams.z != 0 表示需要手动转换
-    if (frame.shadowParams.z != 0)
-        output.depth = output.depth * 0.5 + 0.5;
-    return output;
+    return float4(color, 1.0);
 }

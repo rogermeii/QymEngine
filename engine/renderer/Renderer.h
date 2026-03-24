@@ -113,6 +113,8 @@ private:
 
     // Per-frame layout (cache-managed, not owned)
     VkDescriptorSetLayout m_perFrameLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_frameOnlyLayout = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_frameOnlySets{};
 
     const Camera* m_camera = nullptr;
     Scene* m_activeScene = nullptr;
@@ -144,6 +146,10 @@ private:
     Pipeline         m_wireframePipeline;
 
     // Grid pipeline (no vertex input, alpha blending, UBO-only layout)
+    VkPipeline       m_skyPipeline        = VK_NULL_HANDLE;
+    VkPipelineLayout m_skyPipelineLayout  = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_skySetLayout  = VK_NULL_HANDLE;
+    VkDescriptorSet       m_skySet        = VK_NULL_HANDLE;
     VkPipeline       m_gridPipeline       = VK_NULL_HANDLE;
     VkPipelineLayout m_gridPipelineLayout = VK_NULL_HANDLE;
 
