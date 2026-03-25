@@ -145,7 +145,8 @@ void Pipeline::createFromMemory(VkDevice device, VkRenderPass renderPass,
                       VkPolygonMode polygonMode,
                       const std::vector<char>& vertSpv,
                       const std::vector<char>& fragSpv,
-                      const std::string& reflectJson)
+                      const std::string& reflectJson,
+                      VkDescriptorSetLayout perFrameLayoutOverride)
 {
     if (!m_reflection.loadFromString(reflectJson)) {
         throw std::runtime_error("Failed to parse reflection JSON from ShaderBundle");
@@ -158,6 +159,12 @@ void Pipeline::createFromMemory(VkDevice device, VkRenderPass renderPass,
         if (s > maxSet) maxSet = s;
 
     for (uint32_t setIdx = 0; setIdx <= maxSet; setIdx++) {
+        // Set 0 可选覆盖：引擎的 perFrameLayout 包含全部 binding（含 IBL），
+        // 但着色器编译器可能优化掉未引用的 binding，导致反射结果不完整。
+        if (setIdx == 0 && perFrameLayoutOverride != VK_NULL_HANDLE) {
+            m_setLayouts.push_back(perFrameLayoutOverride);
+            continue;
+        }
         auto bindings = m_reflection.buildBindings(setIdx);
         VkDescriptorSetLayout layout = layoutCache.getOrCreate(device, bindings);
         m_setLayouts.push_back(layout);

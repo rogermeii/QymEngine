@@ -25,6 +25,9 @@ struct FrameData
 
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 [[vk::binding(1, 0)]] Sampler2D shadowMap; // unused but must match Set 0 layout
+[[vk::binding(2, 0)]] SamplerCube irradianceMap; // unused but must match Set 0 layout
+[[vk::binding(3, 0)]] SamplerCube prefilteredMap; // unused but must match Set 0 layout
+[[vk::binding(4, 0)]] Sampler2D brdfLUT; // unused but must match Set 0 layout
 
 struct PushConstants
 {

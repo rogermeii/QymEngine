@@ -235,7 +235,30 @@ void Renderer::init(Window& window)
         shadowBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         shadowBinding.pImmutableSamplers = nullptr;
 
-        m_perFrameLayout = m_layoutCache.getOrCreate(m_context.getDevice(), {uboBinding, shadowBinding});
+        // IBL bindings (binding 2/3/4)
+        VkDescriptorSetLayoutBinding irradianceBinding{};
+        irradianceBinding.binding = 2;
+        irradianceBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        irradianceBinding.descriptorCount = 1;
+        irradianceBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        irradianceBinding.pImmutableSamplers = nullptr;
+
+        VkDescriptorSetLayoutBinding prefilteredBinding{};
+        prefilteredBinding.binding = 3;
+        prefilteredBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        prefilteredBinding.descriptorCount = 1;
+        prefilteredBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        prefilteredBinding.pImmutableSamplers = nullptr;
+
+        VkDescriptorSetLayoutBinding brdfLutBinding{};
+        brdfLutBinding.binding = 4;
+        brdfLutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        brdfLutBinding.descriptorCount = 1;
+        brdfLutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        brdfLutBinding.pImmutableSamplers = nullptr;
+
+        m_perFrameLayout = m_layoutCache.getOrCreate(m_context.getDevice(),
+            {uboBinding, shadowBinding, irradianceBinding, prefilteredBinding, brdfLutBinding});
         m_frameOnlyLayout = m_layoutCache.getOrCreate(m_context.getDevice(), {uboBinding});
     }
 
@@ -249,7 +272,7 @@ void Renderer::init(Window& window)
         m_pipeline.createFromMemory(m_context.getDevice(), m_renderPass.get(),
             m_swapChain.getExtent(), m_layoutCache, VK_POLYGON_MODE_FILL,
             triBundle.getVertSpv(var), triBundle.getFragSpv(var),
-            triBundle.getReflectJson(var));
+            triBundle.getReflectJson(var), m_perFrameLayout);
     }
 
     // Swapchain framebuffers
@@ -312,6 +335,12 @@ void Renderer::init(Window& window)
 
     // Create fallback textures for the material system
     createFallbackTextures();
+
+    // Create IBL fallback textures (1x1 black cubemap + 2D for bindings 2/3/4)
+    createIBLFallbackTextures();
+
+    // Write IBL fallback descriptors into per-frame sets (binding 2/3/4)
+    writeIBLDescriptors();
 
     // Create bindless descriptor resources (PC only, after fallback textures)
     createBindlessResources();
@@ -692,6 +721,221 @@ void Renderer::createFallbackTextures()
 }
 
 // ---------------------------------------------------------------------------
+// IBL Fallback Textures (1x1 黑色 cubemap + 1x1 黑色 2D)
+// ---------------------------------------------------------------------------
+
+void Renderer::createIBLFallbackTextures()
+{
+    VkDevice device = m_context.getDevice();
+
+    // --- 1x1 黑色 cubemap (6 层) ---
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent = {1, 1, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 6;
+        imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+
+        if (vkCreateImage(device, &imageInfo, nullptr, &m_iblFallbackCubemapImage) != VK_SUCCESS)
+            throw std::runtime_error("failed to create IBL fallback cubemap image!");
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(device, m_iblFallbackCubemapImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits,
+                                                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &allocInfo, nullptr, &m_iblFallbackCubemapMemory) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate IBL fallback cubemap memory!");
+
+        vkBindImageMemory(device, m_iblFallbackCubemapImage, m_iblFallbackCubemapMemory, 0);
+
+        // 转换布局到 SHADER_READ_ONLY
+        VkCommandBuffer cmd = m_commandManager.beginSingleTimeCommands(device);
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = m_iblFallbackCubemapImage;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        m_commandManager.endSingleTimeCommands(device, m_context.getGraphicsQueue(), cmd);
+
+        // Cube view
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_iblFallbackCubemapImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+        viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+
+        if (vkCreateImageView(device, &viewInfo, nullptr, &m_iblFallbackCubemapView) != VK_SUCCESS)
+            throw std::runtime_error("failed to create IBL fallback cubemap view!");
+    }
+
+    // --- 1x1 黑色 2D (BRDF LUT fallback) ---
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent = {1, 1, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = VK_FORMAT_R16G16_SFLOAT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateImage(device, &imageInfo, nullptr, &m_iblFallbackLutImage) != VK_SUCCESS)
+            throw std::runtime_error("failed to create IBL fallback LUT image!");
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(device, m_iblFallbackLutImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits,
+                                                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &allocInfo, nullptr, &m_iblFallbackLutMemory) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate IBL fallback LUT memory!");
+
+        vkBindImageMemory(device, m_iblFallbackLutImage, m_iblFallbackLutMemory, 0);
+
+        VkCommandBuffer cmd = m_commandManager.beginSingleTimeCommands(device);
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = m_iblFallbackLutImage;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        m_commandManager.endSingleTimeCommands(device, m_context.getGraphicsQueue(), cmd);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_iblFallbackLutImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R16G16_SFLOAT;
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        if (vkCreateImageView(device, &viewInfo, nullptr, &m_iblFallbackLutView) != VK_SUCCESS)
+            throw std::runtime_error("failed to create IBL fallback LUT view!");
+    }
+
+    // --- 共享 sampler ---
+    {
+        VkSamplerCreateInfo samplerInfo{};
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.anisotropyEnable = VK_FALSE;
+        samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+        samplerInfo.unnormalizedCoordinates = VK_FALSE;
+        samplerInfo.compareEnable = VK_FALSE;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+        if (vkCreateSampler(device, &samplerInfo, nullptr, &m_iblFallbackSampler) != VK_SUCCESS)
+            throw std::runtime_error("failed to create IBL fallback sampler!");
+    }
+}
+
+void Renderer::destroyIBLFallbackTextures()
+{
+    VkDevice device = m_context.getDevice();
+    if (m_iblFallbackSampler) { vkDestroySampler(device, m_iblFallbackSampler, nullptr); m_iblFallbackSampler = VK_NULL_HANDLE; }
+    if (m_iblFallbackCubemapView) { vkDestroyImageView(device, m_iblFallbackCubemapView, nullptr); m_iblFallbackCubemapView = VK_NULL_HANDLE; }
+    if (m_iblFallbackCubemapImage) { vkDestroyImage(device, m_iblFallbackCubemapImage, nullptr); m_iblFallbackCubemapImage = VK_NULL_HANDLE; }
+    if (m_iblFallbackCubemapMemory) { vkFreeMemory(device, m_iblFallbackCubemapMemory, nullptr); m_iblFallbackCubemapMemory = VK_NULL_HANDLE; }
+    if (m_iblFallbackLutView) { vkDestroyImageView(device, m_iblFallbackLutView, nullptr); m_iblFallbackLutView = VK_NULL_HANDLE; }
+    if (m_iblFallbackLutImage) { vkDestroyImage(device, m_iblFallbackLutImage, nullptr); m_iblFallbackLutImage = VK_NULL_HANDLE; }
+    if (m_iblFallbackLutMemory) { vkFreeMemory(device, m_iblFallbackLutMemory, nullptr); m_iblFallbackLutMemory = VK_NULL_HANDLE; }
+}
+
+void Renderer::writeIBLDescriptors()
+{
+    VkDevice device = m_context.getDevice();
+
+    // 确定使用 IBL 生成的贴图还是 fallback
+    VkImageView irradianceView = m_iblGenerator.isGenerated() ? m_iblGenerator.getIrradianceView() : m_iblFallbackCubemapView;
+    VkImageView prefilteredView = m_iblGenerator.isGenerated() ? m_iblGenerator.getPrefilteredView() : m_iblFallbackCubemapView;
+    VkImageView brdfLutView = m_iblGenerator.isGenerated() ? m_iblGenerator.getBrdfLutView() : m_iblFallbackLutView;
+    VkSampler cubemapSampler = m_iblGenerator.isGenerated() ? m_iblGenerator.getCubemapSampler() : m_iblFallbackSampler;
+    VkSampler brdfLutSampler = m_iblGenerator.isGenerated() ? m_iblGenerator.getBrdfLutSampler() : m_iblFallbackSampler;
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkDescriptorSet perFrameSet = m_descriptor.getPerFrameSet(i);
+
+        // binding 2: irradiance cubemap
+        VkDescriptorImageInfo irradianceInfo{};
+        irradianceInfo.sampler = cubemapSampler;
+        irradianceInfo.imageView = irradianceView;
+        irradianceInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        // binding 3: pre-filtered cubemap
+        VkDescriptorImageInfo prefilteredInfo{};
+        prefilteredInfo.sampler = cubemapSampler;
+        prefilteredInfo.imageView = prefilteredView;
+        prefilteredInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        // binding 4: BRDF LUT
+        VkDescriptorImageInfo brdfLutInfo{};
+        brdfLutInfo.sampler = brdfLutSampler;
+        brdfLutInfo.imageView = brdfLutView;
+        brdfLutInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        std::array<VkWriteDescriptorSet, 3> writes{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = perFrameSet;
+        writes[0].dstBinding = 2;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].descriptorCount = 1;
+        writes[0].pImageInfo = &irradianceInfo;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = perFrameSet;
+        writes[1].dstBinding = 3;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &prefilteredInfo;
+
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = perFrameSet;
+        writes[2].dstBinding = 4;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].descriptorCount = 1;
+        writes[2].pImageInfo = &brdfLutInfo;
+
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Bindless descriptor resources (PC only)
 // ---------------------------------------------------------------------------
 
@@ -976,6 +1220,10 @@ void Renderer::shutdown()
     vkDeviceWaitIdle(m_context.getDevice());
 
     VkDevice device = m_context.getDevice();
+
+    // 销毁 IBL 生成器资源
+    m_iblGenerator.destroy();
+    destroyIBLFallbackTextures();
 
     // 销毁后处理管线资源
     m_postProcess.destroy();
@@ -1276,11 +1524,11 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
 
             m_offscreenPipeline.createFromMemory(device, m_offscreenRenderPass,
                 {width, height}, m_layoutCache, VK_POLYGON_MODE_FILL,
-                vertSpv, fragSpv, reflectJson);
+                vertSpv, fragSpv, reflectJson, m_perFrameLayout);
 
             m_wireframePipeline.createFromMemory(device, m_offscreenRenderPass,
                 {width, height}, m_layoutCache, VK_POLYGON_MODE_LINE,
-                vertSpv, fragSpv, reflectJson);
+                vertSpv, fragSpv, reflectJson, m_perFrameLayout);
 
             // Create bindless pipelines (if enabled)
             std::string bVar = shaderVariant("bindless");
@@ -1537,6 +1785,20 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
 
     // 初始化后处理管线
     m_postProcess.init(m_context, m_layoutCache, m_offscreenWidth, m_offscreenHeight);
+
+    // --- 6. 初始化 IBL 生成器并生成 IBL 贴图 ---
+    if (!m_iblGenerator.isGenerated()) {
+        m_iblGenerator.init(m_context, m_layoutCache, m_commandManager);
+        m_iblGenerator.generateBrdfLut();
+
+        // 使用天空盒全景纹理生成 IBL cubemap + irradiance + prefiltered
+        const TextureAsset* skyTex = m_assetManager.loadTexture("textures/sky_panorama.png");
+        if (skyTex && skyTex->view != VK_NULL_HANDLE) {
+            m_iblGenerator.generate(skyTex->view, skyTex->sampler);
+            // 更新 per-frame descriptor set 的 IBL binding
+            writeIBLDescriptors();
+        }
+    }
 }
 
 void Renderer::reloadShaders()
@@ -1575,10 +1837,10 @@ void Renderer::reloadShaders()
         m_wireframePipeline.cleanup(device);
         m_offscreenPipeline.createFromMemory(device, m_offscreenRenderPass,
             {m_offscreenWidth, m_offscreenHeight}, m_layoutCache, VK_POLYGON_MODE_FILL,
-            vertSpv, fragSpv, reflectJson);
+            vertSpv, fragSpv, reflectJson, m_perFrameLayout);
         m_wireframePipeline.createFromMemory(device, m_offscreenRenderPass,
             {m_offscreenWidth, m_offscreenHeight}, m_layoutCache, VK_POLYGON_MODE_LINE,
-            vertSpv, fragSpv, reflectJson);
+            vertSpv, fragSpv, reflectJson, m_perFrameLayout);
 
         // 3b. Rebuild bindless pipelines
         std::string bVar = shaderVariant("bindless");
@@ -1614,7 +1876,7 @@ void Renderer::reloadShaders()
         // 4. Rebuild main pipeline
         m_pipeline.cleanup(device);
         m_pipeline.createFromMemory(device, m_renderPass.get(), m_swapChain.getExtent(),
-            m_layoutCache, VK_POLYGON_MODE_FILL, vertSpv, fragSpv, reflectJson);
+            m_layoutCache, VK_POLYGON_MODE_FILL, vertSpv, fragSpv, reflectJson, m_perFrameLayout);
 
         // 5. Rebuild sky and grid fullscreen pipelines
         createFullscreenBundlePipeline(

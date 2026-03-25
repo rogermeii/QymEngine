@@ -28,6 +28,9 @@ struct FrameData
 
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 [[vk::binding(1, 0)]] Sampler2D shadowMap;
+[[vk::binding(2, 0)]] SamplerCube irradianceMap;
+[[vk::binding(3, 0)]] SamplerCube prefilteredMap;
+[[vk::binding(4, 0)]] Sampler2D brdfLUT;
 
 #ifdef USE_BINDLESS
 // --- Bindless path (PC) ---
@@ -292,7 +295,22 @@ float4 fragmentMain(VSOutput input) : SV_Target
                            albedo, metallic, roughness, F0, s);
     }
 
-    float3 ambient = frame.ambientColor * albedo;
+    // IBL 环境光
+    float3 R = reflect(-V, N);
+    float NdotV = max(dot(N, V), 0.0);
+
+    // 漫反射 IBL
+    float3 irradiance = irradianceMap.Sample(N).rgb;
+    float3 kS = fresnelSchlick(NdotV, F0);
+    float3 kD = (float3(1.0) - kS) * (1.0 - metallic);
+    float3 diffuseIBL = irradiance * albedo * kD;
+
+    // 镜面反射 IBL
+    float3 prefilteredColor = prefilteredMap.SampleLevel(R, roughness * 4.0).rgb;
+    float2 brdf = brdfLUT.Sample(float2(NdotV, roughness)).rg;
+    float3 specularIBL = prefilteredColor * (F0 * brdf.x + brdf.y);
+
+    float3 ambient = diffuseIBL + specularIBL;
     float3 result = ambient + Lo;
 
     return float4(result, input.baseColor.a);

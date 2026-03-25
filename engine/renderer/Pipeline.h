@@ -48,12 +48,15 @@ struct ShaderReflectionData {
 class Pipeline {
 public:
     // Create from in-memory SPIR-V + reflection JSON (ShaderBundle)
+    // perFrameLayoutOverride: 如果非 VK_NULL_HANDLE，强制用此 layout 覆盖 set 0
+    //   （防止着色器编译器优化掉 set 0 中未引用的 binding）
     void createFromMemory(VkDevice device, VkRenderPass renderPass,
                 VkExtent2D extent, DescriptorLayoutCache& layoutCache,
                 VkPolygonMode polygonMode,
                 const std::vector<char>& vertSpv,
                 const std::vector<char>& fragSpv,
-                const std::string& reflectJson);
+                const std::string& reflectJson,
+                VkDescriptorSetLayout perFrameLayoutOverride = VK_NULL_HANDLE);
 
     // Create with explicit layouts and in-memory SPIR-V (bindless/grid)
     void createWithLayoutsFromMemory(VkDevice device, VkRenderPass renderPass,

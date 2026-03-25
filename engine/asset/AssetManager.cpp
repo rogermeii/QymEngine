@@ -415,7 +415,8 @@ const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
                     m_offscreenExtent,
                     *m_layoutCache,
                     VK_POLYGON_MODE_FILL,
-                    vertSpv, fragSpv, reflectJson
+                    vertSpv, fragSpv, reflectJson,
+                    m_perFrameLayout
                 );
             }
         }

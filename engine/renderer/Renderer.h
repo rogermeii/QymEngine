@@ -11,6 +11,7 @@
 #include "renderer/MeshLibrary.h"
 #include "renderer/DescriptorLayoutCache.h"
 #include "renderer/PostProcess.h"
+#include "renderer/IBLGenerator.h"
 #include "asset/AssetManager.h"
 #include "scene/Scene.h"
 #include "scene/Camera.h"
@@ -140,6 +141,22 @@ private:
     VkRenderPass     m_offscreenRenderPass  = VK_NULL_HANDLE;
     uint32_t         m_offscreenWidth  = 0;
     uint32_t         m_offscreenHeight = 0;
+
+    // --- IBL (Image-Based Lighting) ---
+    IBLGenerator m_iblGenerator;
+    // Fallback 1x1 黑色 cubemap（IBL 未生成时使用）
+    VkImage          m_iblFallbackCubemapImage   = VK_NULL_HANDLE;
+    VkDeviceMemory   m_iblFallbackCubemapMemory  = VK_NULL_HANDLE;
+    VkImageView      m_iblFallbackCubemapView    = VK_NULL_HANDLE;
+    VkSampler        m_iblFallbackSampler        = VK_NULL_HANDLE;
+    // Fallback 1x1 黑色 2D（BRDF LUT 未生成时使用）
+    VkImage          m_iblFallbackLutImage       = VK_NULL_HANDLE;
+    VkDeviceMemory   m_iblFallbackLutMemory      = VK_NULL_HANDLE;
+    VkImageView      m_iblFallbackLutView        = VK_NULL_HANDLE;
+
+    void createIBLFallbackTextures();
+    void destroyIBLFallbackTextures();
+    void writeIBLDescriptors();
 
     // --- Post-processing ---
     PostProcessPipeline m_postProcess;

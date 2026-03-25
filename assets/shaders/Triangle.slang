@@ -28,6 +28,9 @@ struct FrameData
 
 [[vk::binding(0, 0)]] ConstantBuffer<FrameData> frame;
 [[vk::binding(1, 0)]] Sampler2D shadowMap;
+[[vk::binding(2, 0)]] SamplerCube irradianceMap;
+[[vk::binding(3, 0)]] SamplerCube prefilteredMap;
+[[vk::binding(4, 0)]] Sampler2D brdfLUT;
 
 #ifdef USE_BINDLESS
 // --- Bindless path (PC) ---
