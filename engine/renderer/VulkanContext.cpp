@@ -138,6 +138,14 @@ void VulkanContext::createInstance()
 
     printInstanceExtensions();
     auto extensions = getRequiredExtensions();
+
+#ifdef __APPLE__
+    // macOS MoltenVK: 需要 portability enumeration 扩展和 flag
+    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+#endif
+
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
 
@@ -221,8 +229,8 @@ std::vector<const char*> VulkanContext::getRequiredExtensions()
 {
     std::vector<const char*> extensions;
 
-    if (vkIsDirectXBackend() || vkIsOpenGLBackend() || vkIsGLESBackend()) {
-        // DirectX / OpenGL / GLES 后端: 只需要 surface 扩展声明 (实际不使用 Vulkan)
+    if (vkIsDirectXBackend() || vkIsOpenGLBackend() || vkIsGLESBackend() || vkIsMetalBackend()) {
+        // DirectX / OpenGL / GLES / Metal 后端: 只需要 surface 扩展声明 (实际不使用 Vulkan)
         extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
 #ifdef VK_USE_PLATFORM_WIN32_KHR
         extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
@@ -267,7 +275,7 @@ void VulkanContext::setupDebugMessenger()
 
 void VulkanContext::createSurface()
 {
-    if (vkIsDirectXBackend() || vkIsOpenGLBackend() || vkIsGLESBackend()) {
+    if (vkIsDirectXBackend() || vkIsOpenGLBackend() || vkIsGLESBackend() || vkIsMetalBackend()) {
 #ifdef _WIN32
         // Windows: 绕过 SDL_Vulkan，直接从 HWND 创建 surface
         SDL_SysWMinfo wm;

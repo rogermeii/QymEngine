@@ -8,6 +8,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <array>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include <iostream>
 #include <stdexcept>
 #include <cstring>
@@ -214,10 +217,14 @@ void Renderer::init(Window& window)
     SDL_Log("[Renderer] init: swapChain.create...");
     m_swapChain.create(m_context, nativeWindow);
     SDL_Log("[Renderer] init: swapChain created");
+    SDL_Log("[Renderer] init: commandManager.createPool...");
     m_commandManager.createPool(m_context);
+    SDL_Log("[Renderer] init: renderPass.create...");
 
     // The original scene RenderPass (used for swapchain). Kept for init compatibility.
     m_renderPass.create(m_context.getDevice(), m_swapChain.getImageFormat());
+    SDL_Log("[Renderer] init: renderPass created");
+    SDL_Log("[Renderer] init: creating descriptor layouts...");
 
     // Register per-frame layouts in cache
     {
@@ -257,12 +264,16 @@ void Renderer::init(Window& window)
         brdfLutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         brdfLutBinding.pImmutableSamplers = nullptr;
 
+        SDL_Log("[Renderer] init: getOrCreate perFrameLayout...");
         m_perFrameLayout = m_layoutCache.getOrCreate(m_context.getDevice(),
             {uboBinding, shadowBinding, irradianceBinding, prefilteredBinding, brdfLutBinding});
+        SDL_Log("[Renderer] init: getOrCreate frameOnlyLayout...");
         m_frameOnlyLayout = m_layoutCache.getOrCreate(m_context.getDevice(), {uboBinding});
+        SDL_Log("[Renderer] init: descriptor layouts done");
     }
 
     // Create main pipeline from ShaderBundle
+    SDL_Log("[Renderer] init: loading Triangle.shaderbundle...");
     {
         std::string triPath = std::string(ASSETS_DIR) + "/shaders/Triangle.shaderbundle";
         ShaderBundle triBundle;
@@ -1878,8 +1889,10 @@ void Renderer::reloadShaders()
 #endif
     std::string shadersDir = std::string(ASSETS_DIR) + "/shaders";
     std::string cmd = "\"" + compilerPath + "\" \"" + shadersDir + "\" \"" + shadersDir + "\"";
+#if !TARGET_OS_IOS
     int result = system(cmd.c_str());
     (void)result;
+#endif
 
     // 2. Invalidate all shader and material caches
     m_assetManager.invalidateAllShadersAndMaterials();

@@ -20,6 +20,7 @@ static bool g_emitDebugInfo = false;  // 默认关闭调试符号（避免生成
 static bool g_emitDxil = true;        // 默认编译 DXIL 变体（D3D12 后端用）
 static bool g_emitDxbc = true;        // 默认编译 DXBC/SM5.0 变体（D3D11 后端用）
 static bool g_emitGlsl = true;        // 默认编译 GLSL 变体（OpenGL 后端用）
+static bool g_emitMsl = true;        // 默认编译 MSL 变体（Metal 后端用）
 
 static std::string memberTypeStr(const SpvReflectBlockVariable& member) {
     if (!member.type_description) return "unknown";
@@ -238,6 +239,8 @@ static bool compileShaderVariant(const std::string& inputPath,
         // 导致场景 shader 里经 _MatrixStorage + unpackStorage 生成的矩阵链在 Adreno 上失效。
         // 这里显式切到 column-major，与 glslc/slangc 的历史默认和 GLM 主序更一致。
         sessionDesc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
+    } else if (targetFormat == SLANG_METAL) {
+        // MSL 不需要额外的 profile 设置，targetDesc.format 已统一赋值为 SLANG_METAL
     }
 
     sessionDesc.targetCount = 1;
@@ -589,6 +592,20 @@ bool compileShader(const std::string& inputPath, const std::string& outputDir) {
         }
     }
 
+    // 6. MSL 变体 (Metal 后端用)
+    if (g_emitMsl) {
+        std::cout << "  [msl default]" << std::endl;
+        VariantResult mslDefault;
+        if (compileShaderVariant(inputPath, baseName, {}, mslDefault, SLANG_METAL)) {
+            mslDefault.reflectJson = variants["default"].reflectJson;
+            std::cout << "  vert: " << mslDefault.vertSpv.size() << "B, frag: "
+                      << mslDefault.fragSpv.size() << "B (MSL)" << std::endl;
+            variants["default_msl"] = std::move(mslDefault);
+        } else {
+            std::cerr << "  WARNING: MSL variant failed for " << baseName << std::endl;
+        }
+    }
+
     // 打包为 .shaderbundle（唯一输出格式）
     std::string bundlePath = outputDir + "/" + baseName + ".shaderbundle";
     if (writeShaderBundle(bundlePath, variants)) {
@@ -618,6 +635,8 @@ int main(int argc, char* argv[]) {
             g_emitDxil = false;
         } else if (arg == "--no-glsl") {
             g_emitGlsl = false;
+        } else if (arg == "--no-msl") {
+            g_emitMsl = false;
         } else {
             positionalArgs.push_back(arg);
         }
@@ -630,6 +649,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Output: " << outputDir << std::endl;
     std::cout << "Debug:  " << (g_emitDebugInfo ? "ON" : "OFF") << std::endl;
     std::cout << "DXIL:   " << (g_emitDxil ? "ON" : "OFF") << std::endl;
+    std::cout << "MSL:    " << (g_emitMsl ? "ON" : "OFF") << std::endl;
 
     int compiled = 0, failed = 0;
     for (auto& entry : fs::recursive_directory_iterator(inputDir)) {

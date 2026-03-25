@@ -372,8 +372,20 @@ const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
             ? shader.bundlePath
             : (m_assetsDir + "/" + shader.bundlePath);
         ShaderBundle bundle;
-        std::string var = vkIsD3D12Backend() ? "default_dxil" : (vkIsD3D11Backend() ? "default_dxbc" : ((vkIsOpenGLBackend() || vkIsGLESBackend()) ? "default_glsl" : "default"));
-        if (bundle.load(bundleFullPath) && bundle.hasVariant(var)) {
+        // 根据当前图形后端选择对应的着色器变体
+        std::string var = vkIsD3D12Backend() ? "default_dxil"
+            : (vkIsD3D11Backend() ? "default_dxbc"
+            : ((vkIsOpenGLBackend() || vkIsGLESBackend()) ? "default_glsl"
+            : (vkIsMetalBackend() ? "default_msl"
+            : "default")));
+        if (!bundle.load(bundleFullPath)) {
+            m_shaderCache[relativePath] = std::move(shader);
+            return &m_shaderCache[relativePath];
+        }
+        // Metal 后端暂无 MSL 变体时回退到 default（SPIR-V）
+        if (!bundle.hasVariant(var) && vkIsMetalBackend())
+            var = "default";
+        if (bundle.hasVariant(var)) {
             auto vertSpv = bundle.getVertSpv(var);
             auto fragSpv = bundle.getFragSpv(var);
             auto reflectJson = bundle.getReflectJson(var);

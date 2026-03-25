@@ -17,6 +17,8 @@ int main(int argc, char* argv[]) {
             backend = QymEngine::RenderBackend::OpenGL;
         else if (std::strcmp(argv[i], "--gles") == 0)
             backend = QymEngine::RenderBackend::GLES;
+        else if (std::strcmp(argv[i], "--metal") == 0)
+            backend = QymEngine::RenderBackend::Metal;
         else if (std::strcmp(argv[i], "--bindless") == 0)
             enableBindless = true;
     }
@@ -26,7 +28,8 @@ int main(int argc, char* argv[]) {
     int backendType = (backend == QymEngine::RenderBackend::D3D12) ? 1
                     : (backend == QymEngine::RenderBackend::D3D11) ? 2
                     : (backend == QymEngine::RenderBackend::OpenGL) ? 3
-                    : (backend == QymEngine::RenderBackend::GLES) ? 4 : 0;
+                    : (backend == QymEngine::RenderBackend::GLES) ? 4
+                    : (backend == QymEngine::RenderBackend::Metal) ? 5 : 0;
     QymEngine::vkInitDispatch(backendType);
 
     QymEngine::EditorApp app(backend);

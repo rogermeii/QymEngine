@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(QymEngine LANGUAGES CXX)
+project(QymEngine LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,8 +62,11 @@ target_link_libraries(imgui PUBLIC SDL2::SDL2-static)
 target_sources(imgui PRIVATE "3rd-party/imguizmo/ImGuizmo.cpp")
 target_include_directories(imgui PUBLIC "${CMAKE_SOURCE_DIR}/3rd-party/imguizmo")
 
-# Shader compiler tool
-add_subdirectory(tools/shader_compiler)
+# Shader compiler tool (需要 Slang SDK，macOS 上可选)
+option(BUILD_SHADER_COMPILER "Build the Slang shader compiler tool" OFF)
+if(BUILD_SHADER_COMPILER)
+    add_subdirectory(tools/shader_compiler)
+endif()
 
 # 引擎（暂时直接编译 main.cpp 为可执行文件）
 add_subdirectory(engine)
@@ -72,8 +75,9 @@ add_subdirectory(engine)
 add_subdirectory(editor)
 
 # ---------------------------------------------------------------------------
-# Shader bundle 自动编译
+# Shader bundle 自动编译（仅当 ShaderCompiler 可用时）
 # ---------------------------------------------------------------------------
+if(BUILD_SHADER_COMPILER)
 
 set(SHADER_SOURCE_DIR "${CMAKE_SOURCE_DIR}/assets/shaders")
 set(SHADER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/assets/shaders")
@@ -126,3 +130,5 @@ endif()
 if(TARGET QymEditor)
     add_dependencies(QymEditor CompileShaders)
 endif()
+
+endif() # BUILD_SHADER_COMPILER

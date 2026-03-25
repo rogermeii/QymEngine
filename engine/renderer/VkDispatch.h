@@ -46,6 +46,9 @@ bool vkIsOpenGLBackend();
 
 /// 查询当前是否使用 GLES 后端
 bool vkIsGLESBackend();
+
+/// 查询当前是否使用 Metal 后端
+bool vkIsMetalBackend();
 bool vkHasClipControl();
 void vkSetClipControlSupport(bool enabled);
 

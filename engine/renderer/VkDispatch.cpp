@@ -1,5 +1,8 @@
 #include "renderer/VkDispatch.h"
 #include <iostream>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -323,11 +326,24 @@ static void* s_vulkanSo = nullptr;
 // 使用 SDL_Vulkan_GetVkGetInstanceProcAddr 获取入口点（SDL 已正确处理 Android 平台）
 static void loadFromVulkanSo()
 {
-    // SDL 内部会加载 libvulkan.so 并提供 vkGetInstanceProcAddr
+    // SDL 内部会加载 libvulkan 并提供 vkGetInstanceProcAddr
     auto rawGetProcAddr = (PFN_vkGetInstanceProcAddr)SDL_Vulkan_GetVkGetInstanceProcAddr();
     if (!rawGetProcAddr) {
         // Fallback: 手动 dlopen
+#ifdef __APPLE__
+        // macOS: 先尝试 Homebrew MoltenVK 路径，再尝试标准名
+        const char* vulkanLibNames[] = {
+            "libvulkan.dylib",
+            "libvulkan.1.dylib",
+            "libMoltenVK.dylib",
+            nullptr
+        };
+        for (const char** name = vulkanLibNames; *name && !s_vulkanSo; ++name) {
+            s_vulkanSo = dlopen(*name, RTLD_NOW | RTLD_LOCAL);
+        }
+#else
         s_vulkanSo = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+#endif
         if (s_vulkanSo) {
             rawGetProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
                 dlsym(s_vulkanSo, "vkGetInstanceProcAddr"));
@@ -366,8 +382,15 @@ extern void vkLoadD3D12Dispatch();
 // D3D11 后端加载 (D11_ 前缀结构体，与 D3D12 无 ODR 冲突)
 extern void vkLoadD3D11Dispatch();
 
-// OpenGL 后端加载 (GL_ 前缀结构体)
+// OpenGL 后端加载 (GL_ 前缀结构体，iOS 上不可用)
+#if !TARGET_OS_IOS
 extern void vkLoadOpenGLDispatch();
+#endif
+
+#ifdef __APPLE__
+// Metal 后端加载 (macOS 专用)
+extern void vkLoadMetalDispatch();
+#endif
 
 namespace QymEngine { // 重新打开
 
@@ -392,10 +415,20 @@ void vkInitDispatch(int backendType)
         loadFromVulkanDll();
     }
 #else
-    // 非 Windows 平台 (Android/Linux)
+    // 非 Windows 平台
+#if !TARGET_OS_IOS
     if (backendType == 3 || backendType == 4) {
         vkLoadOpenGLDispatch();
         std::cout << "[VkDispatch] Loaded " << (backendType == 4 ? "GLES" : "OpenGL") << " backend" << std::endl;
+    } else
+#endif
+    if (backendType == 5) {
+#ifdef __APPLE__
+        vkLoadMetalDispatch();
+        std::cout << "[VkDispatch] Loaded Metal backend" << std::endl;
+#else
+        throw std::runtime_error("[VkDispatch] Metal backend is macOS-only");
+#endif
     } else if (backendType == 0) {
         loadFromVulkanSo();
     } else {
@@ -439,6 +472,11 @@ bool vkIsOpenGLBackend()
 bool vkIsGLESBackend()
 {
     return s_backend == 4;
+}
+
+bool vkIsMetalBackend()
+{
+    return s_backend == 5;
 }
 
 bool vkHasClipControl()

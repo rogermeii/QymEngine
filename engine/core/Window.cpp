@@ -2,6 +2,9 @@
 #include <stdexcept>
 #include <string>
 #include "stb_image.h"
+#ifdef __APPLE__
+#include <SDL_metal.h>
+#endif
 
 namespace QymEngine {
 
@@ -30,6 +33,8 @@ Window::Window(const WindowProps& props)
         flags |= SDL_WINDOW_OPENGL;
     } else if (m_backend == RenderBackend::Vulkan) {
         flags |= SDL_WINDOW_VULKAN;
+    } else if (m_backend == RenderBackend::Metal) {
+        flags |= SDL_WINDOW_METAL;
     }
     if (props.maximized)
         flags |= SDL_WINDOW_MAXIMIZED;
@@ -66,6 +71,8 @@ Window::Window(const WindowProps& props)
         int w, h;
         if (m_backend == RenderBackend::Vulkan)
             SDL_Vulkan_GetDrawableSize(m_window, &w, &h);
+        else if (m_backend == RenderBackend::Metal)
+            SDL_Metal_GetDrawableSize(m_window, &w, &h);
         else // OpenGL, GLES, D3D11, D3D12
             SDL_GL_GetDrawableSize(m_window, &w, &h);
         m_width = static_cast<uint32_t>(w);

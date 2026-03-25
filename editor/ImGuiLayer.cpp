@@ -12,6 +12,9 @@
 #include <ImGuizmo.h>
 
 #include <stdexcept>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 namespace QymEngine {
 
@@ -62,19 +65,34 @@ void ImGuiLayer::init(Renderer& renderer)
 #ifdef __ANDROID__
     const char* fontPath = "/system/fonts/NotoSansCJK-Regular.ttc";
     float fontSize = 36.0f;
+#elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    // iOS: 使用默认字体，不加载系统中文字体（iOS 沙箱限制访问系统字体文件）
+    const char* fontPath = nullptr;
+    float fontSize = 16.0f;
+#elif defined(__APPLE__)
+    const char* fontPath = "/System/Library/Fonts/Hiragino Sans GB.ttc";
+    float fontSize = 16.0f;
 #else
     const char* fontPath = "C:/Windows/Fonts/msyh.ttc";
     float fontSize = 16.0f;
 #endif
-    ImFont* font = io.Fonts->AddFontFromFileTTF(fontPath, fontSize, &fontConfig, io.Fonts->GetGlyphRangesChineseFull());
+    ImFont* font = nullptr;
+    if (fontPath) {
+        font = io.Fonts->AddFontFromFileTTF(fontPath, fontSize, &fontConfig, io.Fonts->GetGlyphRangesChineseFull());
+    }
     if (!font) {
+        // 无法加载中文字体，使用 ImGui 默认字体
         io.FontGlobalScale = 1.5f;
     }
 
     ImGui::StyleColorsDark();
 
     // --- 5. Platform / Renderer backends ------------------------------------------------
-    ImGui_ImplSDL2_InitForVulkan(renderer.getWindow()->getNativeWindow());
+    // Metal 后端窗口类型为 SDL_WINDOW_METAL，需使用 InitForOther；其余后端用 Vulkan 路径
+    if (QymEngine::vkIsMetalBackend())
+        ImGui_ImplSDL2_InitForOther(renderer.getWindow()->getNativeWindow());
+    else
+        ImGui_ImplSDL2_InitForVulkan(renderer.getWindow()->getNativeWindow());
 
     // 注册 SDL 事件回调，转发给 ImGui
     renderer.getWindow()->setEventCallback([](const SDL_Event& event) {

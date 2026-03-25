@@ -6,7 +6,7 @@
 
 namespace QymEngine {
 
-enum class RenderBackend { Vulkan, D3D12, D3D11, OpenGL, GLES };
+enum class RenderBackend { Vulkan, D3D12, D3D11, OpenGL, GLES, Metal };
 
 struct WindowProps {
     std::string title = "QymEngine";

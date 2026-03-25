@@ -16,8 +16,10 @@
 #include "panels/ModelPreview.h"
 #include "panels/PostProcessPanel.h"
 
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(__APPLE__)
 #include <renderdoc_app.h>
+#endif
+#ifndef __ANDROID__
 #include "UIAutomation.h"
 #endif
 
@@ -72,7 +74,11 @@ private:
     bool m_sceneDirty = false;
 
 #ifndef __ANDROID__
+#if defined(_WIN32)
     RENDERDOC_API_1_6_0* m_rdocApi = nullptr;
+#else
+    void* m_rdocApi = nullptr;
+#endif
     bool m_captureRequested = false;
     bool m_capturingThisFrame = false;
     int m_frameCount = 0;

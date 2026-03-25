@@ -11,10 +11,12 @@ bool ShaderBundle::load(const std::string& path)
     // 使用 SDL_RWops 读取文件（兼容 Android assets）
     // Android AAssetManager 需要纯相对路径，去掉前导 "./" 或 "/"
     std::string cleanPath = path;
+#ifdef __ANDROID__
     if (cleanPath.size() >= 2 && cleanPath[0] == '.' && (cleanPath[1] == '/' || cleanPath[1] == '\\'))
         cleanPath = cleanPath.substr(2);
     else if (!cleanPath.empty() && (cleanPath[0] == '/' || cleanPath[0] == '\\'))
         cleanPath = cleanPath.substr(1);
+#endif
     SDL_RWops* rw = SDL_RWFromFile(cleanPath.c_str(), "rb");
     if (!rw) {
         std::cerr << "ShaderBundle: 无法打开文件 " << path << std::endl;

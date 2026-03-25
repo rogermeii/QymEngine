@@ -3,6 +3,9 @@
 #include <string>
 #include <vector>
 #include <stdexcept>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 namespace QymEngine {
 
@@ -52,10 +55,26 @@ inline bool fileExists(const std::string& path) {
     return false;
 }
 
-// Build asset path: on Android use relative path, on Windows use ASSETS_DIR prefix
+// Build asset path:
+// - Android: 使用相对路径（SDL_RWFromFile 直接访问 APK 内资源）
+// - iOS: 使用 app bundle 内的 Resources/assets/ 路径
+// - 其他平台: 使用 ASSETS_DIR 宏前缀
 inline std::string assetPath(const std::string& relativePath) {
 #ifdef __ANDROID__
     return relativePath;
+#elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    // iOS: 资源打包在 app bundle 的 Resources/assets/ 下
+    static std::string basePath;
+    if (basePath.empty()) {
+        const char* base = SDL_GetBasePath();
+        if (base) {
+            basePath = std::string(base) + "assets";
+            SDL_free((void*)base);
+        } else {
+            basePath = "assets";
+        }
+    }
+    return basePath + "/" + relativePath;
 #else
     return std::string(ASSETS_DIR) + "/" + relativePath;
 #endif

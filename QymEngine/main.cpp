@@ -1,5 +1,6 @@
 #include "core/Application.h"
 #include "renderer/Renderer.h"
+#include "renderer/VkDispatch.h"
 #include "scene/Scene.h"
 #include "scene/Camera.h"
 
@@ -10,10 +11,16 @@
 // Standalone runtime: render scene to window without editor UI
 class StandaloneApp : public QymEngine::Application {
 public:
+#ifdef __APPLE__
+    StandaloneApp() : Application({"QymEngine", 1280, 720, false, QymEngine::RenderBackend::Metal}) {}
+#else
     StandaloneApp() : Application({"QymEngine", 1280, 720}) {}
+#endif
 
 protected:
     void onInit() override {
+        int backendType = (getWindow().getBackend() == QymEngine::RenderBackend::Metal) ? 5 : 0;
+        QymEngine::vkInitDispatch(backendType);
         m_renderer.init(getWindow());
         m_renderer.setCamera(&m_camera);
 
@@ -58,8 +65,11 @@ private:
 };
 
 int main(int /*argc*/, char* /*argv*/[]) {
-    StandaloneApp app;
+    std::cerr << "[main] Starting QymEngine..." << std::endl;
     try {
+        std::cerr << "[main] Creating StandaloneApp..." << std::endl;
+        StandaloneApp app;
+        std::cerr << "[main] Running..." << std::endl;
         app.run();
     } catch (const std::exception& e) {
         std::cerr << "QymEngine crashed: " << e.what() << std::endl;

@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <chrono>
 
-#ifndef __ANDROID__
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <renderdoc_app.h>
@@ -196,6 +196,7 @@ void EditorApp::onUpdate()
             }
         }
         // Set unique capture path with timestamp
+#ifdef _WIN32
         {
             auto now = std::chrono::system_clock::now();
             auto epoch = now.time_since_epoch();
@@ -213,6 +214,7 @@ void EditorApp::onUpdate()
                 : RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE(m_renderer.getContext().getInstance());
             m_rdocApi->StartFrameCapture(rdocDevice, nullptr);
         }
+#endif
     }
 #endif
 
@@ -395,6 +397,7 @@ void EditorApp::onUpdate()
         if (QymEngine::vkIsD3D12Backend()) backendName = "D3D12";
         else if (QymEngine::vkIsD3D11Backend()) backendName = "D3D11";
         else if (QymEngine::vkIsGLESBackend()) backendName = "GLES";
+        else if (QymEngine::vkIsMetalBackend()) backendName = "Metal";
         else if (QymEngine::vkIsOpenGLBackend()) backendName = "OpenGL";
         std::string title = "QymEngine Editor [" + std::string(backendName) + "] - " + m_scene.name;
         if (m_sceneDirty) title += " *";
@@ -416,6 +419,7 @@ void EditorApp::onUpdate()
         m_autoCaptureDone = true;
         Log::info("RenderDoc: auto-capture triggered at frame " + std::to_string(m_frameCount));
     }
+#ifdef _WIN32
     // OpenGL TriggerCapture 模式: 捕获在下一帧完成，延迟检查结果
     if (m_captureAndExit && m_autoCaptureDone && m_rdocApi
         && (QymEngine::vkIsOpenGLBackend() || QymEngine::vkIsGLESBackend()) && m_frameCount == 8) {
@@ -433,6 +437,7 @@ void EditorApp::onUpdate()
             m_window->requestClose();
         }
     }
+#endif
 #endif
 
     // Render all panels
@@ -455,7 +460,7 @@ void EditorApp::onUpdate()
 #ifndef __ANDROID__
     if (m_capturingThisFrame) {
         m_capturingThisFrame = false;
-
+#ifdef _WIN32
         if (QymEngine::vkIsOpenGLBackend() || QymEngine::vkIsGLESBackend()) {
             // OpenGL/GLES TriggerCapture 模式: 结果在帧8延迟检查中处理，这里跳过
         } else {
@@ -497,6 +502,7 @@ void EditorApp::onUpdate()
             }
         }
         } // end else (non-OpenGL)
+#endif // _WIN32
     }
 #endif
 }
@@ -544,6 +550,7 @@ void EditorApp::setCaptureAndExit(bool enabled, const std::string& outputPath)
     m_captureOutputPath = outputPath;
 }
 
+#ifdef _WIN32
 void EditorApp::initRenderDoc()
 {
     // Skip RenderDoc if env var set (for validation layer testing)
@@ -603,7 +610,12 @@ void EditorApp::checkExternalCaptureTrigger()
         Log::info("RenderDoc: external capture triggered");
     }
 }
-#endif
+#else // !_WIN32
+void EditorApp::initRenderDoc() {}
+void EditorApp::captureFrame() {}
+void EditorApp::checkExternalCaptureTrigger() {}
+#endif // _WIN32
+#endif // !__ANDROID__
 
 void EditorApp::handleShortcuts()
 {
