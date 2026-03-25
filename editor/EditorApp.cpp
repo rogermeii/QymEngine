@@ -267,13 +267,20 @@ void EditorApp::onUpdate()
                 m_showSaveAsPopup = true;
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Load Scene")) {
-                m_undoManager.saveState(); m_sceneDirty = true;
-#ifdef __ANDROID__
-                m_scene.deserialize("scenes/default.json");
-#else
-                m_scene.deserialize(std::string(ASSETS_DIR) + "/scenes/default.json");
-#endif
+            if (ImGui::BeginMenu("Load Scene")) {
+                std::string scenesDir = std::string(ASSETS_DIR) + "/scenes";
+                for (auto& entry : std::filesystem::directory_iterator(scenesDir)) {
+                    if (entry.path().extension() == ".json") {
+                        std::string name = entry.path().stem().string();
+                        if (ImGui::MenuItem(name.c_str())) {
+                            m_undoManager.saveState(); m_sceneDirty = true;
+                            m_scene.deserialize(entry.path().string());
+                            m_currentScenePath = entry.path().string();
+                            Log::info("Loaded scene: " + entry.path().string());
+                        }
+                    }
+                }
+                ImGui::EndMenu();
             }
             ImGui::EndMenu();
         }
