@@ -14,6 +14,10 @@
 #include <filesystem>
 #include <cstring>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
@@ -70,8 +74,21 @@ void UIAutomation::processDeferredEvents(SDL_Window* window) {
 
 void UIAutomation::pollAndExecute(Renderer& renderer, Scene& scene, Camera& camera, SDL_Window* window) {
     if (!m_initialized) {
+#if TARGET_OS_IOS
+        // iOS 沙箱: 使用 Documents 目录（可读写 + 可通过 iTunes 文件共享访问）
+        char* basePath = SDL_GetPrefPath("com.qymengine", "editor");
+        if (basePath) {
+            m_commandPath = std::string(basePath) + "command.json";
+            m_resultPath = std::string(basePath) + "command_result.json";
+            SDL_free(basePath);
+        } else {
+            m_commandPath = "command.json";
+            m_resultPath = "command_result.json";
+        }
+#else
         m_commandPath = std::string(ASSETS_DIR) + "/../captures/command.json";
         m_resultPath = std::string(ASSETS_DIR) + "/../captures/command_result.json";
+#endif
         m_initialized = true;
     }
 
@@ -322,9 +339,17 @@ void UIAutomation::executeCommand(const std::string& jsonStr, Renderer& renderer
 
         } else if (command == "screenshot") {
             std::string path = params.value("path", "captures/screenshot.png");
-            // If relative, make it relative to project root
+            // If relative, make it relative to project root (或 iOS Documents 目录)
             if (path.find(':') == std::string::npos && path[0] != '/') {
+#if TARGET_OS_IOS
+                char* basePath = SDL_GetPrefPath("com.qymengine", "editor");
+                if (basePath) {
+                    path = std::string(basePath) + path;
+                    SDL_free(basePath);
+                }
+#else
                 path = std::string(ASSETS_DIR) + "/../" + path;
+#endif
             }
             // Ensure directory exists
             std::filesystem::create_directories(std::filesystem::path(path).parent_path());
