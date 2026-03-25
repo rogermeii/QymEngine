@@ -18,6 +18,9 @@ struct CompositePushConstant {
     int vignetteEnabled;
     float vignetteIntensity;
     float vignetteSmoothness;
+    int autoExposureEnabled;
+    float autoExposureMin;
+    float autoExposureMax;
 };
 
 [[vk::push_constant]] CompositePushConstant pc;
@@ -86,7 +89,22 @@ float4 fragmentMain(VSOutput input) : SV_Target {
         color += bloom * pc.bloomIntensity;
     }
 
-    color *= pc.exposure;
+    // 曝光（手动或自动）
+    if (pc.autoExposureEnabled != 0) {
+        // 采样场景 HDR 的 9 个点计算平均亮度
+        float avgLuma = 0.0;
+        for (int sy = 0; sy < 3; sy++)
+            for (int sx = 0; sx < 3; sx++) {
+                float2 sampleUV = float2(0.2 + sx * 0.3, 0.2 + sy * 0.3);
+                avgLuma += dot(sceneHDR.Sample(sampleUV).rgb, float3(0.2126, 0.7152, 0.0722));
+            }
+        avgLuma /= 9.0;
+        float autoExp = 0.5 / max(avgLuma, 0.001);
+        autoExp = clamp(autoExp, pc.autoExposureMin, pc.autoExposureMax);
+        color *= autoExp;
+    } else {
+        color *= pc.exposure;
+    }
 
     if (pc.toneMappingEnabled != 0) {
         color = ACESFilm(color);

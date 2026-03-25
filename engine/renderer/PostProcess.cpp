@@ -41,9 +41,13 @@ struct CompositePushConstant {
     int32_t vignetteEnabled;
     float vignetteIntensity;
     float vignetteSmoothness;
-    float _pad0;  // 对齐到 64 字节
+    int32_t autoExposureEnabled;
+    float autoExposureMin;
+    float autoExposureMax;
+    float _pad0;  // 对齐到 80 字节
+    float _pad1;
 };
-static_assert(sizeof(CompositePushConstant) == 64, "CompositePushConstant size mismatch");
+static_assert(sizeof(CompositePushConstant) == 80, "CompositePushConstant size mismatch");
 
 struct FxaaPushConstant {
     float texelSize[2];
@@ -1211,6 +1215,9 @@ void PostProcessPipeline::executeComposite(VkCommandBuffer cmd, VkImageView scen
     pc.vignetteEnabled = settings.vignetteEnabled ? 1 : 0;
     pc.vignetteIntensity = settings.vignetteIntensity;
     pc.vignetteSmoothness = settings.vignetteSmoothness;
+    pc.autoExposureEnabled = settings.autoExposureEnabled ? 1 : 0;
+    pc.autoExposureMin = settings.autoExposureMin;
+    pc.autoExposureMax = settings.autoExposureMax;
 
     vkCmdPushConstants(cmd, m_compositeLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

@@ -19,7 +19,13 @@ void PostProcessPanel::onImGuiRender(Scene& scene) {
 
     if (ImGui::CollapsingHeader("Tone Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("启用##tonemapping", &pp.toneMappingEnabled);
-        ImGui::DragFloat("曝光", &pp.exposure, 0.01f, 0.001f, 20.0f);
+        ImGui::Checkbox("自动曝光", &pp.autoExposureEnabled);
+        if (pp.autoExposureEnabled) {
+            ImGui::DragFloat("最小曝光", &pp.autoExposureMin, 0.01f, 0.01f, 10.0f);
+            ImGui::DragFloat("最大曝光", &pp.autoExposureMax, 0.01f, 0.1f, 20.0f);
+        } else {
+            ImGui::DragFloat("曝光", &pp.exposure, 0.01f, 0.001f, 20.0f);
+        }
     }
 
     if (ImGui::CollapsingHeader("Color Grading", ImGuiTreeNodeFlags_DefaultOpen)) {

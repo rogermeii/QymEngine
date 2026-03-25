@@ -189,6 +189,9 @@ void Scene::serialize(const std::string& path) const {
         {"bloomMipCount", pp.bloomMipCount},
         {"toneMappingEnabled", pp.toneMappingEnabled},
         {"exposure", pp.exposure},
+        {"autoExposureEnabled", pp.autoExposureEnabled},
+        {"autoExposureMin", pp.autoExposureMin},
+        {"autoExposureMax", pp.autoExposureMax},
         {"colorGradingEnabled", pp.colorGradingEnabled},
         {"contrast", pp.contrast},
         {"saturation", pp.saturation},
@@ -235,6 +238,9 @@ void Scene::deserialize(const std::string& path) {
             pp.bloomMipCount = ppj.value("bloomMipCount", 5);
             pp.toneMappingEnabled = ppj.value("toneMappingEnabled", true);
             pp.exposure = ppj.value("exposure", 1.0f);
+            pp.autoExposureEnabled = ppj.value("autoExposureEnabled", false);
+            pp.autoExposureMin = ppj.value("autoExposureMin", 0.1f);
+            pp.autoExposureMax = ppj.value("autoExposureMax", 8.0f);
             pp.colorGradingEnabled = ppj.value("colorGradingEnabled", true);
             pp.contrast = ppj.value("contrast", 1.0f);
             pp.saturation = ppj.value("saturation", 1.0f);
@@ -300,6 +306,9 @@ std::string Scene::toJsonString() const {
         {"bloomMipCount", pp.bloomMipCount},
         {"toneMappingEnabled", pp.toneMappingEnabled},
         {"exposure", pp.exposure},
+        {"autoExposureEnabled", pp.autoExposureEnabled},
+        {"autoExposureMin", pp.autoExposureMin},
+        {"autoExposureMax", pp.autoExposureMax},
         {"colorGradingEnabled", pp.colorGradingEnabled},
         {"contrast", pp.contrast},
         {"saturation", pp.saturation},

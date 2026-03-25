@@ -16,6 +16,9 @@ struct PostProcessSettings {
     // Tone Mapping
     bool  toneMappingEnabled = true;
     float exposure = 1.0f;
+    bool  autoExposureEnabled = false;
+    float autoExposureMin = 0.1f;
+    float autoExposureMax = 8.0f;
 
     // Color Grading
     bool  colorGradingEnabled = true;
@@ -39,6 +42,8 @@ struct PostProcessSettings {
     void clampValues() {
         bloomMipCount = std::clamp(bloomMipCount, 1, MAX_BLOOM_MIPS);
         exposure = std::max(exposure, 0.001f);
+        autoExposureMin = std::max(autoExposureMin, 0.01f);
+        autoExposureMax = std::max(autoExposureMax, autoExposureMin);
         contrast = std::clamp(contrast, 0.5f, 2.0f);
         saturation = std::clamp(saturation, 0.0f, 2.0f);
         temperature = std::clamp(temperature, -1.0f, 1.0f);
