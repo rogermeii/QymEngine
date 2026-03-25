@@ -377,14 +377,47 @@ const ShaderAsset* AssetManager::loadShader(const std::string& relativePath)
             auto vertSpv = bundle.getVertSpv(var);
             auto fragSpv = bundle.getFragSpv(var);
             auto reflectJson = bundle.getReflectJson(var);
-            shader.pipeline.createFromMemory(
-                m_ctx->getDevice(),
-                m_offscreenRenderPass,
-                m_offscreenExtent,
-                *m_layoutCache,
-                VK_POLYGON_MODE_FILL,
-                vertSpv, fragSpv, reflectJson
-            );
+
+            if (m_perFrameLayout != VK_NULL_HANDLE) {
+                // 使用引擎标准的 per-frame layout 作为 set 0，避免着色器反射
+                // 优化掉未使用的 binding 导致 layout 不匹配
+                ShaderReflectionData tempReflect;
+                tempReflect.loadFromString(reflectJson);
+
+                // 构建 layouts：set 0 使用引擎标准 layout，其余 set 从反射生成
+                std::vector<VkDescriptorSetLayout> layouts;
+                uint32_t maxSet = 0;
+                for (auto& [s, _] : tempReflect.sets)
+                    if (s > maxSet) maxSet = s;
+                for (uint32_t setIdx = 0; setIdx <= maxSet; setIdx++) {
+                    if (setIdx == 0) {
+                        layouts.push_back(m_perFrameLayout);
+                    } else {
+                        auto bindings = tempReflect.buildBindings(setIdx);
+                        layouts.push_back(m_layoutCache->getOrCreate(m_ctx->getDevice(), bindings));
+                    }
+                }
+
+                auto pcRanges = tempReflect.createPushConstantRanges();
+                shader.pipeline.createWithLayoutsFromMemory(
+                    m_ctx->getDevice(),
+                    m_offscreenRenderPass,
+                    layouts,
+                    m_offscreenExtent,
+                    pcRanges,
+                    VK_POLYGON_MODE_FILL,
+                    vertSpv, fragSpv, reflectJson
+                );
+            } else {
+                shader.pipeline.createFromMemory(
+                    m_ctx->getDevice(),
+                    m_offscreenRenderPass,
+                    m_offscreenExtent,
+                    *m_layoutCache,
+                    VK_POLYGON_MODE_FILL,
+                    vertSpv, fragSpv, reflectJson
+                );
+            }
         }
     }
 

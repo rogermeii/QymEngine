@@ -988,14 +988,18 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
     VkDevice device = m_context->getDevice();
     int mipCount = std::clamp(settings.bloomMipCount, 1, MAX_BLOOM_MIPS);
 
-    // 升采样描述符依赖运行时 mipCount（第一步读 down image，后续读 up image）
-    // 每帧更新以适应 mipCount 变化
-    for (int i = mipCount - 2; i >= 0; i--) {
-        VkImageView deeperView = (i == mipCount - 2)
-            ? m_bloomDownMipViews[i + 1]
-            : m_bloomUpMipViews[i + 1];
-        writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, deeperView, m_linearSampler);
-        writeDescriptorBinding(device, m_bloomUpsampleSets[i], 1, m_bloomDownMipViews[i], m_linearSampler);
+    // 升采样描述符依赖运行时 mipCount（最深层需要从 down image 读取）
+    // 只在 mipCount 变化时更新，避免每帧更新触发 validation 错误
+    if (mipCount != m_lastBloomMipCount) {
+        vkDeviceWaitIdle(device);  // 确保之前的帧不再引用旧描述符
+        for (int i = mipCount - 2; i >= 0; i--) {
+            VkImageView deeperView = (i == mipCount - 2)
+                ? m_bloomDownMipViews[i + 1]
+                : m_bloomUpMipViews[i + 1];
+            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, deeperView, m_linearSampler);
+            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 1, m_bloomDownMipViews[i], m_linearSampler);
+        }
+        m_lastBloomMipCount = mipCount;
     }
 
     uint32_t mip0W = std::max(m_width / 2, 1u);

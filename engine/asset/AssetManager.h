@@ -74,6 +74,7 @@ public:
     // For shader pipeline creation - called by Renderer after offscreen setup
     void setOffscreenRenderPass(VkRenderPass rp) { m_offscreenRenderPass = rp; }
     void setOffscreenExtent(VkExtent2D ext) { m_offscreenExtent = ext; }
+    void setPerFrameLayout(VkDescriptorSetLayout layout) { m_perFrameLayout = layout; }
 
     // For per-texture descriptor set allocation (Inspector preview)
     void setTextureDescriptorSetLayout(VkDescriptorSetLayout layout) { m_textureSetLayout = layout; }
@@ -112,6 +113,7 @@ private:
     // For shader pipeline creation
     VkRenderPass m_offscreenRenderPass = VK_NULL_HANDLE;
     VkExtent2D m_offscreenExtent = {0, 0};
+    VkDescriptorSetLayout m_perFrameLayout = VK_NULL_HANDLE;
 
     // Helper: create VkImage + memory + view + sampler from pixel data
     void createTextureFromPixels(const unsigned char* pixels, int width, int height,

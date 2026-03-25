@@ -16,7 +16,7 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 // 全局选项
-static bool g_emitDebugInfo = true;   // 默认开启调试符号
+static bool g_emitDebugInfo = false;  // 默认关闭调试符号（避免生成 DebugFunctionDefinition 等扩展指令导致 spirv-val 报错）
 static bool g_emitDxil = true;        // 默认编译 DXIL 变体（D3D12 后端用）
 static bool g_emitDxbc = true;        // 默认编译 DXBC/SM5.0 变体（D3D11 后端用）
 static bool g_emitGlsl = true;        // 默认编译 GLSL 变体（OpenGL 后端用）

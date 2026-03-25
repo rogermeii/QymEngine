@@ -1513,6 +1513,7 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         // Pass render pass and layout info to AssetManager for shader pipeline creation
         m_assetManager.setOffscreenRenderPass(m_offscreenRenderPass);
         m_assetManager.setOffscreenExtent({width, height});
+        m_assetManager.setPerFrameLayout(m_perFrameLayout);
     }
 
     // --- 5. Create framebuffer (color + depth) ---
