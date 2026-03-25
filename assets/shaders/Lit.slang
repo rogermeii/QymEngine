@@ -310,7 +310,7 @@ float4 fragmentMain(VSOutput input) : SV_Target
     float2 brdf = brdfLUT.Sample(float2(NdotV, roughness)).rg;
     float3 specularIBL = prefilteredColor * (F0 * brdf.x + brdf.y);
 
-    float3 ambient = diffuseIBL + specularIBL;
+    float3 ambient = (diffuseIBL + specularIBL) * frame.ambientColor;
     float3 result = ambient + Lo;
 
     return float4(result, input.baseColor.a);

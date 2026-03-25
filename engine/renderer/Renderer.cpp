@@ -2429,7 +2429,7 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
         ubo.proj = glm::transpose(ubo.proj);
     }
 
-    ubo.ambientColor = glm::vec3(0.15f, 0.15f, 0.15f);
+    ubo.ambientColor = glm::vec3(3.0f, 3.0f, 3.0f);  // IBL 强度乘数（补偿 LDR 全景图）
     if (m_camera)
         ubo.cameraPos = m_camera->getPosition();
     else

@@ -1,0 +1,9 @@
+{
+  "name": "Metal Rough",
+  "shader": "shaders/standard_lit.shader.json",
+  "properties": {
+    "baseColor": [0.95, 0.93, 0.88, 1],
+    "metallic": 1.0,
+    "roughness": 0.6
+  }
+}
