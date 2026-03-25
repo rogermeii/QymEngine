@@ -77,11 +77,16 @@ private:
     void createBlackFallback();
     void destroyBlackFallback();
 
-    // Bloom 资源
-    VkImage        m_bloomMipImage = VK_NULL_HANDLE;
-    VkDeviceMemory m_bloomMipMemory = VK_NULL_HANDLE;
-    VkImageView    m_bloomMipViews[MAX_BLOOM_MIPS]{};
+    // Bloom 资源 — 降采样链
+    VkImage        m_bloomDownMipImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_bloomDownMipMemory = VK_NULL_HANDLE;
+    VkImageView    m_bloomDownMipViews[MAX_BLOOM_MIPS]{};
     VkFramebuffer  m_bloomDownsampleFBs[MAX_BLOOM_MIPS]{};
+
+    // Bloom 资源 — 升采样链（独立 image，消除跨帧读写冲突）
+    VkImage        m_bloomUpMipImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_bloomUpMipMemory = VK_NULL_HANDLE;
+    VkImageView    m_bloomUpMipViews[MAX_BLOOM_MIPS]{};
     VkFramebuffer  m_bloomUpsampleFBs[MAX_BLOOM_MIPS]{};
 
     // Composite 资源

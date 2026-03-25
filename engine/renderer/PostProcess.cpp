@@ -450,11 +450,12 @@ void PostProcessPipeline::init(VulkanContext& ctx, DescriptorLayoutCache& layout
         VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    // upsample: HDR format, loadOp=LOAD, initialLayout=COLOR_ATTACHMENT_OPTIMAL
+    // upsample: HDR format, loadOp=DONT_CARE, initialLayout=UNDEFINED
+    // 写入独立的 up image，不再需要保留旧内容；shader 负责合并 down+up 数据
     m_bloomUpsampleRenderPass = createColorOnlyRenderPass(
         device, VK_FORMAT_R16G16B16A16_SFLOAT,
-        VK_ATTACHMENT_LOAD_OP_LOAD,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // LDR: UNORM format, loadOp=DONT_CARE, initialLayout=UNDEFINED
@@ -503,22 +504,31 @@ void PostProcessPipeline::init(VulkanContext& ctx, DescriptorLayoutCache& layout
         writeDescriptorBinding(device, m_bloomDownsampleSets[0], 0, m_blackFallbackView, m_linearSampler);
         writeDescriptorBinding(device, m_bloomDownsampleSets[0], 1, m_blackFallbackView, m_linearSampler);
         for (int i = 1; i < MAX_BLOOM_MIPS; i++) {
-            writeDescriptorBinding(device, m_bloomDownsampleSets[i], 0, m_bloomMipViews[i - 1], m_linearSampler);
+            writeDescriptorBinding(device, m_bloomDownsampleSets[i], 0, m_bloomDownMipViews[i - 1], m_linearSampler);
             writeDescriptorBinding(device, m_bloomDownsampleSets[i], 1, m_blackFallbackView, m_linearSampler);
         }
 
-        // Bloom upsample: set[i] 输入是 mip[i+1]
+        // Bloom upsample: binding 0 = 更深 mip（升采样源），binding 1 = 当前级 downsample 数据
+        // 对于第一次 upsample（最深 mip），binding 0 从 down image 读取；
+        // 后续 upsample，binding 0 从 up image 读取（前一步 upsample 的输出）
         for (int i = 0; i < MAX_BLOOM_MIPS - 1; i++) {
-            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, m_bloomMipViews[i + 1], m_linearSampler);
-            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 1, m_blackFallbackView, m_linearSampler);
+            // binding 0: 更深 mip 的源
+            //   i == MAX_BLOOM_MIPS-2 时读 down[i+1]（最深降采样结果）
+            //   其余时候读 up[i+1]（前一步升采样输出）
+            VkImageView deeperView = (i == MAX_BLOOM_MIPS - 2)
+                ? m_bloomDownMipViews[i + 1]
+                : m_bloomUpMipViews[i + 1];
+            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, deeperView, m_linearSampler);
+            // binding 1: 当前级的 downsample 数据（要保留/合并的）
+            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 1, m_bloomDownMipViews[i], m_linearSampler);
         }
         writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 0, m_blackFallbackView, m_linearSampler);
         writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 1, m_blackFallbackView, m_linearSampler);
 
         // Composite: binding 0 = sceneHDR（暂绑 blackFallback，需要在首帧 execute 前更新一次）
-        //            binding 1 = bloom mip 0（始终绑定，shader 通过 push constant 控制是否采样）
+        //            binding 1 = bloom up mip 0（升采样最终结果）
         writeDescriptorBinding(device, m_compositeSet, 0, m_blackFallbackView, m_linearSampler);
-        writeDescriptorBinding(device, m_compositeSet, 1, m_bloomMipViews[0], m_linearSampler);
+        writeDescriptorBinding(device, m_compositeSet, 1, m_bloomUpMipViews[0], m_linearSampler);
 
         // FXAA: binding 0 = composite output
         writeDescriptorBinding(device, m_fxaaSet, 0, m_compositeImageView, m_linearSampler);
@@ -537,27 +547,35 @@ void PostProcessPipeline::createBloomResources() {
     uint32_t mipW = std::max(m_width / 2, 1u);
     uint32_t mipH = std::max(m_height / 2, 1u);
 
-    // 创建 bloom mip chain image
+    // 创建降采样 mip chain image
     createImage2D(*m_context, mipW, mipH, VK_FORMAT_R16G16B16A16_SFLOAT,
                   MAX_BLOOM_MIPS,
                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                  m_bloomMipImage, m_bloomMipMemory);
+                  m_bloomDownMipImage, m_bloomDownMipMemory);
+
+    // 创建升采样 mip chain image（独立 image，消除跨帧读写冲突）
+    createImage2D(*m_context, mipW, mipH, VK_FORMAT_R16G16B16A16_SFLOAT,
+                  MAX_BLOOM_MIPS,
+                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                  m_bloomUpMipImage, m_bloomUpMipMemory);
 
     // 为每个 mip 创建 view 和 framebuffer
     for (int i = 0; i < MAX_BLOOM_MIPS; i++) {
-        m_bloomMipViews[i] = createImageView2D(device, m_bloomMipImage,
+        m_bloomDownMipViews[i] = createImageView2D(device, m_bloomDownMipImage,
+                                                VK_FORMAT_R16G16B16A16_SFLOAT, i, 1);
+        m_bloomUpMipViews[i] = createImageView2D(device, m_bloomUpMipImage,
                                                 VK_FORMAT_R16G16B16A16_SFLOAT, i, 1);
 
         uint32_t fbW = std::max(mipW >> i, 1u);
         uint32_t fbH = std::max(mipH >> i, 1u);
 
-        // Downsample framebuffer
+        // Downsample framebuffer — 写入 down image
         {
             VkFramebufferCreateInfo fbInfo{};
             fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             fbInfo.renderPass = m_bloomDownsampleRenderPass;
             fbInfo.attachmentCount = 1;
-            fbInfo.pAttachments = &m_bloomMipViews[i];
+            fbInfo.pAttachments = &m_bloomDownMipViews[i];
             fbInfo.width = fbW;
             fbInfo.height = fbH;
             fbInfo.layers = 1;
@@ -566,13 +584,13 @@ void PostProcessPipeline::createBloomResources() {
                 throw std::runtime_error("failed to create bloom downsample framebuffer!");
         }
 
-        // Upsample framebuffer
+        // Upsample framebuffer — 写入 up image
         {
             VkFramebufferCreateInfo fbInfo{};
             fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             fbInfo.renderPass = m_bloomUpsampleRenderPass;
             fbInfo.attachmentCount = 1;
-            fbInfo.pAttachments = &m_bloomMipViews[i];
+            fbInfo.pAttachments = &m_bloomUpMipViews[i];
             fbInfo.width = fbW;
             fbInfo.height = fbH;
             fbInfo.layers = 1;
@@ -595,18 +613,30 @@ void PostProcessPipeline::destroyBloomResources() {
             vkDestroyFramebuffer(device, m_bloomUpsampleFBs[i], nullptr);
             m_bloomUpsampleFBs[i] = VK_NULL_HANDLE;
         }
-        if (m_bloomMipViews[i]) {
-            vkDestroyImageView(device, m_bloomMipViews[i], nullptr);
-            m_bloomMipViews[i] = VK_NULL_HANDLE;
+        if (m_bloomDownMipViews[i]) {
+            vkDestroyImageView(device, m_bloomDownMipViews[i], nullptr);
+            m_bloomDownMipViews[i] = VK_NULL_HANDLE;
+        }
+        if (m_bloomUpMipViews[i]) {
+            vkDestroyImageView(device, m_bloomUpMipViews[i], nullptr);
+            m_bloomUpMipViews[i] = VK_NULL_HANDLE;
         }
     }
-    if (m_bloomMipImage) {
-        vkDestroyImage(device, m_bloomMipImage, nullptr);
-        m_bloomMipImage = VK_NULL_HANDLE;
+    if (m_bloomDownMipImage) {
+        vkDestroyImage(device, m_bloomDownMipImage, nullptr);
+        m_bloomDownMipImage = VK_NULL_HANDLE;
     }
-    if (m_bloomMipMemory) {
-        vkFreeMemory(device, m_bloomMipMemory, nullptr);
-        m_bloomMipMemory = VK_NULL_HANDLE;
+    if (m_bloomDownMipMemory) {
+        vkFreeMemory(device, m_bloomDownMipMemory, nullptr);
+        m_bloomDownMipMemory = VK_NULL_HANDLE;
+    }
+    if (m_bloomUpMipImage) {
+        vkDestroyImage(device, m_bloomUpMipImage, nullptr);
+        m_bloomUpMipImage = VK_NULL_HANDLE;
+    }
+    if (m_bloomUpMipMemory) {
+        vkFreeMemory(device, m_bloomUpMipMemory, nullptr);
+        m_bloomUpMipMemory = VK_NULL_HANDLE;
     }
 }
 
@@ -851,23 +881,12 @@ void PostProcessPipeline::createPipelines() {
             &pcRange);
     }
 
-    // Bloom upsample: 加法混合 (src=ONE, dst=ONE)
+    // Bloom upsample: 不透明写入（shader 内部完成 down + up 合并，不需要硬件混合）
     {
         VkPushConstantRange pcRange{};
         pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pcRange.offset = 0;
         pcRange.size = sizeof(BloomPushConstant);
-
-        VkPipelineColorBlendAttachmentState additiveBlend{};
-        additiveBlend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        additiveBlend.blendEnable = VK_TRUE;
-        additiveBlend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        additiveBlend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        additiveBlend.colorBlendOp = VK_BLEND_OP_ADD;
-        additiveBlend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        additiveBlend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        additiveBlend.alphaBlendOp = VK_BLEND_OP_ADD;
 
         createFullscreenBundlePipeline(
             device,
@@ -879,8 +898,7 @@ void PostProcessPipeline::createPipelines() {
             m_bloomUpsamplePipeline,
             m_bloomUpsampleLayout,
             "bloom_upsample",
-            &pcRange,
-            &additiveBlend);
+            &pcRange);
     }
 
     // Composite: 不需要混合
@@ -955,7 +973,7 @@ void PostProcessPipeline::execute(VkCommandBuffer cmd, VkImageView sceneHDR,
     if (settings.bloomEnabled) {
         executeBloom(cmd, sceneHDR, settings);
     }
-    executeComposite(cmd, sceneHDR, m_bloomMipViews[0], settings);
+    executeComposite(cmd, sceneHDR, m_bloomUpMipViews[0], settings);
     if (settings.fxaaEnabled) {
         executeFxaa(cmd, settings);
     }
@@ -969,6 +987,16 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
                                         const PostProcessSettings& settings) {
     VkDevice device = m_context->getDevice();
     int mipCount = std::clamp(settings.bloomMipCount, 1, MAX_BLOOM_MIPS);
+
+    // 升采样描述符依赖运行时 mipCount（第一步读 down image，后续读 up image）
+    // 每帧更新以适应 mipCount 变化
+    for (int i = mipCount - 2; i >= 0; i--) {
+        VkImageView deeperView = (i == mipCount - 2)
+            ? m_bloomDownMipViews[i + 1]
+            : m_bloomUpMipViews[i + 1];
+        writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, deeperView, m_linearSampler);
+        writeDescriptorBinding(device, m_bloomUpsampleSets[i], 1, m_bloomDownMipViews[i], m_linearSampler);
+    }
 
     uint32_t mip0W = std::max(m_width / 2, 1u);
     uint32_t mip0H = std::max(m_height / 2, 1u);
@@ -1073,36 +1101,12 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
         vkCmdEndRenderPass(cmd);
     }
 
-    // === 升采样链 (反向: mip i+1 -> mip i, 加法混合) ===
+    // === 升采样链 (反向: 写入独立 up image，shader 合并 down + deeper up) ===
     for (int i = mipCount - 2; i >= 0; i--) {
         uint32_t fbW = std::max(mip0W >> i, 1u);
         uint32_t fbH = std::max(mip0H >> i, 1u);
 
-        // upsample renderpass 的 initialLayout 是 COLOR_ATTACHMENT_OPTIMAL,
-        // 所以需要先将目标 mip 从 SHADER_READ_ONLY 转到 COLOR_ATTACHMENT
-        {
-            VkImageMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.image = m_bloomMipImage;
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseMipLevel = static_cast<uint32_t>(i);
-            barrier.subresourceRange.levelCount = 1;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-            barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-            vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                0, 0, nullptr, 0, nullptr, 1, &barrier);
-        }
-
-        // 描述符已在 init 绑定 mip[i+1]，无需每帧更新
+        // up image 使用 UNDEFINED initialLayout，不需要手动 barrier
 
         VkRenderPassBeginInfo rpBegin{};
         rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1336,17 +1340,20 @@ void PostProcessPipeline::resize(uint32_t width, uint32_t height) {
         writeDescriptorBinding(device, m_bloomDownsampleSets[0], 0, m_boundSceneHDR ? m_boundSceneHDR : m_blackFallbackView, m_linearSampler);
         writeDescriptorBinding(device, m_bloomDownsampleSets[0], 1, m_blackFallbackView, m_linearSampler);
         for (int i = 1; i < MAX_BLOOM_MIPS; i++) {
-            writeDescriptorBinding(device, m_bloomDownsampleSets[i], 0, m_bloomMipViews[i - 1], m_linearSampler);
+            writeDescriptorBinding(device, m_bloomDownsampleSets[i], 0, m_bloomDownMipViews[i - 1], m_linearSampler);
             writeDescriptorBinding(device, m_bloomDownsampleSets[i], 1, m_blackFallbackView, m_linearSampler);
         }
         for (int i = 0; i < MAX_BLOOM_MIPS - 1; i++) {
-            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, m_bloomMipViews[i + 1], m_linearSampler);
-            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 1, m_blackFallbackView, m_linearSampler);
+            VkImageView deeperView = (i == MAX_BLOOM_MIPS - 2)
+                ? m_bloomDownMipViews[i + 1]
+                : m_bloomUpMipViews[i + 1];
+            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, deeperView, m_linearSampler);
+            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 1, m_bloomDownMipViews[i], m_linearSampler);
         }
         writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 0, m_blackFallbackView, m_linearSampler);
         writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 1, m_blackFallbackView, m_linearSampler);
         writeDescriptorBinding(device, m_compositeSet, 0, m_boundSceneHDR ? m_boundSceneHDR : m_blackFallbackView, m_linearSampler);
-        writeDescriptorBinding(device, m_compositeSet, 1, m_bloomMipViews[0], m_linearSampler);
+        writeDescriptorBinding(device, m_compositeSet, 1, m_bloomUpMipViews[0], m_linearSampler);
         writeDescriptorBinding(device, m_fxaaSet, 0, m_compositeImageView, m_linearSampler);
         writeDescriptorBinding(device, m_fxaaSet, 1, m_blackFallbackView, m_linearSampler);
     }
