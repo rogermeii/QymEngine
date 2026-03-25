@@ -642,8 +642,9 @@ bool UIAutomation::saveScreenshot(Renderer& renderer, const std::string& path) {
     // Wait for all GPU operations to complete
     vkDeviceWaitIdle(device);
 
-    // Create staging buffer
-    VkDeviceSize imageSize = width * height * 4;
+    // Offscreen 格式为 R16G16B16A16_SFLOAT (8 字节/像素)
+    const uint32_t srcBytesPerPixel = 8; // half float RGBA
+    VkDeviceSize imageSize = (VkDeviceSize)width * height * srcBytesPerPixel;
 
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingMemory;
@@ -731,14 +732,46 @@ bool UIAutomation::saveScreenshot(Renderer& renderer, const std::string& path) {
     void* data;
     vkMapMemory(device, stagingMemory, 0, imageSize, 0, &data);
 
-    // Format is B8G8R8A8_SRGB, need to swizzle B and R for PNG (RGBA)
+    // Offscreen 格式 R16G16B16A16_SFLOAT → 转换为 RGBA8
+    // half float (16-bit IEEE 754) → uint8 [0,255]
     std::vector<uint8_t> pixels(width * height * 4);
-    const uint8_t* src = static_cast<const uint8_t*>(data);
+    const uint16_t* src16 = static_cast<const uint16_t*>(data);
+
+    // half float → float 转换辅助 lambda
+    auto halfToFloat = [](uint16_t h) -> float {
+        uint32_t sign = (h >> 15) & 0x1;
+        uint32_t exp = (h >> 10) & 0x1f;
+        uint32_t mant = h & 0x3ff;
+        if (exp == 0) {
+            if (mant == 0) return sign ? -0.0f : 0.0f;
+            // 非规格化数
+            float f = (float)mant / 1024.0f;
+            return sign ? -f * (1.0f / 16384.0f) : f * (1.0f / 16384.0f);
+        }
+        if (exp == 31) return mant ? 0.0f : (sign ? -1e30f : 1e30f); // Inf/NaN → clamp
+        float f = (float)(mant + 1024) / 1024.0f;
+        f *= powf(2.0f, (float)exp - 15.0f);
+        return sign ? -f : f;
+    };
+
     for (uint32_t i = 0; i < width * height; i++) {
-        pixels[i * 4 + 0] = src[i * 4 + 2]; // R <- B
-        pixels[i * 4 + 1] = src[i * 4 + 1]; // G <- G
-        pixels[i * 4 + 2] = src[i * 4 + 0]; // B <- R
-        pixels[i * 4 + 3] = src[i * 4 + 3]; // A <- A
+        // 每像素 4 个 half float (RGBA)
+        float r = halfToFloat(src16[i * 4 + 0]);
+        float g = halfToFloat(src16[i * 4 + 1]);
+        float b = halfToFloat(src16[i * 4 + 2]);
+        float a = halfToFloat(src16[i * 4 + 3]);
+
+        // 简单 tone mapping + gamma: linear → sRGB
+        auto toSRGB = [](float v) -> uint8_t {
+            v = std::max(0.0f, std::min(1.0f, v));
+            // 近似 sRGB gamma
+            v = powf(v, 1.0f / 2.2f);
+            return (uint8_t)(v * 255.0f + 0.5f);
+        };
+        pixels[i * 4 + 0] = toSRGB(r);
+        pixels[i * 4 + 1] = toSRGB(g);
+        pixels[i * 4 + 2] = toSRGB(b);
+        pixels[i * 4 + 3] = (uint8_t)(std::max(0.0f, std::min(1.0f, a)) * 255.0f + 0.5f);
     }
 
     vkUnmapMemory(device, stagingMemory);
