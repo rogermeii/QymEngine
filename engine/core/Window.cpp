@@ -1,5 +1,7 @@
 #include "Window.h"
 #include <stdexcept>
+#include <string>
+#include "stb_image.h"
 
 namespace QymEngine {
 
@@ -39,6 +41,25 @@ Window::Window(const WindowProps& props)
 
     if (!m_window)
         throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
+
+    // 设置窗口图标
+#ifndef __ANDROID__
+    {
+        std::string iconPath = std::string(ASSETS_DIR) + "/branding/icon_32.png";
+        int w, h, channels;
+        unsigned char* pixels = stbi_load(iconPath.c_str(), &w, &h, &channels, 4);
+        if (pixels) {
+            SDL_Surface* surface = SDL_CreateRGBSurfaceFrom(
+                pixels, w, h, 32, w * 4,
+                0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+            if (surface) {
+                SDL_SetWindowIcon(m_window, surface);
+                SDL_FreeSurface(surface);
+            }
+            stbi_image_free(pixels);
+        }
+    }
+#endif
 
     // Update actual size when maximized
     if (props.maximized) {

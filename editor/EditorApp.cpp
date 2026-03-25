@@ -332,7 +332,35 @@ void EditorApp::onUpdate()
             ImGui::EndMenu();
         }
 #endif
+        if (ImGui::BeginMenu("Help")) {
+            if (ImGui::MenuItem("About QymEngine"))
+                m_showAbout = true;
+            ImGui::EndMenu();
+        }
         ImGui::EndMainMenuBar();
+    }
+
+    // About 对话框
+    if (m_showAbout) {
+        ImGui::OpenPopup("About QymEngine");
+        m_showAbout = false;
+    }
+    if (ImGui::BeginPopupModal("About QymEngine", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("QymEngine v0.1.0");
+        ImGui::Separator();
+        ImGui::Text("Vulkan-based 3D Game Engine");
+        ImGui::Text("Built with C++17, Vulkan 1.4, Slang Shaders");
+        ImGui::Spacing();
+        ImGui::Text("Features:");
+        ImGui::BulletText("PBR Rendering (Cook-Torrance GGX)");
+        ImGui::BulletText("Image-Based Lighting (IBL)");
+        ImGui::BulletText("Post-Processing (Bloom, FXAA, DOF, Vignette)");
+        ImGui::BulletText("Shadow Mapping (PCF)");
+        ImGui::BulletText("Multi-backend (Vulkan/D3D12/D3D11/OpenGL)");
+        ImGui::Spacing();
+        if (ImGui::Button("OK", ImVec2(120, 0)))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
 
     // Save As popup

@@ -67,6 +67,7 @@ private:
     bool m_firstFrame = true;
     std::string m_currentScenePath;
     bool m_showSaveAsPopup = false;
+    bool m_showAbout = false;
     char m_saveAsBuffer[256] = {};
     bool m_sceneDirty = false;
 
