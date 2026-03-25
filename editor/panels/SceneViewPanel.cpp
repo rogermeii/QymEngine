@@ -67,8 +67,8 @@ void SceneViewPanel::onImGuiRender(Renderer& renderer, Camera& camera, Scene& sc
         m_resizePending = true;
     }
 
-    // Ensure we have a valid descriptor set
-    if (m_descriptorSet == VK_NULL_HANDLE && renderer.isOffscreenReady())
+    // 每帧检查 display image view 是否变化（后处理输出可能与 offscreen 不同）
+    if (renderer.isOffscreenReady())
     {
         recreateDescriptorSet(renderer, scene);
     }
