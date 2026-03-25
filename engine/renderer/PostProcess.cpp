@@ -496,18 +496,32 @@ void PostProcessPipeline::init(VulkanContext& ctx, DescriptorLayoutCache& layout
         m_compositeSet = sets[idx++];
         m_fxaaSet = sets[idx++];
 
-        // 用黑色备用纹理初始化所有描述符集
-        for (int i = 0; i < MAX_BLOOM_MIPS; i++) {
-            writeDescriptorBinding(device, m_bloomDownsampleSets[i], 0, m_blackFallbackView, m_linearSampler);
+        // 一次性写入所有描述符集的最终绑定（运行时不再更新，避免双缓冲竞争）
+
+        // Bloom downsample: set[0] 输入是 sceneHDR（由 Renderer 外部传入，此处暂绑 blackFallback）
+        // set[i>0] 输入是 mip[i-1]
+        writeDescriptorBinding(device, m_bloomDownsampleSets[0], 0, m_blackFallbackView, m_linearSampler);
+        writeDescriptorBinding(device, m_bloomDownsampleSets[0], 1, m_blackFallbackView, m_linearSampler);
+        for (int i = 1; i < MAX_BLOOM_MIPS; i++) {
+            writeDescriptorBinding(device, m_bloomDownsampleSets[i], 0, m_bloomMipViews[i - 1], m_linearSampler);
             writeDescriptorBinding(device, m_bloomDownsampleSets[i], 1, m_blackFallbackView, m_linearSampler);
         }
-        for (int i = 0; i < MAX_BLOOM_MIPS; i++) {
-            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, m_blackFallbackView, m_linearSampler);
+
+        // Bloom upsample: set[i] 输入是 mip[i+1]
+        for (int i = 0; i < MAX_BLOOM_MIPS - 1; i++) {
+            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, m_bloomMipViews[i + 1], m_linearSampler);
             writeDescriptorBinding(device, m_bloomUpsampleSets[i], 1, m_blackFallbackView, m_linearSampler);
         }
+        writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 0, m_blackFallbackView, m_linearSampler);
+        writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 1, m_blackFallbackView, m_linearSampler);
+
+        // Composite: binding 0 = sceneHDR（暂绑 blackFallback，需要在首帧 execute 前更新一次）
+        //            binding 1 = bloom mip 0（始终绑定，shader 通过 push constant 控制是否采样）
         writeDescriptorBinding(device, m_compositeSet, 0, m_blackFallbackView, m_linearSampler);
-        writeDescriptorBinding(device, m_compositeSet, 1, m_blackFallbackView, m_linearSampler);
-        writeDescriptorBinding(device, m_fxaaSet, 0, m_blackFallbackView, m_linearSampler);
+        writeDescriptorBinding(device, m_compositeSet, 1, m_bloomMipViews[0], m_linearSampler);
+
+        // FXAA: binding 0 = composite output
+        writeDescriptorBinding(device, m_fxaaSet, 0, m_compositeImageView, m_linearSampler);
         writeDescriptorBinding(device, m_fxaaSet, 1, m_blackFallbackView, m_linearSampler);
     }
 }
@@ -929,12 +943,19 @@ void PostProcessPipeline::destroyPipelines() {
 
 void PostProcessPipeline::execute(VkCommandBuffer cmd, VkImageView sceneHDR,
                                    const PostProcessSettings& settings) {
-    VkImageView bloomResult = m_blackFallbackView;
+    // 首次调用时绑定 sceneHDR（init 时还不知道这个 view）
+    if (m_boundSceneHDR != sceneHDR) {
+        VkDevice device = m_context->getDevice();
+        vkDeviceWaitIdle(device);  // 确保之前的帧不再引用旧描述符
+        writeDescriptorBinding(device, m_bloomDownsampleSets[0], 0, sceneHDR, m_linearSampler);
+        writeDescriptorBinding(device, m_compositeSet, 0, sceneHDR, m_linearSampler);
+        m_boundSceneHDR = sceneHDR;
+    }
+
     if (settings.bloomEnabled) {
         executeBloom(cmd, sceneHDR, settings);
-        bloomResult = m_bloomMipViews[0];
     }
-    executeComposite(cmd, sceneHDR, bloomResult, settings);
+    executeComposite(cmd, sceneHDR, m_bloomMipViews[0], settings);
     if (settings.fxaaEnabled) {
         executeFxaa(cmd, settings);
     }
@@ -959,8 +980,7 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
         uint32_t fbW = mip0W;
         uint32_t fbH = mip0H;
 
-        // 更新描述符: 输入是 sceneHDR
-        writeDescriptorBinding(device, m_bloomDownsampleSets[0], 0, sceneHDR, m_linearSampler);
+        // 描述符已在 init/首帧绑定，无需每帧更新
 
         VkRenderPassBeginInfo rpBegin{};
         rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1011,8 +1031,7 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
         uint32_t fbW = std::max(mip0W >> i, 1u);
         uint32_t fbH = std::max(mip0H >> i, 1u);
 
-        // 更新描述符: 输入是前一个 mip (已经是 SHADER_READ_ONLY 布局, 由 renderpass finalLayout 保证)
-        writeDescriptorBinding(device, m_bloomDownsampleSets[i], 0, m_bloomMipViews[i - 1], m_linearSampler);
+        // 描述符已在 init 绑定 mip[i-1]，无需每帧更新
 
         VkRenderPassBeginInfo rpBegin{};
         rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1083,8 +1102,7 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
                 0, 0, nullptr, 0, nullptr, 1, &barrier);
         }
 
-        // 输入是下一级 mip (已经是 SHADER_READ_ONLY)
-        writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, m_bloomMipViews[i + 1], m_linearSampler);
+        // 描述符已在 init 绑定 mip[i+1]，无需每帧更新
 
         VkRenderPassBeginInfo rpBegin{};
         rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1139,11 +1157,7 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
 void PostProcessPipeline::executeComposite(VkCommandBuffer cmd, VkImageView sceneHDR,
                                             VkImageView bloomTexture,
                                             const PostProcessSettings& settings) {
-    VkDevice device = m_context->getDevice();
-
-    // 更新描述符: binding 0 = sceneHDR, binding 1 = bloomTexture
-    writeDescriptorBinding(device, m_compositeSet, 0, sceneHDR, m_linearSampler);
-    writeDescriptorBinding(device, m_compositeSet, 1, bloomTexture, m_linearSampler);
+    // 描述符已在 init 绑定 sceneHDR + bloom mip0，无需每帧更新
 
     VkRenderPassBeginInfo rpBegin{};
     rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1196,10 +1210,7 @@ void PostProcessPipeline::executeComposite(VkCommandBuffer cmd, VkImageView scen
 // ========================================================================
 
 void PostProcessPipeline::executeFxaa(VkCommandBuffer cmd, const PostProcessSettings& settings) {
-    VkDevice device = m_context->getDevice();
-
-    // 更新描述符: binding 0 = composite output
-    writeDescriptorBinding(device, m_fxaaSet, 0, m_compositeImageView, m_linearSampler);
+    // 描述符已在 init 绑定 compositeImageView，无需每帧更新
 
     VkRenderPassBeginInfo rpBegin{};
     rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1321,18 +1332,22 @@ void PostProcessPipeline::resize(uint32_t width, uint32_t height) {
         m_compositeSet = sets[idx++];
         m_fxaaSet = sets[idx++];
 
-        // 用黑色备用纹理初始化
-        for (int i = 0; i < MAX_BLOOM_MIPS; i++) {
-            writeDescriptorBinding(device, m_bloomDownsampleSets[i], 0, m_blackFallbackView, m_linearSampler);
+        // 与 init 相同的描述符绑定
+        writeDescriptorBinding(device, m_bloomDownsampleSets[0], 0, m_boundSceneHDR ? m_boundSceneHDR : m_blackFallbackView, m_linearSampler);
+        writeDescriptorBinding(device, m_bloomDownsampleSets[0], 1, m_blackFallbackView, m_linearSampler);
+        for (int i = 1; i < MAX_BLOOM_MIPS; i++) {
+            writeDescriptorBinding(device, m_bloomDownsampleSets[i], 0, m_bloomMipViews[i - 1], m_linearSampler);
             writeDescriptorBinding(device, m_bloomDownsampleSets[i], 1, m_blackFallbackView, m_linearSampler);
         }
-        for (int i = 0; i < MAX_BLOOM_MIPS; i++) {
-            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, m_blackFallbackView, m_linearSampler);
+        for (int i = 0; i < MAX_BLOOM_MIPS - 1; i++) {
+            writeDescriptorBinding(device, m_bloomUpsampleSets[i], 0, m_bloomMipViews[i + 1], m_linearSampler);
             writeDescriptorBinding(device, m_bloomUpsampleSets[i], 1, m_blackFallbackView, m_linearSampler);
         }
-        writeDescriptorBinding(device, m_compositeSet, 0, m_blackFallbackView, m_linearSampler);
-        writeDescriptorBinding(device, m_compositeSet, 1, m_blackFallbackView, m_linearSampler);
-        writeDescriptorBinding(device, m_fxaaSet, 0, m_blackFallbackView, m_linearSampler);
+        writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 0, m_blackFallbackView, m_linearSampler);
+        writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 1, m_blackFallbackView, m_linearSampler);
+        writeDescriptorBinding(device, m_compositeSet, 0, m_boundSceneHDR ? m_boundSceneHDR : m_blackFallbackView, m_linearSampler);
+        writeDescriptorBinding(device, m_compositeSet, 1, m_bloomMipViews[0], m_linearSampler);
+        writeDescriptorBinding(device, m_fxaaSet, 0, m_compositeImageView, m_linearSampler);
         writeDescriptorBinding(device, m_fxaaSet, 1, m_blackFallbackView, m_linearSampler);
     }
 }

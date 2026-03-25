@@ -130,6 +130,7 @@ private:
     VulkanContext* m_context = nullptr;
     DescriptorLayoutCache* m_layoutCache = nullptr;
     uint32_t m_width = 0, m_height = 0;
+    VkImageView m_boundSceneHDR = VK_NULL_HANDLE;  // 缓存已绑定的 sceneHDR view
 };
 
 } // namespace QymEngine
