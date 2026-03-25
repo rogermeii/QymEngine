@@ -1,0 +1,113 @@
+name: Windows Backend Regression
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/windows-backend-regression.yml"
+      - "CMakeLists.txt"
+      - "engine/**"
+      - "editor/**"
+      - "scripts/**"
+      - "assets/shaders/**"
+      - "tools/shader_compiler/**"
+      - "3rd-party/glad/**"
+      - "3rd-party/spirv-reflect/**"
+      - "android-cmake/**"
+  pull_request:
+    paths:
+      - ".github/workflows/windows-backend-regression.yml"
+      - "CMakeLists.txt"
+      - "engine/**"
+      - "editor/**"
+      - "scripts/**"
+      - "assets/shaders/**"
+      - "tools/shader_compiler/**"
+      - "3rd-party/glad/**"
+      - "3rd-party/spirv-reflect/**"
+      - "android-cmake/**"
+
+jobs:
+  smoke:
+    name: Windows 5-backend smoke
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pillow
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=1.4.309.0 -y --no-progress
+          $vkDir = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $vkDir) {
+            throw "Vulkan SDK installation not found under C:\VulkanSDK"
+          }
+          "VULKAN_SDK=$($vkDir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$($vkDir.FullName)\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -S . -B build3 -G "Visual Studio 17 2022" -A x64
+
+      - name: Build Editor
+        shell: pwsh
+        run: |
+          cmake --build build3 --config Debug --target QymEditor -- /m:4
+
+      - name: Run Windows backend regression
+        shell: pwsh
+        env:
+          QYMENGINE_NO_RENDERDOC: "1"
+        run: |
+          python scripts/verify_backends.py --windows-only
+
+      - name: Publish regression summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "captures/verify/backend_regression/summary.txt") {
+            Get-Content "captures/verify/backend_regression/summary.txt" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          }
+
+      - name: Upload regression summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-backend-regression-summary
+          path: |
+            captures/verify/backend_regression/results.json
+            captures/verify/backend_regression/summary.txt
+          if-no-files-found: warn
+
+      - name: Upload regression screenshots artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-backend-regression-screenshots
+          path: |
+            captures/verify/backend_regression/*.png
+          if-no-files-found: warn
+
+      - name: Upload regression logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-backend-regression-logs
+          path: |
+            captures/verify/backend_regression/*.log
+          if-no-files-found: warn

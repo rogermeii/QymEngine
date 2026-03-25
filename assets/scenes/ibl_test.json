@@ -1,0 +1,149 @@
+{
+  "scene": {
+    "name": "IBL Test Scene",
+    "nodes": [
+      {
+        "name": "Ground",
+        "nodeType": "Mesh",
+        "meshType": "Plane",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [0.0, -0.5, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [15.0, 1.0, 15.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Metal Smooth Sphere",
+        "nodeType": "Mesh",
+        "meshType": "Sphere",
+        "meshPath": "",
+        "materialPath": "materials/metal_smooth.mat.json",
+        "transform": {
+          "position": [-4.0, 0.5, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Gold Sphere",
+        "nodeType": "Mesh",
+        "meshType": "Sphere",
+        "meshPath": "",
+        "materialPath": "materials/gold.mat.json",
+        "transform": {
+          "position": [-1.5, 0.5, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Metal Rough Sphere",
+        "nodeType": "Mesh",
+        "meshType": "Sphere",
+        "meshPath": "",
+        "materialPath": "materials/metal_rough.mat.json",
+        "transform": {
+          "position": [1.0, 0.5, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Red Plastic Sphere",
+        "nodeType": "Mesh",
+        "meshType": "Sphere",
+        "meshPath": "",
+        "materialPath": "materials/plastic_red.mat.json",
+        "transform": {
+          "position": [3.5, 0.5, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Default Sphere",
+        "nodeType": "Mesh",
+        "meshType": "Sphere",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [6.0, 0.5, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Metal Smooth Cube",
+        "nodeType": "Mesh",
+        "meshType": "Cube",
+        "meshPath": "",
+        "materialPath": "materials/metal_smooth.mat.json",
+        "transform": {
+          "position": [-2.5, 0.5, -3.0],
+          "rotation": [0.0, 30.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Gold Cube",
+        "nodeType": "Mesh",
+        "meshType": "Cube",
+        "meshPath": "",
+        "materialPath": "materials/gold.mat.json",
+        "transform": {
+          "position": [2.5, 0.5, -3.0],
+          "rotation": [0.0, -30.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Sun Light",
+        "nodeType": "DirectionalLight",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [0.0, 5.0, 0.0],
+          "rotation": [-45.0, -30.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "lightColor": [1.0, 0.95, 0.85],
+        "lightIntensity": 1.2,
+        "children": []
+      }
+    ],
+    "postProcess": {
+      "bloomEnabled": true,
+      "bloomThreshold": 1.0,
+      "bloomIntensity": 0.3,
+      "bloomMipCount": 5,
+      "toneMappingEnabled": true,
+      "exposure": 1.0,
+      "autoExposureEnabled": false,
+      "colorGradingEnabled": true,
+      "contrast": 1.0,
+      "saturation": 1.0,
+      "temperature": 0.0,
+      "tint": 0.0,
+      "brightness": 0.0,
+      "vignetteEnabled": true,
+      "vignetteIntensity": 0.2,
+      "vignetteSmoothness": 0.8,
+      "dofEnabled": false,
+      "fxaaEnabled": true,
+      "fxaaSubpixQuality": 0.75,
+      "fxaaEdgeThreshold": 0.166,
+      "fxaaEdgeThresholdMin": 0.0833
+    }
+  }
+}

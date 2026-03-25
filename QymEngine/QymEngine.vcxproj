@@ -104,13 +104,13 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>..\3rd-party\glfw-3.4.bin.WIN64\include;..\3rd-party\glm-1.0.1-light;C:\VulkanSDK\1.3.296.0\Include;..\3rd-party\stb-master;..\3rd-party\tinyobjloader;..\3rd-party\imgui-docking;..\3rd-party\imgui-docking\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\3rd-party\glfw-3.4.bin.WIN64\include;..\3rd-party\glm-1.0.1-light;C:\VulkanSDK\1.4.309.0\Include;..\3rd-party\stb-master;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>..\3rd-party\glfw-3.4.bin.WIN64\lib-vc2022;C:\VulkanSDK\1.3.296.0\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>..\3rd-party\glfw-3.4.bin.WIN64\lib-vc2022;C:\VulkanSDK\1.4.309.0\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>glfw3.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
@@ -122,35 +122,23 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>..\3rd-party\glfw-3.4.bin.WIN64\include;..\3rd-party\glm-1.0.1-light;C:\VulkanSDK\1.3.296.0\Include;..\3rd-party\stb-master;..\3rd-party\tinyobjloader;..\3rd-party\imgui-docking;..\3rd-party\imgui-docking\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\3rd-party\glfw-3.4.bin.WIN64\include;..\3rd-party\glm-1.0.1-light;C:\VulkanSDK\1.4.309.0\Include;..\3rd-party\stb-master;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>..\3rd-party\glfw-3.4.bin.WIN64\lib-vc2022;C:\VulkanSDK\1.3.296.0\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>..\3rd-party\glfw-3.4.bin.WIN64\lib-vc2022;C:\VulkanSDK\1.4.309.0\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>glfw3.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\3rd-party\imgui-docking\backends\imgui_impl_glfw.cpp" />
-    <ClCompile Include="..\3rd-party\imgui-docking\backends\imgui_impl_vulkan.cpp" />
-    <ClCompile Include="..\3rd-party\imgui-docking\imgui.cpp" />
-    <ClCompile Include="..\3rd-party\imgui-docking\imgui_demo.cpp" />
-    <ClCompile Include="..\3rd-party\imgui-docking\imgui_draw.cpp" />
-    <ClCompile Include="..\3rd-party\imgui-docking\imgui_tables.cpp" />
-    <ClCompile Include="..\3rd-party\imgui-docking\imgui_widgets.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="Path.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="shaders\Particle.comp" />
     <Content Include="shaders\Triangle.frag" />
     <Content Include="shaders\Triangle.vert" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="Path.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

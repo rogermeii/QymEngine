@@ -1,0 +1,9 @@
+{
+  "name": "Default Lit",
+  "shader": "shaders/standard_lit.shader.json",
+  "properties": {
+    "baseColor": [1, 1, 1, 1],
+    "metallic": 0.0,
+    "roughness": 0.5
+  }
+}

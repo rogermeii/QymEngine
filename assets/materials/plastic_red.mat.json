@@ -1,0 +1,9 @@
+{
+  "name": "Red Plastic",
+  "shader": "shaders/standard_lit.shader.json",
+  "properties": {
+    "baseColor": [0.9, 0.1, 0.1, 1],
+    "metallic": 0.0,
+    "roughness": 0.3
+  }
+}

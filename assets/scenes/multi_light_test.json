@@ -1,0 +1,124 @@
+{
+  "scene": {
+    "name": "Multi-Light Test",
+    "nodes": [
+      {
+        "name": "Ground",
+        "nodeType": "Mesh",
+        "meshType": "Plane",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [0.0, -0.5, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [10.0, 1.0, 10.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Center Cube",
+        "nodeType": "Mesh",
+        "meshType": "Cube",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [0.0, 0.0, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "children": []
+      },
+      {
+        "name": "Sphere",
+        "nodeType": "Mesh",
+        "meshType": "Sphere",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [2.5, 0.0, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [0.8, 0.8, 0.8]
+        },
+        "children": []
+      },
+      {
+        "name": "Sphere 2",
+        "nodeType": "Mesh",
+        "meshType": "Sphere",
+        "meshPath": "",
+        "materialPath": "materials/default_lit.mat.json",
+        "transform": {
+          "position": [-2.5, 0.0, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [0.8, 0.8, 0.8]
+        },
+        "children": []
+      },
+      {
+        "name": "Sun Light",
+        "nodeType": "DirectionalLight",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [0.0, 5.0, 0.0],
+          "rotation": [-50.0, -30.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "lightColor": [1.0, 0.95, 0.85],
+        "lightIntensity": 0.5,
+        "children": []
+      },
+      {
+        "name": "Red Point Light",
+        "nodeType": "PointLight",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [-2.0, 1.5, 1.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "lightColor": [1.0, 0.2, 0.1],
+        "lightIntensity": 3.0,
+        "lightRange": 8.0,
+        "children": []
+      },
+      {
+        "name": "Blue Point Light",
+        "nodeType": "PointLight",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [2.0, 1.5, -1.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "lightColor": [0.1, 0.3, 1.0],
+        "lightIntensity": 3.0,
+        "lightRange": 8.0,
+        "children": []
+      },
+      {
+        "name": "Green Spot Light",
+        "nodeType": "SpotLight",
+        "meshType": "None",
+        "meshPath": "",
+        "materialPath": "",
+        "transform": {
+          "position": [0.0, 3.0, 2.5],
+          "rotation": [-60.0, 0.0, 0.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "lightColor": [0.2, 1.0, 0.3],
+        "lightIntensity": 5.0,
+        "lightRange": 10.0,
+        "spotInnerAngle": 15.0,
+        "spotOuterAngle": 25.0,
+        "children": []
+      }
+    ]
+  }
+}
