@@ -15,6 +15,9 @@ struct CompositePushConstant {
     float temperature;
     float tint;
     float brightness;
+    int vignetteEnabled;
+    float vignetteIntensity;
+    float vignetteSmoothness;
 };
 
 [[vk::push_constant]] CompositePushConstant pc;
@@ -96,6 +99,14 @@ float4 fragmentMain(VSOutput input) : SV_Target {
         color = adjustSaturation(color, pc.saturation);
         color = adjustTemperature(color, pc.temperature, pc.tint);
         color += pc.brightness;
+    }
+
+    // Vignette: 径向暗角
+    if (pc.vignetteEnabled != 0) {
+        float2 center = input.uv - 0.5;
+        float dist = dot(center, center);
+        float vignette = smoothstep(pc.vignetteSmoothness, pc.vignetteSmoothness * 0.5, dist * (pc.vignetteIntensity * 4.0));
+        color *= vignette;
     }
 
     color = linearToSRGB(saturate(color));

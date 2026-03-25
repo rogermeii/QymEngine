@@ -38,8 +38,12 @@ struct CompositePushConstant {
     float temperature;
     float tint;
     float brightness;
+    int32_t vignetteEnabled;
+    float vignetteIntensity;
+    float vignetteSmoothness;
+    float _pad0;  // 对齐到 64 字节
 };
-static_assert(sizeof(CompositePushConstant) == 48, "CompositePushConstant size mismatch");
+static_assert(sizeof(CompositePushConstant) == 64, "CompositePushConstant size mismatch");
 
 struct FxaaPushConstant {
     float texelSize[2];
@@ -1204,6 +1208,9 @@ void PostProcessPipeline::executeComposite(VkCommandBuffer cmd, VkImageView scen
     pc.temperature = settings.temperature;
     pc.tint = settings.tint;
     pc.brightness = settings.brightness;
+    pc.vignetteEnabled = settings.vignetteEnabled ? 1 : 0;
+    pc.vignetteIntensity = settings.vignetteIntensity;
+    pc.vignetteSmoothness = settings.vignetteSmoothness;
 
     vkCmdPushConstants(cmd, m_compositeLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

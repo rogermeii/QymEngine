@@ -33,6 +33,14 @@ void PostProcessPanel::onImGuiRender(Scene& scene) {
         }
     }
 
+    if (ImGui::CollapsingHeader("Vignette", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("启用##vignette", &pp.vignetteEnabled);
+        if (pp.vignetteEnabled) {
+            ImGui::SliderFloat("强度##vignette", &pp.vignetteIntensity, 0.0f, 1.0f);
+            ImGui::SliderFloat("平滑度", &pp.vignetteSmoothness, 0.01f, 2.0f);
+        }
+    }
+
     if (ImGui::CollapsingHeader("FXAA", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("启用##fxaa", &pp.fxaaEnabled);
         if (pp.fxaaEnabled) {

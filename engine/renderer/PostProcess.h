@@ -25,6 +25,11 @@ struct PostProcessSettings {
     float tint = 0.0f;
     float brightness = 0.0f;
 
+    // Vignette
+    bool  vignetteEnabled = true;
+    float vignetteIntensity = 0.3f;
+    float vignetteSmoothness = 0.8f;
+
     // FXAA
     bool  fxaaEnabled = true;
     float fxaaSubpixQuality = 0.75f;
@@ -39,6 +44,8 @@ struct PostProcessSettings {
         temperature = std::clamp(temperature, -1.0f, 1.0f);
         tint = std::clamp(tint, -1.0f, 1.0f);
         brightness = std::clamp(brightness, -1.0f, 1.0f);
+        vignetteIntensity = std::clamp(vignetteIntensity, 0.0f, 1.0f);
+        vignetteSmoothness = std::clamp(vignetteSmoothness, 0.01f, 2.0f);
     }
 };
 

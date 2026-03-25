@@ -195,6 +195,9 @@ void Scene::serialize(const std::string& path) const {
         {"temperature", pp.temperature},
         {"tint", pp.tint},
         {"brightness", pp.brightness},
+        {"vignetteEnabled", pp.vignetteEnabled},
+        {"vignetteIntensity", pp.vignetteIntensity},
+        {"vignetteSmoothness", pp.vignetteSmoothness},
         {"fxaaEnabled", pp.fxaaEnabled},
         {"fxaaSubpixQuality", pp.fxaaSubpixQuality},
         {"fxaaEdgeThreshold", pp.fxaaEdgeThreshold},
@@ -238,6 +241,9 @@ void Scene::deserialize(const std::string& path) {
             pp.temperature = ppj.value("temperature", 0.0f);
             pp.tint = ppj.value("tint", 0.0f);
             pp.brightness = ppj.value("brightness", 0.0f);
+            pp.vignetteEnabled = ppj.value("vignetteEnabled", true);
+            pp.vignetteIntensity = ppj.value("vignetteIntensity", 0.3f);
+            pp.vignetteSmoothness = ppj.value("vignetteSmoothness", 0.8f);
             pp.fxaaEnabled = ppj.value("fxaaEnabled", true);
             pp.fxaaSubpixQuality = ppj.value("fxaaSubpixQuality", 0.75f);
             pp.fxaaEdgeThreshold = ppj.value("fxaaEdgeThreshold", 0.166f);
@@ -300,6 +306,9 @@ std::string Scene::toJsonString() const {
         {"temperature", pp.temperature},
         {"tint", pp.tint},
         {"brightness", pp.brightness},
+        {"vignetteEnabled", pp.vignetteEnabled},
+        {"vignetteIntensity", pp.vignetteIntensity},
+        {"vignetteSmoothness", pp.vignetteSmoothness},
         {"fxaaEnabled", pp.fxaaEnabled},
         {"fxaaSubpixQuality", pp.fxaaSubpixQuality},
         {"fxaaEdgeThreshold", pp.fxaaEdgeThreshold},
@@ -339,6 +348,9 @@ void Scene::fromJsonString(const std::string& jsonStr) {
         pp.temperature = ppj.value("temperature", 0.0f);
         pp.tint = ppj.value("tint", 0.0f);
         pp.brightness = ppj.value("brightness", 0.0f);
+        pp.vignetteEnabled = ppj.value("vignetteEnabled", true);
+        pp.vignetteIntensity = ppj.value("vignetteIntensity", 0.3f);
+        pp.vignetteSmoothness = ppj.value("vignetteSmoothness", 0.8f);
         pp.fxaaEnabled = ppj.value("fxaaEnabled", true);
         pp.fxaaSubpixQuality = ppj.value("fxaaSubpixQuality", 0.75f);
         pp.fxaaEdgeThreshold = ppj.value("fxaaEdgeThreshold", 0.166f);
