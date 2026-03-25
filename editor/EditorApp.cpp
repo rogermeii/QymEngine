@@ -495,6 +495,7 @@ void EditorApp::setupDockingLayout()
         ImGui::DockBuilderDockWindow("Hierarchy", dock_left);
         ImGui::DockBuilderDockWindow("Scene View", dock_main);
         ImGui::DockBuilderDockWindow("Inspector", dock_right);
+        ImGui::DockBuilderDockWindow("\xe5\x90\x8e\xe5\xa4\x84\xe7\x90\x86", dock_right);  // "后处理" tab 在 Inspector 旁
         ImGui::DockBuilderDockWindow("Project", dock_bottom);
         ImGui::DockBuilderDockWindow("Console", dock_bottom);
         ImGui::DockBuilderFinish(dockspace_id);

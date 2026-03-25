@@ -9,8 +9,8 @@ static constexpr int MAX_BLOOM_MIPS = 6;
 struct PostProcessSettings {
     // Bloom
     bool  bloomEnabled = true;
-    float bloomThreshold = 0.9f;
-    float bloomIntensity = 1.0f;
+    float bloomThreshold = 1.0f;
+    float bloomIntensity = 0.3f;
     int   bloomMipCount = 5;
 
     // Tone Mapping
