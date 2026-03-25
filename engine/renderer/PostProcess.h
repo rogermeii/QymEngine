@@ -33,6 +33,13 @@ struct PostProcessSettings {
     float vignetteIntensity = 0.3f;
     float vignetteSmoothness = 0.8f;
 
+    // DOF (Depth of Field)
+    bool  dofEnabled = false;
+    bool  dofAutoFocus = true;
+    float dofFocalDistance = 5.0f;
+    float dofFocalRange = 3.0f;
+    float dofMaxBlur = 8.0f;
+
     // FXAA
     bool  fxaaEnabled = true;
     float fxaaSubpixQuality = 0.75f;
@@ -51,6 +58,9 @@ struct PostProcessSettings {
         brightness = std::clamp(brightness, -1.0f, 1.0f);
         vignetteIntensity = std::clamp(vignetteIntensity, 0.0f, 1.0f);
         vignetteSmoothness = std::clamp(vignetteSmoothness, 0.01f, 2.0f);
+        dofFocalDistance = std::max(dofFocalDistance, 0.01f);
+        dofFocalRange = std::max(dofFocalRange, 0.01f);
+        dofMaxBlur = std::clamp(dofMaxBlur, 0.0f, 32.0f);
     }
 };
 
@@ -66,7 +76,10 @@ public:
     void reloadShaders();
 
     // sceneHDR image 必须处于 SHADER_READ_ONLY_OPTIMAL 布局
+    // depthView: 离屏深度图（DEPTH_STENCIL_READ_ONLY 布局），DOF 需要
+    // nearPlane/farPlane: 相机近远平面，用于深度线性化
     void execute(VkCommandBuffer cmd, VkImageView sceneHDR,
+                 VkImageView depthView, float nearPlane, float farPlane,
                  const PostProcessSettings& settings);
 
     VkImage     getFinalImage(const PostProcessSettings& settings) const;
@@ -75,6 +88,9 @@ public:
 private:
     void executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR,
                       const PostProcessSettings& settings);
+    void executeDof(VkCommandBuffer cmd, VkImageView sceneHDR,
+                    VkImageView depthView, float nearPlane, float farPlane,
+                    const PostProcessSettings& settings);
     void executeComposite(VkCommandBuffer cmd, VkImageView sceneHDR,
                           VkImageView bloomTexture,
                           const PostProcessSettings& settings);
@@ -82,6 +98,8 @@ private:
 
     void createBloomResources();
     void destroyBloomResources();
+    void createDofResources();
+    void destroyDofResources();
     void createLdrResources();
     void destroyLdrResources();
     void createPipelines();
@@ -100,6 +118,12 @@ private:
     VkDeviceMemory m_bloomUpMipMemory = VK_NULL_HANDLE;
     VkImageView    m_bloomUpMipViews[MAX_BLOOM_MIPS]{};
     VkFramebuffer  m_bloomUpsampleFBs[MAX_BLOOM_MIPS]{};
+
+    // DOF 资源
+    VkImage        m_dofImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_dofMemory = VK_NULL_HANDLE;
+    VkImageView    m_dofImageView = VK_NULL_HANDLE;
+    VkFramebuffer  m_dofFramebuffer = VK_NULL_HANDLE;
 
     // Composite 资源
     VkImage        m_compositeImage = VK_NULL_HANDLE;
@@ -123,6 +147,8 @@ private:
     VkPipelineLayout m_bloomDownsampleLayout = VK_NULL_HANDLE;
     VkPipeline       m_bloomUpsamplePipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_bloomUpsampleLayout = VK_NULL_HANDLE;
+    VkPipeline       m_dofPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_dofLayout = VK_NULL_HANDLE;
     VkPipeline       m_compositePipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_compositeLayout = VK_NULL_HANDLE;
     VkPipeline       m_fxaaPipeline = VK_NULL_HANDLE;
@@ -141,6 +167,7 @@ private:
     // 描述符集
     VkDescriptorSet m_bloomDownsampleSets[MAX_BLOOM_MIPS]{};
     VkDescriptorSet m_bloomUpsampleSets[MAX_BLOOM_MIPS]{};
+    VkDescriptorSet m_dofSet = VK_NULL_HANDLE;
     VkDescriptorSet m_compositeSet = VK_NULL_HANDLE;
     VkDescriptorSet m_fxaaSet = VK_NULL_HANDLE;
 
@@ -148,7 +175,12 @@ private:
     DescriptorLayoutCache* m_layoutCache = nullptr;
     uint32_t m_width = 0, m_height = 0;
     VkImageView m_boundSceneHDR = VK_NULL_HANDLE;  // 缓存已绑定的 sceneHDR view
+    VkImageView m_boundDepthView = VK_NULL_HANDLE; // 缓存已绑定的 depth view (DOF)
+    VkImageView m_boundCompositeInput = VK_NULL_HANDLE; // 缓存 composite 绑定的输入 view
     int m_lastBloomMipCount = -1;  // 缓存上次使用的 bloom mip 级数
+
+    // DOF 专用最近邻采样器（深度纹理使用 NEAREST 滤波避免插值伪影）
+    VkSampler m_nearestSampler = VK_NULL_HANDLE;
 };
 
 } // namespace QymEngine

@@ -47,6 +47,18 @@ void PostProcessPanel::onImGuiRender(Scene& scene) {
         }
     }
 
+    if (ImGui::CollapsingHeader("景深 (DOF)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("启用##dof", &pp.dofEnabled);
+        if (pp.dofEnabled) {
+            ImGui::Checkbox("自动对焦", &pp.dofAutoFocus);
+            if (!pp.dofAutoFocus) {
+                ImGui::DragFloat("焦距", &pp.dofFocalDistance, 0.1f, 0.01f, 200.0f, "%.1f m");
+            }
+            ImGui::DragFloat("焦点范围", &pp.dofFocalRange, 0.1f, 0.01f, 50.0f, "%.1f m");
+            ImGui::DragFloat("最大模糊", &pp.dofMaxBlur, 0.1f, 0.0f, 32.0f, "%.1f px");
+        }
+    }
+
     if (ImGui::CollapsingHeader("FXAA", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("启用##fxaa", &pp.fxaaEnabled);
         if (pp.fxaaEnabled) {

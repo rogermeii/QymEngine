@@ -408,7 +408,11 @@ void Renderer::drawScene(Scene& scene)
 
         // 后处理：在离屏渲染完成后执行
         auto& ppSettings = scene.getPostProcessSettings();
-        m_postProcess.execute(cmdBuf, m_offscreenImageView, ppSettings);
+        float nearPlane = m_camera ? m_camera->nearPlane : 0.1f;
+        float farPlane = m_camera ? m_camera->farPlane : 100.0f;
+        m_postProcess.execute(cmdBuf, m_offscreenImageView,
+                              m_offscreenDepthImageView, nearPlane, farPlane,
+                              ppSettings);
         m_displayImage = m_postProcess.getFinalImage(ppSettings);
         m_displayImageView = m_postProcess.getFinalImageView(ppSettings);
     }
@@ -1126,7 +1130,7 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         depthImageInfo.format        = VK_FORMAT_D32_SFLOAT;
         depthImageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
         depthImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        depthImageInfo.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        depthImageInfo.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         depthImageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
         depthImageInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -1205,11 +1209,11 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
         depthAttachment.format         = VK_FORMAT_D32_SFLOAT;
         depthAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
         depthAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depthAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;     // 保留深度数据供 DOF 采样
         depthAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depthAttachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-        depthAttachment.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAttachment.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;  // 渲染后转为可采样
 
         std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
 

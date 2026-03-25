@@ -57,6 +57,17 @@ struct FxaaPushConstant {
 };
 static_assert(sizeof(FxaaPushConstant) == 20, "FxaaPushConstant size mismatch");
 
+struct DofPushConstant {
+    float texelSize[2];
+    float focalDistance;
+    float focalRange;
+    float maxBlur;
+    int32_t autoFocus;
+    float nearPlane;
+    float farPlane;
+};
+static_assert(sizeof(DofPushConstant) == 32, "DofPushConstant size mismatch");
+
 // ========================================================================
 // 着色器变体/路径辅助函数 (与 Renderer.cpp 中的 static 函数保持一致)
 // ========================================================================
@@ -240,9 +251,10 @@ static void createFullscreenBundlePipeline(
 
 static void writeDescriptorBinding(VkDevice device, VkDescriptorSet set,
                                    uint32_t binding, VkImageView view,
-                                   VkSampler sampler) {
+                                   VkSampler sampler,
+                                   VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
     VkDescriptorImageInfo imgInfo{};
-    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imgInfo.imageLayout = layout;
     imgInfo.imageView = view;
     imgInfo.sampler = sampler;
 
@@ -417,6 +429,30 @@ void PostProcessPipeline::init(VulkanContext& ctx, DescriptorLayoutCache& layout
             throw std::runtime_error("failed to create post-process sampler!");
     }
 
+    // --- 1b. 最近邻采样器（深度纹理用） ---
+    {
+        VkSamplerCreateInfo samplerInfo{};
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerInfo.magFilter = VK_FILTER_NEAREST;
+        samplerInfo.minFilter = VK_FILTER_NEAREST;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.anisotropyEnable = VK_FALSE;
+        samplerInfo.maxAnisotropy = 1.0f;
+        samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+        samplerInfo.unnormalizedCoordinates = VK_FALSE;
+        samplerInfo.compareEnable = VK_FALSE;
+        samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        samplerInfo.mipLodBias = 0.0f;
+        samplerInfo.minLod = 0.0f;
+        samplerInfo.maxLod = 0.0f;
+
+        if (vkCreateSampler(device, &samplerInfo, nullptr, &m_nearestSampler) != VK_SUCCESS)
+            throw std::runtime_error("failed to create post-process nearest sampler!");
+    }
+
     // --- 2. 描述符集布局: 2 个 COMBINED_IMAGE_SAMPLER 绑定 ---
     {
         VkDescriptorSetLayoutBinding binding0{};
@@ -438,13 +474,13 @@ void PostProcessPipeline::init(VulkanContext& ctx, DescriptorLayoutCache& layout
     {
         VkDescriptorPoolSize poolSize{};
         poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSize.descriptorCount = 32;
+        poolSize.descriptorCount = 34;  // bloom(2*MAX_BLOOM_MIPS) + dof(2) + composite(2) + fxaa(2)
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.poolSizeCount = 1;
         poolInfo.pPoolSizes = &poolSize;
-        poolInfo.maxSets = 16;
+        poolInfo.maxSets = 17;  // bloom(2*MAX_BLOOM_MIPS) + dof(1) + composite(1) + fxaa(1)
 
         if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
             throw std::runtime_error("failed to create post-process descriptor pool!");
@@ -475,6 +511,7 @@ void PostProcessPipeline::init(VulkanContext& ctx, DescriptorLayoutCache& layout
 
     // --- 5. 创建资源 ---
     createBloomResources();
+    createDofResources();
     createLdrResources();
     createBlackFallback();
 
@@ -484,7 +521,7 @@ void PostProcessPipeline::init(VulkanContext& ctx, DescriptorLayoutCache& layout
     // --- 7. 分配描述符集 ---
     {
         // 分配所有描述符集
-        uint32_t totalSets = MAX_BLOOM_MIPS + MAX_BLOOM_MIPS + 2; // downsample + upsample + composite + fxaa
+        uint32_t totalSets = MAX_BLOOM_MIPS + MAX_BLOOM_MIPS + 3; // downsample + upsample + dof + composite + fxaa
         std::vector<VkDescriptorSetLayout> layouts(totalSets, m_postProcessSetLayout);
         std::vector<VkDescriptorSet> sets(totalSets);
 
@@ -502,6 +539,7 @@ void PostProcessPipeline::init(VulkanContext& ctx, DescriptorLayoutCache& layout
             m_bloomDownsampleSets[i] = sets[idx++];
         for (int i = 0; i < MAX_BLOOM_MIPS; i++)
             m_bloomUpsampleSets[i] = sets[idx++];
+        m_dofSet = sets[idx++];
         m_compositeSet = sets[idx++];
         m_fxaaSet = sets[idx++];
 
@@ -532,6 +570,10 @@ void PostProcessPipeline::init(VulkanContext& ctx, DescriptorLayoutCache& layout
         }
         writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 0, m_blackFallbackView, m_linearSampler);
         writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 1, m_blackFallbackView, m_linearSampler);
+
+        // DOF: binding 0 = sceneHDR（暂绑 blackFallback），binding 1 = depth（暂绑 blackFallback）
+        writeDescriptorBinding(device, m_dofSet, 0, m_blackFallbackView, m_linearSampler);
+        writeDescriptorBinding(device, m_dofSet, 1, m_blackFallbackView, m_nearestSampler);
 
         // Composite: binding 0 = sceneHDR（暂绑 blackFallback，需要在首帧 execute 前更新一次）
         //            binding 1 = bloom up mip 0（升采样最终结果）
@@ -646,6 +688,41 @@ void PostProcessPipeline::destroyBloomResources() {
         vkFreeMemory(device, m_bloomUpMipMemory, nullptr);
         m_bloomUpMipMemory = VK_NULL_HANDLE;
     }
+}
+
+// ========================================================================
+// createDofResources / destroyDofResources
+// ========================================================================
+
+void PostProcessPipeline::createDofResources() {
+    VkDevice device = m_context->getDevice();
+
+    // DOF 输出: 全分辨率 HDR image
+    createImage2D(*m_context, m_width, m_height, VK_FORMAT_R16G16B16A16_SFLOAT, 1,
+                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                  m_dofImage, m_dofMemory);
+    m_dofImageView = createImageView2D(device, m_dofImage,
+                                        VK_FORMAT_R16G16B16A16_SFLOAT, 0, 1);
+
+    VkFramebufferCreateInfo fbInfo{};
+    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbInfo.renderPass = m_bloomDownsampleRenderPass;  // HDR format, LoadOp=DONT_CARE
+    fbInfo.attachmentCount = 1;
+    fbInfo.pAttachments = &m_dofImageView;
+    fbInfo.width = m_width;
+    fbInfo.height = m_height;
+    fbInfo.layers = 1;
+
+    if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_dofFramebuffer) != VK_SUCCESS)
+        throw std::runtime_error("failed to create DOF framebuffer!");
+}
+
+void PostProcessPipeline::destroyDofResources() {
+    VkDevice device = m_context->getDevice();
+    if (m_dofFramebuffer) { vkDestroyFramebuffer(device, m_dofFramebuffer, nullptr); m_dofFramebuffer = VK_NULL_HANDLE; }
+    if (m_dofImageView)   { vkDestroyImageView(device, m_dofImageView, nullptr); m_dofImageView = VK_NULL_HANDLE; }
+    if (m_dofImage)       { vkDestroyImage(device, m_dofImage, nullptr); m_dofImage = VK_NULL_HANDLE; }
+    if (m_dofMemory)      { vkFreeMemory(device, m_dofMemory, nullptr); m_dofMemory = VK_NULL_HANDLE; }
 }
 
 // ========================================================================
@@ -909,6 +986,26 @@ void PostProcessPipeline::createPipelines() {
             &pcRange);
     }
 
+    // DOF: 不需要混合
+    {
+        VkPushConstantRange pcRange{};
+        pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        pcRange.offset = 0;
+        pcRange.size = sizeof(DofPushConstant);
+
+        createFullscreenBundlePipeline(
+            device,
+            m_bloomDownsampleRenderPass,  // HDR format, LoadOp=DONT_CARE
+            {m_postProcessSetLayout},
+            ppShaderBundlePath("DOF"),
+            variant,
+            false, false, false,
+            m_dofPipeline,
+            m_dofLayout,
+            "dof",
+            &pcRange);
+    }
+
     // Composite: 不需要混合
     {
         VkPushConstantRange pcRange{};
@@ -957,6 +1054,8 @@ void PostProcessPipeline::destroyPipelines() {
     if (m_fxaaLayout)         { vkDestroyPipelineLayout(device, m_fxaaLayout, nullptr); m_fxaaLayout = VK_NULL_HANDLE; }
     if (m_compositePipeline)  { vkDestroyPipeline(device, m_compositePipeline, nullptr); m_compositePipeline = VK_NULL_HANDLE; }
     if (m_compositeLayout)    { vkDestroyPipelineLayout(device, m_compositeLayout, nullptr); m_compositeLayout = VK_NULL_HANDLE; }
+    if (m_dofPipeline)            { vkDestroyPipeline(device, m_dofPipeline, nullptr); m_dofPipeline = VK_NULL_HANDLE; }
+    if (m_dofLayout)              { vkDestroyPipelineLayout(device, m_dofLayout, nullptr); m_dofLayout = VK_NULL_HANDLE; }
     if (m_bloomUpsamplePipeline)  { vkDestroyPipeline(device, m_bloomUpsamplePipeline, nullptr); m_bloomUpsamplePipeline = VK_NULL_HANDLE; }
     if (m_bloomUpsampleLayout)    { vkDestroyPipelineLayout(device, m_bloomUpsampleLayout, nullptr); m_bloomUpsampleLayout = VK_NULL_HANDLE; }
     if (m_bloomDownsamplePipeline) { vkDestroyPipeline(device, m_bloomDownsamplePipeline, nullptr); m_bloomDownsamplePipeline = VK_NULL_HANDLE; }
@@ -968,20 +1067,45 @@ void PostProcessPipeline::destroyPipelines() {
 // ========================================================================
 
 void PostProcessPipeline::execute(VkCommandBuffer cmd, VkImageView sceneHDR,
+                                   VkImageView depthView, float nearPlane, float farPlane,
                                    const PostProcessSettings& settings) {
+    VkDevice device = m_context->getDevice();
+
     // 首次调用时绑定 sceneHDR（init 时还不知道这个 view）
     if (m_boundSceneHDR != sceneHDR) {
-        VkDevice device = m_context->getDevice();
         vkDeviceWaitIdle(device);  // 确保之前的帧不再引用旧描述符
         writeDescriptorBinding(device, m_bloomDownsampleSets[0], 0, sceneHDR, m_linearSampler);
+        writeDescriptorBinding(device, m_dofSet, 0, sceneHDR, m_linearSampler);
         writeDescriptorBinding(device, m_compositeSet, 0, sceneHDR, m_linearSampler);
         m_boundSceneHDR = sceneHDR;
+    }
+
+    // 绑定 depth view（DOF 使用）— 深度图使用 DEPTH_STENCIL_READ_ONLY 布局
+    if (depthView != VK_NULL_HANDLE && m_boundDepthView != depthView) {
+        vkDeviceWaitIdle(device);
+        writeDescriptorBinding(device, m_dofSet, 1, depthView, m_nearestSampler,
+                               VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        m_boundDepthView = depthView;
     }
 
     if (settings.bloomEnabled) {
         executeBloom(cmd, sceneHDR, settings);
     }
-    executeComposite(cmd, sceneHDR, m_bloomUpMipViews[0], settings);
+
+    VkImageView compositeInput = sceneHDR;
+    if (settings.dofEnabled && depthView != VK_NULL_HANDLE) {
+        executeDof(cmd, sceneHDR, depthView, nearPlane, farPlane, settings);
+        compositeInput = m_dofImageView;  // DOF 输出替换 sceneHDR 作为 Composite 输入
+    }
+
+    // 当 composite 输入发生变化时（DOF 开关切换），更新描述符
+    if (m_boundCompositeInput != compositeInput) {
+        vkDeviceWaitIdle(device);
+        writeDescriptorBinding(device, m_compositeSet, 0, compositeInput, m_linearSampler);
+        m_boundCompositeInput = compositeInput;
+    }
+
+    executeComposite(cmd, compositeInput, m_bloomUpMipViews[0], settings);
     if (settings.fxaaEnabled) {
         executeFxaa(cmd, settings);
     }
@@ -1167,6 +1291,55 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
 }
 
 // ========================================================================
+// executeDof
+// ========================================================================
+
+void PostProcessPipeline::executeDof(VkCommandBuffer cmd, VkImageView sceneHDR,
+                                      VkImageView depthView, float nearPlane, float farPlane,
+                                      const PostProcessSettings& settings) {
+    VkRenderPassBeginInfo rpBegin{};
+    rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpBegin.renderPass = m_bloomDownsampleRenderPass;  // HDR format, LoadOp=DONT_CARE
+    rpBegin.framebuffer = m_dofFramebuffer;
+    rpBegin.renderArea = {{0, 0}, {m_width, m_height}};
+
+    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_dofPipeline);
+
+    VkViewport viewport{};
+    viewport.width = static_cast<float>(m_width);
+    viewport.height = static_cast<float>(m_height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor = {{0, 0}, {m_width, m_height}};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_dofLayout, 0, 1,
+                            &m_dofSet, 0, nullptr);
+
+    DofPushConstant pc{};
+    pc.texelSize[0] = 1.0f / static_cast<float>(m_width);
+    pc.texelSize[1] = 1.0f / static_cast<float>(m_height);
+    pc.focalDistance = settings.dofFocalDistance;
+    pc.focalRange = settings.dofFocalRange;
+    pc.maxBlur = settings.dofMaxBlur;
+    pc.autoFocus = settings.dofAutoFocus ? 1 : 0;
+    pc.nearPlane = nearPlane;
+    pc.farPlane = farPlane;
+
+    vkCmdPushConstants(cmd, m_dofLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(DofPushConstant), &pc);
+
+    vkCmdDraw(cmd, 6, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+}
+
+// ========================================================================
 // executeComposite
 // ========================================================================
 
@@ -1305,6 +1478,7 @@ void PostProcessPipeline::resize(uint32_t width, uint32_t height) {
 
     // 销毁尺寸相关资源
     destroyBloomResources();
+    destroyDofResources();
     destroyLdrResources();
 
     // 销毁并重建描述符池 (dispatch 表中没有 vkResetDescriptorPool)
@@ -1315,13 +1489,13 @@ void PostProcessPipeline::resize(uint32_t width, uint32_t height) {
     {
         VkDescriptorPoolSize poolSize{};
         poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSize.descriptorCount = 32;
+        poolSize.descriptorCount = 34;
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.poolSizeCount = 1;
         poolInfo.pPoolSizes = &poolSize;
-        poolInfo.maxSets = 16;
+        poolInfo.maxSets = 17;
 
         if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
             throw std::runtime_error("failed to recreate post-process descriptor pool!");
@@ -1329,11 +1503,12 @@ void PostProcessPipeline::resize(uint32_t width, uint32_t height) {
 
     // 重建
     createBloomResources();
+    createDofResources();
     createLdrResources();
 
     // 重新分配描述符集
     {
-        uint32_t totalSets = MAX_BLOOM_MIPS + MAX_BLOOM_MIPS + 2;
+        uint32_t totalSets = MAX_BLOOM_MIPS + MAX_BLOOM_MIPS + 3;
         std::vector<VkDescriptorSetLayout> layouts(totalSets, m_postProcessSetLayout);
         std::vector<VkDescriptorSet> sets(totalSets);
 
@@ -1351,11 +1526,13 @@ void PostProcessPipeline::resize(uint32_t width, uint32_t height) {
             m_bloomDownsampleSets[i] = sets[idx++];
         for (int i = 0; i < MAX_BLOOM_MIPS; i++)
             m_bloomUpsampleSets[i] = sets[idx++];
+        m_dofSet = sets[idx++];
         m_compositeSet = sets[idx++];
         m_fxaaSet = sets[idx++];
 
         // 与 init 相同的描述符绑定
-        writeDescriptorBinding(device, m_bloomDownsampleSets[0], 0, m_boundSceneHDR ? m_boundSceneHDR : m_blackFallbackView, m_linearSampler);
+        VkImageView sceneView = m_boundSceneHDR ? m_boundSceneHDR : m_blackFallbackView;
+        writeDescriptorBinding(device, m_bloomDownsampleSets[0], 0, sceneView, m_linearSampler);
         writeDescriptorBinding(device, m_bloomDownsampleSets[0], 1, m_blackFallbackView, m_linearSampler);
         for (int i = 1; i < MAX_BLOOM_MIPS; i++) {
             writeDescriptorBinding(device, m_bloomDownsampleSets[i], 0, m_bloomDownMipViews[i - 1], m_linearSampler);
@@ -1370,7 +1547,18 @@ void PostProcessPipeline::resize(uint32_t width, uint32_t height) {
         }
         writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 0, m_blackFallbackView, m_linearSampler);
         writeDescriptorBinding(device, m_bloomUpsampleSets[MAX_BLOOM_MIPS - 1], 1, m_blackFallbackView, m_linearSampler);
-        writeDescriptorBinding(device, m_compositeSet, 0, m_boundSceneHDR ? m_boundSceneHDR : m_blackFallbackView, m_linearSampler);
+        // DOF 描述符
+        writeDescriptorBinding(device, m_dofSet, 0, sceneView, m_linearSampler);
+        if (m_boundDepthView) {
+            writeDescriptorBinding(device, m_dofSet, 1, m_boundDepthView, m_nearestSampler,
+                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        } else {
+            writeDescriptorBinding(device, m_dofSet, 1, m_blackFallbackView, m_nearestSampler);
+        }
+        // Composite: 如果之前 DOF 开启，composite 输入可能是 dofImageView，resize 后需重新绑定
+        // 重置为 sceneView，execute 时会根据 DOF 状态重新绑定
+        writeDescriptorBinding(device, m_compositeSet, 0, sceneView, m_linearSampler);
+        m_boundCompositeInput = sceneView;
         writeDescriptorBinding(device, m_compositeSet, 1, m_bloomUpMipViews[0], m_linearSampler);
         writeDescriptorBinding(device, m_fxaaSet, 0, m_compositeImageView, m_linearSampler);
         writeDescriptorBinding(device, m_fxaaSet, 1, m_blackFallbackView, m_linearSampler);
@@ -1400,6 +1588,7 @@ void PostProcessPipeline::destroy() {
 
     destroyPipelines();
     destroyBloomResources();
+    destroyDofResources();
     destroyLdrResources();
     destroyBlackFallback();
 
@@ -1421,6 +1610,10 @@ void PostProcessPipeline::destroy() {
     if (m_bloomDownsampleRenderPass) {
         vkDestroyRenderPass(device, m_bloomDownsampleRenderPass, nullptr);
         m_bloomDownsampleRenderPass = VK_NULL_HANDLE;
+    }
+    if (m_nearestSampler) {
+        vkDestroySampler(device, m_nearestSampler, nullptr);
+        m_nearestSampler = VK_NULL_HANDLE;
     }
     if (m_linearSampler) {
         vkDestroySampler(device, m_linearSampler, nullptr);
