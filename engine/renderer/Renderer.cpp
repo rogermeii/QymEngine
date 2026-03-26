@@ -760,21 +760,82 @@ void Renderer::createIBLFallbackTextures()
 
         vkBindImageMemory(device, m_iblFallbackCubemapImage, m_iblFallbackCubemapMemory, 0);
 
-        // 转换布局到 SHADER_READ_ONLY
-        VkCommandBuffer cmd = m_commandManager.beginSingleTimeCommands(device);
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = m_iblFallbackCubemapImage;
-        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-        m_commandManager.endSingleTimeCommands(device, m_context.getGraphicsQueue(), cmd);
+        // 用 staging buffer 填充 cubemap 所有 6 面为黑色
+        // (GLES 需要 cubemap 有有效数据才能采样，未初始化的 cubemap 会触发 GL_INVALID_OPERATION)
+        {
+            VkDeviceSize pixelSize = 8; // R16G16B16A16_SFLOAT = 8 bytes
+            VkDeviceSize faceSize = 1 * 1 * pixelSize;
+            VkDeviceSize totalSize = faceSize * 6;
+
+            VkBuffer stagingBuffer;
+            VkDeviceMemory stagingMemory;
+            VkBufferCreateInfo bufInfo{};
+            bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bufInfo.size = totalSize;
+            bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            vkCreateBuffer(device, &bufInfo, nullptr, &stagingBuffer);
+
+            VkMemoryRequirements bufMemReqs;
+            vkGetBufferMemoryRequirements(device, stagingBuffer, &bufMemReqs);
+            VkMemoryAllocateInfo bufAllocInfo{};
+            bufAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            bufAllocInfo.allocationSize = bufMemReqs.size;
+            bufAllocInfo.memoryTypeIndex = m_context.findMemoryType(bufMemReqs.memoryTypeBits,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkAllocateMemory(device, &bufAllocInfo, nullptr, &stagingMemory);
+            vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
+
+            void* data;
+            vkMapMemory(device, stagingMemory, 0, totalSize, 0, &data);
+            memset(data, 0, static_cast<size_t>(totalSize));
+            vkUnmapMemory(device, stagingMemory);
+
+            VkCommandBuffer cmd = m_commandManager.beginSingleTimeCommands(device);
+
+            // UNDEFINED → TRANSFER_DST
+            VkImageMemoryBarrier toTransfer{};
+            toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toTransfer.image = m_iblFallbackCubemapImage;
+            toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+            toTransfer.srcAccessMask = 0;
+            toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toTransfer);
+
+            // 复制黑色数据到 6 面
+            for (uint32_t face = 0; face < 6; face++) {
+                VkBufferImageCopy region{};
+                region.bufferOffset = face * faceSize;
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, face, 1};
+                region.imageExtent = {1, 1, 1};
+                vkCmdCopyBufferToImage(cmd, stagingBuffer, m_iblFallbackCubemapImage,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            }
+
+            // TRANSFER_DST → SHADER_READ_ONLY
+            VkImageMemoryBarrier toShaderRead{};
+            toShaderRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toShaderRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toShaderRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            toShaderRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toShaderRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toShaderRead.image = m_iblFallbackCubemapImage;
+            toShaderRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+            toShaderRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toShaderRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toShaderRead);
+
+            m_commandManager.endSingleTimeCommands(device, m_context.getGraphicsQueue(), cmd);
+
+            vkDestroyBuffer(device, stagingBuffer, nullptr);
+            vkFreeMemory(device, stagingMemory, nullptr);
+        }
 
         // Cube view
         VkImageViewCreateInfo viewInfo{};
@@ -1787,7 +1848,9 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
     m_postProcess.init(m_context, m_layoutCache, m_offscreenWidth, m_offscreenHeight);
 
     // --- 6. 初始化 IBL 生成器并生成 IBL 贴图 ---
-    if (!m_iblGenerator.isGenerated()) {
+    // GLES/OpenGL 后端的 IBL cubemap 生成存在兼容性问题（cubemap 纹理完整性/sampling 错误），
+    // 暂时跳过，使用 fallback 黑色纹理（Lit.slang 中 IBL 贡献为 0，退化为 ambientColor * albedo）
+    if (!vkIsGLESBackend() && !vkIsOpenGLBackend() && !m_iblGenerator.isGenerated()) {
         m_iblGenerator.init(m_context, m_layoutCache, m_commandManager);
         m_iblGenerator.generateBrdfLut();
 
