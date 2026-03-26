@@ -98,6 +98,28 @@ typedef void (GL_APIENTRYP PFNGLCLIPCONTROLEXTPROC)(GLenum origin, GLenum depth)
 typedef void (APIENTRYP PFNGLCLIPCONTROLEXTPROC)(GLenum origin, GLenum depth);
 #endif
 #endif
+#ifndef PFNGLTEXTUREVIEWPROC
+#if defined(GL_APIENTRYP)
+typedef void (GL_APIENTRYP PFNGLTEXTUREVIEWPROC)(GLuint texture, GLenum target, GLuint origtexture,
+                                                 GLenum internalformat, GLuint minlevel, GLuint numlevels,
+                                                 GLuint minlayer, GLuint numlayers);
+#else
+typedef void (APIENTRYP PFNGLTEXTUREVIEWPROC)(GLuint texture, GLenum target, GLuint origtexture,
+                                              GLenum internalformat, GLuint minlevel, GLuint numlevels,
+                                              GLuint minlayer, GLuint numlayers);
+#endif
+#endif
+#ifndef PFNGLTEXTUREVIEWOESPROC
+#if defined(GL_APIENTRYP)
+typedef void (GL_APIENTRYP PFNGLTEXTUREVIEWOESPROC)(GLuint texture, GLenum target, GLuint origtexture,
+                                                    GLenum internalformat, GLuint minlevel, GLuint numlevels,
+                                                    GLuint minlayer, GLuint numlayers);
+#else
+typedef void (APIENTRYP PFNGLTEXTUREVIEWOESPROC)(GLuint texture, GLenum target, GLuint origtexture,
+                                                 GLenum internalformat, GLuint minlevel, GLuint numlevels,
+                                                 GLuint minlayer, GLuint numlayers);
+#endif
+#endif
 
 // Handle cast macros: VkXxx (opaque pointer) <-> GL_Xxx (actual struct)
 #define AS_GL(Type, handle) reinterpret_cast<GL_##Type*>(handle)
@@ -120,7 +142,10 @@ static bool s_isGLES = false;
 // 某些 GLES 平台（尤其 Android/EGL）默认帧缓冲本身就是 sRGB capable。
 // 这类平台如果再手动做一次 gamma 编码，会导致画面发白/过曝。
 static bool s_defaultFramebufferIsSRGB = false;
+static bool s_hasTextureView = false;
 static PFNGLCLIPCONTROLEXTPROC s_glClipControlEXT = nullptr;
+static PFNGLTEXTUREVIEWPROC s_glTextureViewProc = nullptr;
+static PFNGLTEXTUREVIEWOESPROC s_glTextureViewOESProc = nullptr;
 
 // SPIR-V magic number (仅用于检测 ImGui shader 并替换为 GLSL)
 static constexpr uint32_t SPIRV_MAGIC = 0x07230203;
@@ -223,11 +248,11 @@ static void compat_CreateTextures(GLenum target, GLsizei n, GLuint* textures) {
     }
 }
 
-static void compat_TextureStorage2D(GLuint tex, GLsizei levels, GLenum internalFormat, GLsizei w, GLsizei h) {
+static void compat_TextureStorage2D(GLenum target, GLuint tex, GLsizei levels, GLenum internalFormat, GLsizei w, GLsizei h) {
     if (s_isGLES) {
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexStorage2D(GL_TEXTURE_2D, levels, internalFormat, w, h);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindTexture(target, tex);
+        glTexStorage2D(target, levels, internalFormat, w, h);
+        glBindTexture(target, 0);
     } else {
         glTextureStorage2D(tex, levels, internalFormat, w, h);
     }
@@ -263,10 +288,10 @@ static void compat_CreateSamplers(GLsizei n, GLuint* samplers) {
     else glCreateSamplers(n, samplers);
 }
 
-static void compat_BindTextureUnit(GLuint unit, GLuint texture) {
+static void compat_BindTextureUnit(GLuint unit, GLenum target, GLuint texture) {
     if (s_isGLES) {
         glActiveTexture(GL_TEXTURE0 + unit);
-        glBindTexture(GL_TEXTURE_2D, texture);
+        glBindTexture(target, texture);
     } else {
         glBindTextureUnit(unit, texture);
     }
@@ -282,13 +307,68 @@ static void compat_CreateFramebuffers(GLsizei n, GLuint* fbos) {
     else glCreateFramebuffers(n, fbos);
 }
 
-static void compat_FramebufferTexture(GLuint fbo, GLenum attachment, GLuint texture, GLint level) {
+static void compat_FramebufferTexture(GLuint fbo, GLenum attachment, GLenum target, GLuint texture, GLint level) {
     if (s_isGLES) {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D, texture, level);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, target, texture, level);
     } else {
         glNamedFramebufferTexture(fbo, attachment, texture, level);
     }
+}
+
+static GLenum imageTextureTarget(const GL_Image* img)
+{
+    return (img && img->target != 0) ? img->target : GL_TEXTURE_2D;
+}
+
+static GLenum imageViewTargetFromType(const GL_Image* img, VkImageViewType viewType)
+{
+    if (viewType == VK_IMAGE_VIEW_TYPE_CUBE)
+        return GL_TEXTURE_CUBE_MAP;
+    if (viewType == VK_IMAGE_VIEW_TYPE_2D)
+        return GL_TEXTURE_2D;
+    return imageTextureTarget(img);
+}
+
+static bool compat_TextureView(GLuint viewTex, GLenum target, GLuint origTex, GLenum internalFormat,
+                               GLuint minLevel, GLuint numLevels, GLuint minLayer, GLuint numLayers)
+{
+    if (!s_hasTextureView)
+        return false;
+
+    if (s_glTextureViewOESProc) {
+        s_glTextureViewOESProc(viewTex, target, origTex, internalFormat, minLevel, numLevels, minLayer, numLayers);
+        return glGetError() == GL_NO_ERROR;
+    }
+    if (s_glTextureViewProc) {
+        s_glTextureViewProc(viewTex, target, origTex, internalFormat, minLevel, numLevels, minLayer, numLayers);
+        return glGetError() == GL_NO_ERROR;
+    }
+    return false;
+}
+
+static GLuint imageViewTextureObject(const GL_Image* img, const GL_ImageView* view)
+{
+    if (view && view->texture)
+        return view->texture;
+    return img ? img->texture : 0;
+}
+
+static GLenum imageViewTextureTarget(const GL_Image* img, const GL_ImageView* view, bool forFramebuffer)
+{
+    if (view && view->texture)
+        return view->target;
+    GLenum target = imageTextureTarget(img);
+    if (target == GL_TEXTURE_CUBE_MAP && view) {
+        if (forFramebuffer && view->viewType == VK_IMAGE_VIEW_TYPE_2D &&
+            view->subresourceRange.layerCount == 1) {
+            return GL_TEXTURE_CUBE_MAP_POSITIVE_X + view->subresourceRange.baseArrayLayer;
+        }
+        if (view->viewType == VK_IMAGE_VIEW_TYPE_CUBE) {
+            return GL_TEXTURE_CUBE_MAP;
+        }
+    }
+    return target;
 }
 
 static void compat_FramebufferDrawBuffers(GLuint fbo, GLsizei n, const GLenum* bufs) {
@@ -388,11 +468,18 @@ static std::string fixupGLSL(const std::string& source,
             std::string line = lines.substr(pos, eol - pos);
             pos = eol + 1;
             // 检查下一行是否是 sampler 声明
-            if (line.find("layout(") != std::string::npos && pos < lines.size()) {
-                size_t eol2 = lines.find('\n', pos);
-                if (eol2 == std::string::npos) eol2 = lines.size();
-                std::string nextLine = lines.substr(pos, eol2 - pos);
-                if (nextLine.find("sampler") != std::string::npos && nextLine.find("uniform") != std::string::npos) {
+            if (line.find("layout(") != std::string::npos) {
+                std::string declLine;
+                if (line.find("sampler") != std::string::npos && line.find("uniform") != std::string::npos) {
+                    declLine = line;
+                } else if (pos < lines.size()) {
+                    size_t eol2 = lines.find('\n', pos);
+                    if (eol2 == std::string::npos) eol2 = lines.size();
+                    std::string nextLine = lines.substr(pos, eol2 - pos);
+                    if (nextLine.find("sampler") != std::string::npos && nextLine.find("uniform") != std::string::npos)
+                        declLine = nextLine;
+                }
+                if (!declLine.empty()) {
                     int set = 0, binding = 0;
                     auto extractInt = [&](const std::string& s, const std::string& key) -> int {
                         auto p = s.find(key);
@@ -410,8 +497,8 @@ static std::string fixupGLSL(const std::string& source,
                     binding = extractInt(line, "binding");
                     if (binding < 0) binding = 0;
                     // 提取名称
-                    auto namePos = nextLine.rfind(' ');
-                    std::string name = (namePos != std::string::npos) ? nextLine.substr(namePos+1) : "";
+                    auto namePos = declLine.rfind(' ');
+                    std::string name = (namePos != std::string::npos) ? declLine.substr(namePos+1) : "";
                     if (!name.empty() && name.back() == ';') name.pop_back();
                     samplers.push_back({set, binding, name, 0});
                 }
@@ -934,6 +1021,9 @@ static std::string fixupGLSL(const std::string& source,
             "vec4 _S3 = ((((((worldPos_1) * (unpackStorage_0(frame_0.view_0))))) * (unpackStorage_0(frame_0.proj_0))));",
             "vec4 _S3 = (transpose(unpackStorage_0(frame_0.proj_0)) * (transpose(unpackStorage_0(frame_0.view_0)) * worldPos_1));");
         replaceAll(pass2,
+            "output_0.sv_position_0 = ((((((worldPos_1) * (unpackStorage_0(frame_0.view_0))))) * (unpackStorage_0(frame_0.proj_0))));",
+            "output_0.sv_position_0 = (transpose(unpackStorage_0(frame_0.proj_0)) * (transpose(unpackStorage_0(frame_0.view_0)) * worldPos_1));");
+        replaceAll(pass2,
             "gl_Position = (((worldPos_0) * (unpackStorage_0(frame_0.lightVP_0))));",
             "gl_Position = (transpose(unpackStorage_0(frame_0.lightVP_0)) * worldPos_0);");
         replaceAll(pass2,
@@ -949,11 +1039,20 @@ static std::string fixupGLSL(const std::string& source,
             "vec4 unprojected_0 = (((vec4(p_0, 1.0)) * (viewProjInv_0)));",
             "vec4 unprojected_0 = (viewProjInv_0 * vec4(p_0, 1.0));");
         replaceAll(pass2,
+            "vec4 unprojected_0 = (((vec4(p_0, 1.0)) * (mat4Inverse_0((((unpackStorage_0(frame_0.view_0)) * (unpackStorage_0(frame_0.proj_0))))))));",
+            "vec4 unprojected_0 = (mat4Inverse_0((transpose(unpackStorage_0(frame_0.proj_0)) * transpose(unpackStorage_0(frame_0.view_0)))) * vec4(p_0, 1.0));");
+        replaceAll(pass2,
             "vec4 clipPos_0 = ((((((vec4(fragPos_1, 1.0)) * (unpackStorage_0(frame_0.view_0))))) * (unpackStorage_0(frame_0.proj_0))));",
             "vec4 clipPos_0 = (transpose(unpackStorage_0(frame_0.proj_0)) * (transpose(unpackStorage_0(frame_0.view_0)) * vec4(fragPos_1, 1.0)));");
         replaceAll(pass2,
+            "output_0.sv_position_0 = (((((((((vec4(input_position_0, 1.0)) * (unpackStorage_1(pc_0.model_0))))) * (unpackStorage_0(frame_0.view_0))))) * (unpackStorage_0(frame_0.proj_0))));",
+            "output_0.sv_position_0 = (transpose(unpackStorage_0(frame_0.proj_0)) * (transpose(unpackStorage_0(frame_0.view_0)) * (unpackStorage_1(pc_0.model_0) * vec4(input_position_0, 1.0))));");
+        replaceAll(pass2,
             "vec3 _S7 = (((input_normal_0) * (_S6)));",
             "vec3 _S7 = (_S6 * input_normal_0);");
+        replaceAll(pass2,
+            "output_0.normal_0 = (((input_normal_0) * (mat3x3(_S3[0].xyz, _S3[1].xyz, _S3[2].xyz))));",
+            "output_0.normal_0 = (mat3x3(_S3[0].xyz, _S3[1].xyz, _S3[2].xyz) * input_normal_0);");
         replaceAll(pass2,
             "mat4x4 _S5 = unpackStorage_1(pc_0.model_0);",
             "mat4x4 _S5 = unpackStorage_1(pc_0.model_0);");
@@ -1783,6 +1882,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateDevice(
     // Android GLES: 函数由系统 libGLESv3.so 直接提供，无需 GLAD 加载
     s_isGLES = true;
     SDL_Log("[VkOpenGL] Android GLES: using system GLES3 functions");
+    s_glTextureViewProc = (PFNGLTEXTUREVIEWPROC)SDL_GL_GetProcAddress("glTextureView");
+    s_glTextureViewOESProc = (PFNGLTEXTUREVIEWOESPROC)SDL_GL_GetProcAddress("glTextureViewOES");
+    s_hasTextureView = false;
 #else
     // 加载 OpenGL 函数指针 (Desktop: GLAD)
     if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
@@ -1823,6 +1925,13 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateDevice(
         if (!glDepthRangef) glDepthRangef = (PFNGLDEPTHRANGEFPROC)load("glDepthRangef");
         if (!glClearDepthf) glClearDepthf = (PFNGLCLEARDEPTHFPROC)load("glClearDepthf");
         if (!glReadPixels) glReadPixels = (PFNGLREADPIXELSPROC)load("glReadPixels");
+        s_glTextureViewProc = (PFNGLTEXTUREVIEWPROC)load("glTextureView");
+        s_glTextureViewOESProc = (PFNGLTEXTUREVIEWOESPROC)load("glTextureViewOES");
+        // GLES: 禁用 glTextureView —— GLES 不支持跨 target 类型的纹理视图
+        // (cubemap 面 → 2D)，且即使同 target 类型，NVIDIA GLES 驱动的
+        // glTextureView 也会产生 GL_INVALID_OPERATION。framebuffer attachment
+        // 路径已正确处理 mip sub-view 和 cubemap 面附加，无需纹理视图。
+        s_hasTextureView = false;
         if (!s_glClipControlEXT &&
             (SDL_GL_ExtensionSupported("GL_EXT_clip_control") ||
              SDL_GL_ExtensionSupported("GL_ARB_clip_control"))) {
@@ -1831,6 +1940,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateDevice(
                 s_glClipControlEXT = (PFNGLCLIPCONTROLEXTPROC)SDL_GL_GetProcAddress("glClipControl");
         }
         std::cout << "[VkOpenGL] GLES function post-load completed" << std::endl;
+    } else {
+        s_glTextureViewProc = (PFNGLTEXTUREVIEWPROC)SDL_GL_GetProcAddress("glTextureView");
+        s_hasTextureView = s_glTextureViewProc != nullptr;
     }
 #endif
 
@@ -1842,6 +1954,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateDevice(
 
     SDL_Log("[VkOpenGL] GL_RENDERER: %s", renderer ? renderer : "?");
     SDL_Log("[VkOpenGL] GL_VERSION:  %s", version ? version : "?");
+    SDL_Log("[VkOpenGL] TextureView support: %s", s_hasTextureView ? "YES" : "NO");
     if (s_isGLES) SDL_Log("[VkOpenGL] Running in GLES 3.0 mode");
     if (s_isGLES) {
         s_defaultFramebufferIsSRGB = detectDefaultFramebufferSRGB();
@@ -2345,6 +2458,12 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateImage(
         img->width = pCreateInfo->extent.width;
         img->height = pCreateInfo->extent.height;
         img->mipLevels = pCreateInfo->mipLevels;
+        img->arrayLayers = pCreateInfo->arrayLayers;
+        img->flags = pCreateInfo->flags;
+        img->target = ((pCreateInfo->flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) != 0 &&
+                       pCreateInfo->arrayLayers == 6)
+            ? GL_TEXTURE_CUBE_MAP
+            : GL_TEXTURE_2D;
         img->usage = pCreateInfo->usage;
     }
     *pImage = TO_VK(VkImage, img);
@@ -2374,7 +2493,8 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkGetImageMemoryRequirements(
     if (!image || !pMemoryRequirements) return;
     auto* img = AS_GL(Image, image);
     auto fi = vkFormatToGL(img->format);
-    pMemoryRequirements->size = (VkDeviceSize)img->width * img->height * fi.texelSize * img->mipLevels;
+    pMemoryRequirements->size = (VkDeviceSize)img->width * img->height * fi.texelSize *
+                                img->mipLevels * img->arrayLayers;
     pMemoryRequirements->alignment = 256;
     pMemoryRequirements->memoryTypeBits = 0x7;
 }
@@ -2391,9 +2511,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkBindImageMemory(
     img->boundMemory = memory;
 
     // 创建纹理
-    compat_CreateTextures(GL_TEXTURE_2D, 1, &img->texture);
+    compat_CreateTextures(img->target, 1, &img->texture);
     auto fi = vkFormatToGL(img->format);
-    compat_TextureStorage2D(img->texture, img->mipLevels, fi.internalFormat,
+    compat_TextureStorage2D(img->target, img->texture, img->mipLevels, fi.internalFormat,
                             img->width, img->height);
 
     return VK_SUCCESS;
@@ -2412,6 +2532,34 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateImageView(
         view->format = pCreateInfo->format;
         view->viewType = pCreateInfo->viewType;
         view->subresourceRange = pCreateInfo->subresourceRange;
+        auto* img = AS_GL(Image, pCreateInfo->image);
+        view->target = imageViewTargetFromType(img, pCreateInfo->viewType);
+
+        if (img && img->texture && s_hasTextureView) {
+            const bool fullMipRange =
+                pCreateInfo->subresourceRange.baseMipLevel == 0 &&
+                pCreateInfo->subresourceRange.levelCount == img->mipLevels;
+            const bool fullLayerRange =
+                pCreateInfo->subresourceRange.baseArrayLayer == 0 &&
+                pCreateInfo->subresourceRange.layerCount == img->arrayLayers;
+            const bool sameTarget = view->target == img->target;
+            const bool needsDistinctView = !(fullMipRange && fullLayerRange && sameTarget);
+
+            if (needsDistinctView) {
+                compat_CreateTextures(view->target, 1, &view->texture);
+                auto fi = vkFormatToGL(view->format);
+                if (!compat_TextureView(view->texture, view->target, img->texture, fi.internalFormat,
+                                        pCreateInfo->subresourceRange.baseMipLevel,
+                                        pCreateInfo->subresourceRange.levelCount,
+                                        pCreateInfo->subresourceRange.baseArrayLayer,
+                                        pCreateInfo->subresourceRange.layerCount)) {
+                    if (view->texture) {
+                        glDeleteTextures(1, &view->texture);
+                        view->texture = 0;
+                    }
+                }
+            }
+        }
     }
     *pView = TO_VK(VkImageView, view);
     return VK_SUCCESS;
@@ -2423,7 +2571,11 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkDestroyImageView(
     const VkAllocationCallbacks* pAllocator)
 {
     (void)device; (void)pAllocator;
-    delete AS_GL(ImageView, imageView);
+    if (!imageView) return;
+    auto* view = AS_GL(ImageView, imageView);
+    if (view->texture)
+        glDeleteTextures(1, &view->texture);
+    delete view;
 }
 
 // ============================================================================
@@ -2976,7 +3128,9 @@ static void flushGraphicsState(GL_CommandBuffer* cb)
                     uint32_t bIdx = binding.binding + d;
                     if (set && bIdx < 8) {
                         if (set->textures[bIdx])
-                            compat_BindTextureUnit(texUnit, set->textures[bIdx]);
+                            compat_BindTextureUnit(texUnit,
+                                set->textureTargets[bIdx] ? set->textureTargets[bIdx] : GL_TEXTURE_2D,
+                                set->textures[bIdx]);
                         if (set->samplers[bIdx])
                             glBindSampler(texUnit, set->samplers[bIdx]);
                     }
@@ -4156,12 +4310,17 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateFramebuffer(
             if (!img || !img->texture) continue;
 
             auto fi = vkFormatToGL(view->format);
+            GLuint attachmentTexture = imageViewTextureObject(img, view);
+            GLenum attachmentTarget = imageViewTextureTarget(img, view, true);
+            GLint attachmentLevel = static_cast<GLint>(view->subresourceRange.baseMipLevel);
+            if (view->texture)
+                attachmentLevel = 0;
             if (fi.isDepth) {
                 GLenum depthAttach = (view->format == VK_FORMAT_D24_UNORM_S8_UINT)
                     ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT;
-                compat_FramebufferTexture(fb->fbo, depthAttach, img->texture, 0);
+                compat_FramebufferTexture(fb->fbo, depthAttach, attachmentTarget, attachmentTexture, attachmentLevel);
             } else {
-                compat_FramebufferTexture(fb->fbo, GL_COLOR_ATTACHMENT0 + colorIdx, img->texture, 0);
+                compat_FramebufferTexture(fb->fbo, GL_COLOR_ATTACHMENT0 + colorIdx, attachmentTarget, attachmentTexture, attachmentLevel);
                 colorIdx++;
             }
         }
@@ -4319,7 +4478,8 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkUpdateDescriptorSets(
                     auto* img = view ? AS_GL(Image, view->image) : nullptr;
                     auto* samp = AS_GL(Sampler, imgInfo.sampler);
 
-                    ds->textures[slot] = img ? img->texture : 0;
+                    ds->textures[slot] = imageViewTextureObject(img, view);
+                    ds->textureTargets[slot] = imageViewTextureTarget(img, view, false);
                     ds->samplers[slot] = samp ? samp->sampler : 0;
                     if (slot >= ds->textureCount)
                         ds->textureCount = slot + 1;
