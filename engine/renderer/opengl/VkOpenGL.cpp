@@ -2855,6 +2855,29 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdBeginRenderPass(
         glEnable(GL_SCISSOR_TEST);
     }
 
+    // GLES: 对 DONT_CARE 的 attachment 执行 glClear 丢弃旧内容
+    // Vulkan 的 DONT_CARE 保证丢弃，但 GLES 默认保留旧数据导致 bloom 跨帧累积
+    if (s_isGLES && fb->fbo != 0 && !clearMask) {
+        GLbitfield dontCareClear = 0;
+        for (size_t i = 0; i < fb->attachments.size() && i < rp->attachments.size(); i++) {
+            auto& att = rp->attachments[i];
+            if (att.loadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE) {
+                auto fi = vkFormatToGL(att.format);
+                if (fi.isDepth) {
+                    dontCareClear |= GL_DEPTH_BUFFER_BIT;
+                } else {
+                    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                    dontCareClear |= GL_COLOR_BUFFER_BIT;
+                }
+            }
+        }
+        if (dontCareClear) {
+            glDisable(GL_SCISSOR_TEST);
+            glClear(dontCareClear);
+            glEnable(GL_SCISSOR_TEST);
+        }
+    }
+
     GL_TRACE("BeginRenderPass: fbo=%u %ux%u attachments=%zu",
              fb->fbo, fb->width, fb->height, fb->attachments.size());
     SDL_Log("[VkOpenGL] BeginRenderPass: fbo=%u %ux%u attachments=%zu",
