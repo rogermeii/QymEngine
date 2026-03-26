@@ -116,6 +116,8 @@ void UIAutomation::pollAndExecute(Renderer& renderer, Scene& scene, Camera& came
 
     // Delete command file immediately to avoid re-processing
     std::remove(m_commandPath.c_str());
+    // 双重保障：如果 remove 失败（iOS 沙箱），写入空文件覆盖
+    { std::ofstream clear(m_commandPath, std::ios::trunc); }
 
     if (content.empty())
         return;
