@@ -172,6 +172,7 @@ static DXGI_FORMAT vkFormatToDxgi(VkFormat format)
     case VK_FORMAT_R32G32_SFLOAT:        return DXGI_FORMAT_R32G32_FLOAT;
     case VK_FORMAT_R32_SFLOAT:           return DXGI_FORMAT_R32_FLOAT;
     case VK_FORMAT_R16G16B16A16_SFLOAT:  return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    case VK_FORMAT_R16G16_SFLOAT:        return DXGI_FORMAT_R16G16_FLOAT;
     case VK_FORMAT_D32_SFLOAT:           return DXGI_FORMAT_D32_FLOAT;
     case VK_FORMAT_D24_UNORM_S8_UINT:    return DXGI_FORMAT_D24_UNORM_S8_UINT;
     case VK_FORMAT_D16_UNORM:            return DXGI_FORMAT_D16_UNORM;
@@ -192,6 +193,7 @@ static uint32_t texelSizeFromDxgi(DXGI_FORMAT fmt)
     case DXGI_FORMAT_R32_FLOAT:
     case DXGI_FORMAT_D32_FLOAT:
     case DXGI_FORMAT_D24_UNORM_S8_UINT:     return 4;
+    case DXGI_FORMAT_R16G16_FLOAT:          return 4;
     case DXGI_FORMAT_R16G16B16A16_FLOAT:    return 8;
     case DXGI_FORMAT_R32G32_FLOAT:          return 8;
     case DXGI_FORMAT_R32G32B32_FLOAT:       return 12;
@@ -998,6 +1000,7 @@ static VkResult VKAPI_CALL d3d11_vkCreateImage(
     img->width = pCreateInfo->extent.width;
     img->height = pCreateInfo->extent.height;
     img->mipLevels = pCreateInfo->mipLevels;
+    img->arrayLayers = pCreateInfo->arrayLayers;
     img->usage = pCreateInfo->usage;
     img->currentLayout = pCreateInfo->initialLayout;
 
@@ -1031,7 +1034,7 @@ static void VKAPI_CALL d3d11_vkGetImageMemoryRequirements(
 
     DXGI_FORMAT fmt = vkFormatToDxgi(img->format);
     uint32_t texelSize = texelSizeFromDxgi(fmt);
-    VkDeviceSize size = (VkDeviceSize)img->width * img->height * texelSize;
+    VkDeviceSize size = (VkDeviceSize)img->width * img->height * texelSize * img->arrayLayers;
     // mip chain 约 1.33x
     if (img->mipLevels > 1) size = (size * 4) / 3;
     size = (size + 4095) & ~4095ULL;
@@ -1058,7 +1061,7 @@ static VkResult VKAPI_CALL d3d11_vkBindImageMemory(
     desc.Width = img->width;
     desc.Height = img->height;
     desc.MipLevels = img->mipLevels;
-    desc.ArraySize = 1;
+    desc.ArraySize = img->arrayLayers;
     desc.Format = vkFormatToDxgi(img->format);
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
@@ -1087,6 +1090,11 @@ static VkResult VKAPI_CALL d3d11_vkBindImageMemory(
     // 至少要有一个 bind flag
     if (desc.BindFlags == 0) {
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    }
+
+    // Cubemap (arrayLayers==6) 需要 MiscFlags 标记
+    if (img->arrayLayers == 6) {
+        desc.MiscFlags |= D3D11_RESOURCE_MISC_TEXTURECUBE;
     }
 
     HRESULT hr = dev->device->CreateTexture2D(&desc, nullptr, &img->texture);
@@ -1149,8 +1157,16 @@ static VkResult VKAPI_CALL d3d11_vkCreateImageView(
 
             D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
             rtvDesc.Format = rtvFormat;
-            rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-            rtvDesc.Texture2D.MipSlice = 0;
+            // Cubemap 面视图 (arrayLayers>1 的 image 上的单层子视图) 需要 TEXTURE2DARRAY
+            if (img->arrayLayers > 1) {
+                rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+                rtvDesc.Texture2DArray.MipSlice = view->subresourceRange.baseMipLevel;
+                rtvDesc.Texture2DArray.FirstArraySlice = view->subresourceRange.baseArrayLayer;
+                rtvDesc.Texture2DArray.ArraySize = view->subresourceRange.layerCount;
+            } else {
+                rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+                rtvDesc.Texture2D.MipSlice = 0;
+            }
 
             HRESULT hr = dev->device->CreateRenderTargetView(
                 img->texture.Get(), &rtvDesc, &view->rtv);
@@ -1168,9 +1184,16 @@ static VkResult VKAPI_CALL d3d11_vkCreateImageView(
             else
                 srvDesc.Format = dxgiFormat;
 
-            srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            srvDesc.Texture2D.MipLevels = (img->mipLevels > 0) ? img->mipLevels : 1;
-            srvDesc.Texture2D.MostDetailedMip = 0;
+            // Cubemap (arrayLayers==6 且 viewType==CUBE) 需要 TEXTURECUBE dimension
+            if (view->viewType == VK_IMAGE_VIEW_TYPE_CUBE) {
+                srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+                srvDesc.TextureCube.MipLevels = (img->mipLevels > 0) ? img->mipLevels : 1;
+                srvDesc.TextureCube.MostDetailedMip = 0;
+            } else {
+                srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                srvDesc.Texture2D.MipLevels = (img->mipLevels > 0) ? img->mipLevels : 1;
+                srvDesc.Texture2D.MostDetailedMip = 0;
+            }
 
             HRESULT hr = dev->device->CreateShaderResourceView(
                 img->texture.Get(), &srvDesc, &view->srv);
@@ -2320,6 +2343,7 @@ static void VKAPI_CALL d3d11_vkCmdBeginRenderPass(
         D3D11_TRACE("  RTV[%u]=%p", ri, rtvs[ri]);
 
     // 根据 render pass 的 loadOp 执行 clear
+    // DONT_CARE 也需要 clear 以防止跨帧数据累积 (bloom 等后处理)
     uint32_t clearIdx = 0;
     for (size_t i = 0; i < fb->attachments.size() && i < rp->attachments.size(); i++) {
         auto* view = AS_D11(ImageView, fb->attachments[i]);
@@ -2331,6 +2355,10 @@ static void VKAPI_CALL d3d11_vkCmdBeginRenderPass(
                 auto& cv = pRenderPassBegin->pClearValues[clearIdx];
                 ctx->ClearRenderTargetView(view->rtv.Get(), cv.color.float32);
             }
+        } else if (view->hasRtv && view->rtv && att.loadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE) {
+            // DONT_CARE: Vulkan 保证丢弃旧内容，D3D11 需要显式 clear 为黑色
+            const float black[4] = {0, 0, 0, 0};
+            ctx->ClearRenderTargetView(view->rtv.Get(), black);
         }
         if (view->hasDsv && view->dsv && att.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR) {
             if (clearIdx < pRenderPassBegin->clearValueCount) {
@@ -2338,6 +2366,8 @@ static void VKAPI_CALL d3d11_vkCmdBeginRenderPass(
                 ctx->ClearDepthStencilView(view->dsv.Get(), D3D11_CLEAR_DEPTH,
                     cv.depthStencil.depth, cv.depthStencil.stencil);
             }
+        } else if (view->hasDsv && view->dsv && att.loadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE) {
+            ctx->ClearDepthStencilView(view->dsv.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
         }
         clearIdx++;
     }

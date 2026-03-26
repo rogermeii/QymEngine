@@ -67,6 +67,7 @@ static DXGI_FORMAT vkFormatToDxgi(VkFormat format)
     case VK_FORMAT_R32G32_SFLOAT:        return DXGI_FORMAT_R32G32_FLOAT;
     case VK_FORMAT_R32_SFLOAT:           return DXGI_FORMAT_R32_FLOAT;
     case VK_FORMAT_R16G16B16A16_SFLOAT:  return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    case VK_FORMAT_R16G16_SFLOAT:        return DXGI_FORMAT_R16G16_FLOAT;
     case VK_FORMAT_D32_SFLOAT:           return DXGI_FORMAT_D32_FLOAT;
     case VK_FORMAT_D24_UNORM_S8_UINT:    return DXGI_FORMAT_D24_UNORM_S8_UINT;
     case VK_FORMAT_D16_UNORM:            return DXGI_FORMAT_D16_UNORM;
@@ -823,6 +824,7 @@ static VkResult VKAPI_CALL d3d12_vkCreateImage(
     img->width = pCreateInfo->extent.width;
     img->height = pCreateInfo->extent.height;
     img->mipLevels = pCreateInfo->mipLevels;
+    img->arrayLayers = pCreateInfo->arrayLayers;
     img->usage = pCreateInfo->usage;
     img->currentLayout = pCreateInfo->initialLayout;
 
@@ -831,7 +833,7 @@ static VkResult VKAPI_CALL d3d12_vkCreateImage(
     img->resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     img->resourceDesc.Width = img->width;
     img->resourceDesc.Height = img->height;
-    img->resourceDesc.DepthOrArraySize = 1;
+    img->resourceDesc.DepthOrArraySize = static_cast<UINT16>(img->arrayLayers);
     img->resourceDesc.MipLevels = static_cast<UINT16>(img->mipLevels);
     img->resourceDesc.Format = vkFormatToDxgi(img->format);
     img->resourceDesc.SampleDesc.Count = 1;
@@ -967,7 +969,16 @@ static VkResult VKAPI_CALL d3d12_vkCreateImageView(
             view->rtvHandle = device->allocRtv();
             D3D12_RENDER_TARGET_VIEW_DESC rtvDesc = {};
             rtvDesc.Format = dxgiFormat;
-            rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+            // Cubemap 面视图 (arrayLayers>1 的 image 上的单层子视图) 需要 TEXTURE2DARRAY
+            if (img->arrayLayers > 1) {
+                rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DARRAY;
+                rtvDesc.Texture2DArray.MipSlice = view->subresourceRange.baseMipLevel;
+                rtvDesc.Texture2DArray.FirstArraySlice = view->subresourceRange.baseArrayLayer;
+                rtvDesc.Texture2DArray.ArraySize = view->subresourceRange.layerCount;
+            } else {
+                rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+                rtvDesc.Texture2D.MipSlice = view->subresourceRange.baseMipLevel;
+            }
             device->device->CreateRenderTargetView(img->resource.Get(), &rtvDesc, view->rtvHandle);
             view->hasRtv = true;
         }
@@ -983,9 +994,16 @@ static VkResult VKAPI_CALL d3d12_vkCreateImageView(
                 srvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
             else
                 srvDesc.Format = dxgiFormat;
-            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srvDesc.Texture2D.MipLevels = (img->mipLevels > 0) ? img->mipLevels : 1;
+            // Cubemap (arrayLayers==6 且 viewType==CUBE) 需要 TEXTURECUBE dimension
+            if (view->viewType == VK_IMAGE_VIEW_TYPE_CUBE) {
+                srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+                srvDesc.TextureCube.MipLevels = (img->mipLevels > 0) ? img->mipLevels : 1;
+                srvDesc.TextureCube.MostDetailedMip = 0;
+            } else {
+                srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                srvDesc.Texture2D.MipLevels = (img->mipLevels > 0) ? img->mipLevels : 1;
+            }
             device->device->CreateShaderResourceView(img->resource.Get(), &srvDesc, view->srvHandle);
             view->hasSrv = true;
         }
@@ -1531,9 +1549,11 @@ static void buildRootSignature(VkDevice device, VkPipelineLayout layout) {
         rootParams.push_back(param);
     }
 
-    // Static samplers (s0-s3)
-    D3D12_STATIC_SAMPLER_DESC samplers[4] = {};
-    for (int i = 0; i < 4; i++) {
+    // Static samplers (s0..sN, 每个 SRV 对应一个 sampler)
+    uint32_t samplerCount = std::max(totalSrvCount, 1u);
+    std::vector<D3D12_STATIC_SAMPLER_DESC> samplers(samplerCount);
+    for (uint32_t i = 0; i < samplerCount; i++) {
+        samplers[i] = {};
         samplers[i].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
         samplers[i].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
         samplers[i].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -1546,8 +1566,8 @@ static void buildRootSignature(VkDevice device, VkPipelineLayout layout) {
     D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
     rsDesc.NumParameters = static_cast<UINT>(rootParams.size());
     rsDesc.pParameters = rootParams.data();
-    rsDesc.NumStaticSamplers = 4;
-    rsDesc.pStaticSamplers = samplers;
+    rsDesc.NumStaticSamplers = samplerCount;
+    rsDesc.pStaticSamplers = samplers.data();
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     ComPtr<ID3DBlob> sig, err;
@@ -2264,6 +2284,7 @@ static void VKAPI_CALL d3d12_vkCmdBeginRenderPass(
                                  FALSE, hasDsv ? &dsvHandle : nullptr);
 
     // 根据 render pass 的 loadOp 执行 clear
+    // DONT_CARE 也需要 clear 以防止跨帧数据累积 (bloom 等后处理)
     uint32_t clearIdx = 0;
     for (size_t i = 0; i < fb->attachments.size() && i < rp->attachments.size(); i++) {
         auto* view = fb->attachments[i];
@@ -2275,6 +2296,10 @@ static void VKAPI_CALL d3d12_vkCmdBeginRenderPass(
                 auto& cv = pRenderPassBegin->pClearValues[clearIdx];
                 cmdList->ClearRenderTargetView(view->rtvHandle, cv.color.float32, 0, nullptr);
             }
+        } else if (view->hasRtv && att.loadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE) {
+            // DONT_CARE: Vulkan 保证丢弃旧内容，D3D12 需要显式 clear 为黑色
+            const float black[4] = {0, 0, 0, 0};
+            cmdList->ClearRenderTargetView(view->rtvHandle, black, 0, nullptr);
         }
         if (view->hasDsv && att.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR) {
             if (clearIdx < pRenderPassBegin->clearValueCount) {
@@ -2282,6 +2307,9 @@ static void VKAPI_CALL d3d12_vkCmdBeginRenderPass(
                 cmdList->ClearDepthStencilView(view->dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
                     cv.depthStencil.depth, cv.depthStencil.stencil, 0, nullptr);
             }
+        } else if (view->hasDsv && att.loadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE) {
+            cmdList->ClearDepthStencilView(view->dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
+                1.0f, 0, 0, nullptr);
         }
         clearIdx++;
     }

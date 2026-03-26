@@ -147,6 +147,7 @@ struct VkImage_T {
     uint32_t                    width = 0;
     uint32_t                    height = 0;
     uint32_t                    mipLevels = 1;
+    uint32_t                    arrayLayers = 1;      // 6 for cubemap
     VkImageUsageFlags           usage = 0;
     bool                        ownsResource = true;  // false = swapchain image
     VkDeviceMemory              boundMemory = VK_NULL_HANDLE;

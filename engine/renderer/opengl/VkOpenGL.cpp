@@ -2855,9 +2855,10 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdBeginRenderPass(
         glEnable(GL_SCISSOR_TEST);
     }
 
-    // GLES: 对 DONT_CARE 的 attachment 执行 glClear 丢弃旧内容
-    // Vulkan 的 DONT_CARE 保证丢弃，但 GLES 默认保留旧数据导致 bloom 跨帧累积
-    if (s_isGLES && fb->fbo != 0 && !clearMask) {
+    // 对 DONT_CARE 的 attachment 执行 glClear 丢弃旧内容
+    // Vulkan 的 DONT_CARE 保证丢弃，但 OpenGL/GLES 默认保留旧数据导致 bloom 跨帧累积
+    // Desktop OpenGL 同样存在此问题，因此对所有非默认 FBO 统一处理
+    if (fb->fbo != 0 && !clearMask) {
         GLbitfield dontCareClear = 0;
         for (size_t i = 0; i < fb->attachments.size() && i < rp->attachments.size(); i++) {
             auto& att = rp->attachments[i];
