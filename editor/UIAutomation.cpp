@@ -76,14 +76,23 @@ void UIAutomation::pollAndExecute(Renderer& renderer, Scene& scene, Camera& came
     if (!m_initialized) {
 #if TARGET_OS_IOS
         // iOS 沙箱: 使用 Documents 目录（可读写 + 可通过 iTunes 文件共享访问）
-        char* basePath = SDL_GetPrefPath("com.qymengine", "editor");
-        if (basePath) {
-            m_commandPath = std::string(basePath) + "command.json";
-            m_resultPath = std::string(basePath) + "command_result.json";
-            SDL_free(basePath);
-        } else {
-            m_commandPath = "command.json";
-            m_resultPath = "command_result.json";
+        // iOS: 使用 app container 的 Documents 目录
+        // SDL_GetBasePath() 在 iOS 上返回 app bundle 路径
+        // 我们需要通过 NSSearchPathForDirectoriesInDomains 获取 Documents
+        {
+            char* prefPath = SDL_GetPrefPath("com.qymengine", "editor");
+            std::string iosBase;
+            if (prefPath) {
+                iosBase = prefPath;
+                SDL_free(prefPath);
+            }
+            // 如果 SDL_GetPrefPath 失败，用硬编码路径
+            if (iosBase.empty()) {
+                iosBase = "/tmp/";
+            }
+            m_commandPath = iosBase + "command.json";
+            m_resultPath = iosBase + "command_result.json";
+            SDL_Log("[UIAutomation] iOS command path: %s", m_commandPath.c_str());
         }
 #else
         m_commandPath = std::string(ASSETS_DIR) + "/../captures/command.json";
