@@ -38,6 +38,8 @@ static std::string shaderVariant(const std::string& base) {
         return base + "_dxbc";
     if (vkIsOpenGLBackend() || vkIsGLESBackend())
         return base + "_glsl";
+    if (vkIsMetalBackend())
+        return base + "_msl";
     return base;
 }
 
@@ -1679,18 +1681,25 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
                 "sky");
 
             const bool gridUsesDepth = true;
-            createFullscreenBundlePipeline(
-                device,
-                m_offscreenRenderPass,
-                {m_frameOnlyLayout},
-                shaderBundlePath("Grid"),
-                variant,
-                true,
-                gridUsesDepth,
-                false,
-                m_gridPipeline,
-                m_gridPipelineLayout,
-                "grid");
+            try {
+                createFullscreenBundlePipeline(
+                    device,
+                    m_offscreenRenderPass,
+                    {m_frameOnlyLayout},
+                    shaderBundlePath("Grid"),
+                    variant,
+                    true,
+                    gridUsesDepth,
+                    false,
+                    m_gridPipeline,
+                    m_gridPipelineLayout,
+                    "grid");
+            } catch (const std::exception& e) {
+                // Grid MSL 编译是 Slang 的已知问题，暂时跳过
+                SDL_Log("[VkMetal] Grid 着色器加载失败（已知问题，跳过）: %s", e.what());
+                m_gridPipeline = VK_NULL_HANDLE;
+                m_gridPipelineLayout = VK_NULL_HANDLE;
+            }
         }
 
         // --- Create default material descriptor set (for nodes without material) ---
@@ -1969,18 +1978,25 @@ void Renderer::reloadShaders()
             "sky");
 
         const bool gridUsesDepth = true;
-        createFullscreenBundlePipeline(
-            device,
-            m_offscreenRenderPass,
-            {m_frameOnlyLayout},
-            shaderBundlePath("Grid"),
-            var,
-            true,
-            gridUsesDepth,
-            false,
-            m_gridPipeline,
-            m_gridPipelineLayout,
-            "grid");
+        try {
+            createFullscreenBundlePipeline(
+                device,
+                m_offscreenRenderPass,
+                {m_frameOnlyLayout},
+                shaderBundlePath("Grid"),
+                var,
+                true,
+                gridUsesDepth,
+                false,
+                m_gridPipeline,
+                m_gridPipelineLayout,
+                "grid");
+        } catch (const std::exception& e) {
+            // Grid MSL 编译是 Slang 的已知问题，暂时跳过
+            SDL_Log("[VkMetal] Grid 着色器重新加载失败（已知问题，跳过）: %s", e.what());
+            m_gridPipeline = VK_NULL_HANDLE;
+            m_gridPipelineLayout = VK_NULL_HANDLE;
+        }
     }
 
     // 重新加载后处理着色器

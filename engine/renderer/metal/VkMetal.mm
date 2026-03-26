@@ -23,17 +23,8 @@
 #import <cstring>
 #import <algorithm>
 #import <vector>
-
-// SPIRV-Cross 调用已提取到 SpirvToMSL.cpp（纯 C++，无 ARC）
-// 避免 -fobjc-arc 干扰 SPIRV-Cross 内部 C++ 对象的生命周期管理
-#include "renderer/metal/SpirvToMSL.h"
-
-// spv:: 枚举仍需在此使用（如 spv::ExecutionModelVertex）
-#if __has_include(<spirv_cross/spirv.hpp>)
-#include <spirv_cross/spirv.hpp>
-#else
-#include <spirv.hpp>
-#endif
+#import <set>
+#import <regex>
 
 // 句柄转换宏: VkXxx (不透明指针) <-> MTL_Xxx (实际结构体)
 #define AS_MTL(Type, handle) reinterpret_cast<MTL_##Type*>(handle)
@@ -1563,7 +1554,10 @@ static VKAPI_ATTR void VKAPI_CALL mtl_vkCmdBindDescriptorSets(
     auto* pl = AS_MTL(PipelineLayout, pipe->layout);
     if (!pl) return;
 
-    // 使用 SPIRV-Cross 的资源映射绑定到正确的 Metal index
+    // Slang MSL 的 buffer/texture/sampler index 从 MSL 文本中解析，
+    // 直接使用 pipeline 保存的绑定映射。
+    // 对于 UBO: 使用从 MSL 解析的 buffer(N) index
+    // 对于纹理: 使用从 MSL 解析的 texture(N)/sampler(N) index
     {
         for (uint32_t s = 0; s < pl->setLayouts.size() && s < 4; s++) {
             auto* setLayout = AS_MTL(DescriptorSetLayout, pl->setLayouts[s]);
@@ -1660,7 +1654,7 @@ static VKAPI_ATTR void VKAPI_CALL mtl_vkCmdBindVertexBuffers(
     auto* cb = AS_MTL(CommandBuffer, commandBuffer);
     if (!cb || !cb->encoder) return;
 
-    // 确定 SPIRV-Cross 分配的顶点缓冲 Metal buffer base index
+    // 确定顶点缓冲的 Metal buffer base index（从 MSL 解析）
     uint32_t vbBaseIndex = 0;
     auto* pipe = AS_MTL(Pipeline, cb->currentPipeline);
     if (pipe && pipe->vsBindings.hasVertexInputs) {
@@ -1671,7 +1665,7 @@ static VKAPI_ATTR void VKAPI_CALL mtl_vkCmdBindVertexBuffers(
         auto* buf = AS_MTL(Buffer, pBuffers[i]);
         if (!buf || !buf->buffer) continue;
 
-        // Vulkan binding → Metal buffer index (加上 SPIRV-Cross 的偏移)
+        // Vulkan binding → Metal buffer index
         uint32_t slot = vbBaseIndex + firstBinding + i;
         [cb->encoder setVertexBuffer:buf->buffer
                               offset:(NSUInteger)pOffsets[i]
@@ -1714,7 +1708,7 @@ static VKAPI_ATTR void VKAPI_CALL mtl_vkCmdPushConstants(
             cb->pushConstantSize = offset + size;
     }
 
-    // 查询 SPIRV-Cross 分配的 push constant Metal buffer index
+    // 查询 push constant 的 Metal buffer index（从 MSL 解析）
     auto* pipe = AS_MTL(Pipeline, cb->currentPipeline);
     uint32_t vsPcIdx = 1;  // 默认 index (fallback)
     uint32_t fsPcIdx = 1;
@@ -2185,6 +2179,149 @@ static VKAPI_ATTR void VKAPI_CALL mtl_vkDestroyPipelineLayout(
     delete AS_MTL(PipelineLayout, pipelineLayout);
 }
 
+// ============================================================================
+// MSL 文本解析 — 从 Slang 生成的 MSL 中提取 entry point 和资源绑定
+// ============================================================================
+
+/// 从 Slang 生成的 MSL 文本中解析 entry point、buffer/texture/sampler index
+/// Slang MSL 特点：
+/// - 入口函数用 [[vertex]]/[[fragment]] 标注
+/// - buffer/texture/sampler index 在参数列表中用 [[buffer(N)]]/[[texture(N)]]/[[sampler(N)]]
+/// - 顶点输入用 [[stage_in]] + [[attribute(N)]]
+// 从 Slang MSL 变量名中提取基础名称
+// 例如: "frame_1" → "frame", "shadowMap_texture_1" → "shadowMap",
+//       "albedoMap_sampler_1" → "albedoMap", "pc_1" → "pc"
+static std::string extractBaseName(const std::string& varName)
+{
+    // 去掉末尾的 _N 数字后缀
+    std::string name = varName;
+    auto lastUnderscore = name.rfind('_');
+    if (lastUnderscore != std::string::npos) {
+        bool allDigits = true;
+        for (size_t i = lastUnderscore + 1; i < name.size(); i++) {
+            if (!isdigit(name[i])) { allDigits = false; break; }
+        }
+        if (allDigits && lastUnderscore + 1 < name.size())
+            name = name.substr(0, lastUnderscore);
+    }
+    // 去掉 _texture 或 _sampler 后缀
+    if (name.size() > 8 && name.substr(name.size() - 8) == "_texture")
+        name = name.substr(0, name.size() - 8);
+    else if (name.size() > 8 && name.substr(name.size() - 8) == "_sampler")
+        name = name.substr(0, name.size() - 8);
+    return name;
+}
+
+static void parseMSLMetadata(const std::string& msl, MTL_ShaderModule* mod)
+{
+    if (!mod || msl.empty()) return;
+
+    // 1. 查找 [[vertex]] 或 [[fragment]] 确定着色器类型和入口函数名
+    //    格式: [[vertex]] ReturnType funcName(...)  或  [[fragment]] ReturnType funcName(...)
+    {
+        std::regex stageRe(R"(\[\[(vertex|fragment)\]\]\s+\S+\s+(\w+)\s*\()");
+        std::smatch m;
+        if (std::regex_search(msl, m, stageRe)) {
+            std::string stage = m[1].str();
+            mod->entryPointName = m[2].str();
+            mod->executionModel = (stage == "vertex") ? 0 : 4;
+            SDL_Log("[VkMetal]   MSL stage: %s, entry: '%s'",
+                    stage.c_str(), mod->entryPointName.c_str());
+        }
+    }
+
+    // 2. 解析入口函数参数中的 buffer/texture/sampler 绑定
+    //    同时提取变量名用于后续与 reflect JSON 绑定名匹配
+    uint32_t maxBufferIndex = 0;
+    bool hasAnyBuffer = false;
+
+    // 解析 "varName [[buffer(N)]]" — 提取变量名和 metal buffer index
+    // 格式: TypeName constant* varName [[buffer(N)]]
+    {
+        std::regex bufRe(R"((\w+)\s*\[\[buffer\((\d+)\)\]\])");
+        auto begin = std::sregex_iterator(msl.begin(), msl.end(), bufRe);
+        auto end = std::sregex_iterator();
+        for (auto it = begin; it != end; ++it) {
+            std::string varName = (*it)[1].str();
+            uint32_t idx = (uint32_t)std::stoul((*it)[2].str());
+            if (idx > maxBufferIndex) maxBufferIndex = idx;
+            hasAnyBuffer = true;
+
+            std::string baseName = extractBaseName(varName);
+            mod->bindings.namedBufferBindings[baseName] = idx;
+            // 临时 key，pipeline 创建时通过名称匹配重映射
+            mod->bindings.uboBindings[{0, idx}] = idx;
+        }
+    }
+
+    // 检测 PushConstants — 查找类型名中包含 "PushConstants" 的 buffer 参数
+    // 格式: PushConstants_0 constant* pc_1 [[buffer(N)]]
+    // 以及其他命名变体: FxaaPushConstant_0, BloomPushConstant_0 等
+    {
+        std::regex pcRe(R"((\w*[Pp]ush[Cc]onstant\w*)\s+\w+\*?\s+(\w+)\s*\[\[buffer\((\d+)\)\]\])");
+        std::smatch m;
+        if (std::regex_search(msl, m, pcRe)) {
+            uint32_t pcIdx = (uint32_t)std::stoul(m[3].str());
+            std::string pcVarName = m[2].str();
+            mod->bindings.pushConstantBufferIndex = pcIdx;
+            // push constants 不应在 uboBindings/namedBufferBindings 中
+            mod->bindings.uboBindings.erase({0, pcIdx});
+            std::string pcBase = extractBaseName(pcVarName);
+            mod->bindings.namedBufferBindings.erase(pcBase);
+            SDL_Log("[VkMetal]   push constants -> buffer(%u) (var: %s)",
+                    pcIdx, pcVarName.c_str());
+        }
+    }
+
+    // 解析 "varName [[texture(N)]]" — 提取变量名和 metal texture index
+    {
+        std::regex texRe(R"((\w+)\s*\[\[texture\((\d+)\)\]\])");
+        auto begin = std::sregex_iterator(msl.begin(), msl.end(), texRe);
+        auto end = std::sregex_iterator();
+        for (auto it = begin; it != end; ++it) {
+            std::string varName = (*it)[1].str();
+            uint32_t idx = (uint32_t)std::stoul((*it)[2].str());
+            std::string baseName = extractBaseName(varName);
+            mod->bindings.namedTextureBindings[baseName] = idx;
+            mod->bindings.textureBindings[{0, idx}] = idx;
+        }
+    }
+
+    // 解析 "varName [[sampler(N)]]" — 提取变量名和 metal sampler index
+    {
+        std::regex smpRe(R"((\w+)\s*\[\[sampler\((\d+)\)\]\])");
+        auto begin = std::sregex_iterator(msl.begin(), msl.end(), smpRe);
+        auto end = std::sregex_iterator();
+        for (auto it = begin; it != end; ++it) {
+            std::string varName = (*it)[1].str();
+            uint32_t idx = (uint32_t)std::stoul((*it)[2].str());
+            std::string baseName = extractBaseName(varName);
+            mod->bindings.namedSamplerBindings[baseName] = idx;
+            mod->bindings.samplerBindings[{0, idx}] = idx;
+        }
+    }
+
+    // 3. 检测 [[stage_in]] — 有顶点输入
+    if (msl.find("[[stage_in]]") != std::string::npos &&
+        mod->executionModel == 0 /* vertex */) {
+        mod->bindings.hasVertexInputs = true;
+        // 顶点缓冲 buffer index = 最大 buffer(N) + 1
+        mod->bindings.vertexBufferIndex = hasAnyBuffer ? (maxBufferIndex + 1) : 0;
+        SDL_Log("[VkMetal]   vertex buffer index: %u (max buffer=%u)",
+                mod->bindings.vertexBufferIndex, maxBufferIndex);
+    }
+
+    // 打印解析结果
+    for (auto& [name, idx] : mod->bindings.namedBufferBindings)
+        SDL_Log("[VkMetal]   named buffer: '%s' -> buffer(%u)", name.c_str(), idx);
+    for (auto& [name, idx] : mod->bindings.namedTextureBindings)
+        SDL_Log("[VkMetal]   named texture: '%s' -> texture(%u)", name.c_str(), idx);
+
+    SDL_Log("[VkMetal] MSL 解析完成 (%zu chars, entry='%s', %zu UBOs, %zu textures)",
+            msl.size(), mod->entryPointName.c_str(),
+            mod->bindings.uboBindings.size(), mod->bindings.textureBindings.size());
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL mtl_vkCreateShaderModule(
     VkDevice                        device,
     const VkShaderModuleCreateInfo* pCreateInfo,
@@ -2199,17 +2336,19 @@ static VKAPI_ATTR VkResult VKAPI_CALL mtl_vkCreateShaderModule(
         bool isSpirvData = (pCreateInfo->codeSize >= 4 && words[0] == SPIRV_MAGIC);
 
         if (isSpirvData) {
-            // SPIRV-Cross 转换 SPIR-V → MSL（在独立 C++ 编译单元中执行，避免 ARC 干扰）
-            size_t wordCount = pCreateInfo->codeSize / sizeof(uint32_t);
-            std::vector<uint32_t> spirvData(words, words + wordCount);
-            compileSpirvToMSL(std::move(spirvData), mod);
+            // SPIR-V 数据 → ImGui 着色器（由 imgui_impl_vulkan 传入）
+            // 引擎着色器已通过 Slang 离线编译为 MSL 文本（default_msl 变体）
+            mod->isImguiReplacement = true;
         } else {
-            // MSL 文本
+            // MSL 文本（Slang 离线编译的 default_msl 变体）
             std::string raw(reinterpret_cast<const char*>(pCreateInfo->pCode),
                             pCreateInfo->codeSize);
             while (!raw.empty() && raw.back() == '\0')
                 raw.pop_back();
             mod->mslSource = raw;
+
+            // 从 MSL 文本解析 entry point 和资源绑定信息
+            parseMSLMetadata(mod->mslSource, mod);
         }
     }
 
@@ -2243,55 +2382,91 @@ static VKAPI_ATTR VkResult VKAPI_CALL mtl_vkCreateGraphicsPipelines(
         auto* pipe = new MTL_Pipeline();
         pipe->layout = ci.layout;
 
-        // 所有 pipeline 统一路径: 每个 stage 的 MSL 由 SPIRV-Cross 生成
         id<MTLFunction> vertexFunc = nil;
         id<MTLFunction> fragmentFunc = nil;
         MTL_ShaderModule* vsMod = nullptr;
         MTL_ShaderModule* fsMod = nullptr;
 
-        // 逐 stage 编译 MSL 并获取 MTLFunction
+        // 检测是否为 ImGui pipeline（任意 stage 使用 ImGui 替换着色器）
+        bool isImguiPipeline = false;
         for (uint32_t s = 0; s < ci.stageCount; s++) {
             auto* sm = AS_MTL(ShaderModule, ci.pStages[s].module);
-            if (!sm || sm->mslSource.empty()) continue;
+            if (sm && sm->isImguiReplacement) {
+                isImguiPipeline = true;
+                break;
+            }
+        }
 
-            NSString* mslSrc = [NSString stringWithUTF8String:sm->mslSource.c_str()];
+        if (isImguiPipeline) {
+            // ImGui pipeline: 使用内置 MSL 着色器
+            NSString* mslSrc = [NSString stringWithUTF8String:s_imguiMSL];
             NSError* error = nil;
             id<MTLLibrary> lib = [dev->device newLibraryWithSource:mslSrc
                                                            options:nil
                                                              error:&error];
-            if (!lib) {
-                SDL_Log("[VkMetal] MSL compile FAILED (stage %u): %s", s,
+            if (lib) {
+                vertexFunc = [lib newFunctionWithName:@"imgui_vertex"];
+                fragmentFunc = [lib newFunctionWithName:@"imgui_fragment"];
+                // ImGui 绑定: buffer(1) = uniforms, texture(0) = font atlas
+                // 顶点缓冲 index = 0（[[stage_in]] 通过 vertex descriptor）
+            }
+            if (!vertexFunc || !fragmentFunc) {
+                SDL_Log("[VkMetal] ImGui MSL compile FAILED: %s",
                         error ? [[error localizedDescription] UTF8String] : "unknown");
-                continue;
             }
 
-            // 确定 entry point 名称:
-            // 优先使用 SPIRV-Cross 记录的名称，否则用 Vulkan 传入的名称
-            NSString* funcName = nil;
-            if (!sm->entryPointName.empty()) {
-                funcName = [NSString stringWithUTF8String:sm->entryPointName.c_str()];
-            } else if (ci.pStages[s].pName) {
-                funcName = [NSString stringWithUTF8String:ci.pStages[s].pName];
-            }
+            // ImGui 固定绑定映射:
+            // VS: buffer(1) = projection matrix (push constants)
+            // FS: texture(0) = font atlas, sampler(0) = font sampler
+            pipe->vsBindings.hasVertexInputs = true;
+            pipe->vsBindings.vertexBufferIndex = 0;  // [[stage_in]] via vertex descriptor at buffer(0)
+            pipe->vsBindings.pushConstantBufferIndex = 1;  // ImGui uniforms at buffer(1)
+            pipe->fsBindings.textureBindings[{0, 0}] = 0;
+            pipe->fsBindings.samplerBindings[{0, 0}] = 0;
+        } else {
+            // 引擎着色器: MSL 由 Slang 离线编译（default_msl 变体）
+            for (uint32_t s = 0; s < ci.stageCount; s++) {
+                auto* sm = AS_MTL(ShaderModule, ci.pStages[s].module);
+                if (!sm || sm->mslSource.empty()) continue;
 
-            id<MTLFunction> func = funcName ? [lib newFunctionWithName:funcName] : nil;
-
-            // 如果找不到，尝试获取 library 中唯一的函数
-            if (!func) {
-                NSArray<NSString*>* names = [lib functionNames];
-                if (names.count > 0) {
-                    func = [lib newFunctionWithName:names[0]];
-                    SDL_Log("[VkMetal]   fallback: 使用 library 中的函数 '%s'",
-                            [names[0] UTF8String]);
+                NSString* mslSrc = [NSString stringWithUTF8String:sm->mslSource.c_str()];
+                NSError* error = nil;
+                id<MTLLibrary> lib = [dev->device newLibraryWithSource:mslSrc
+                                                               options:nil
+                                                                 error:&error];
+                if (!lib) {
+                    SDL_Log("[VkMetal] MSL compile FAILED (stage %u): %s", s,
+                            error ? [[error localizedDescription] UTF8String] : "unknown");
+                    continue;
                 }
-            }
 
-            if (ci.pStages[s].stage == VK_SHADER_STAGE_VERTEX_BIT) {
-                vertexFunc = func;
-                vsMod = sm;
-            } else if (ci.pStages[s].stage == VK_SHADER_STAGE_FRAGMENT_BIT) {
-                fragmentFunc = func;
-                fsMod = sm;
+                // 使用从 MSL 文本中解析的 entry point 名
+                NSString* funcName = nil;
+                if (!sm->entryPointName.empty()) {
+                    funcName = [NSString stringWithUTF8String:sm->entryPointName.c_str()];
+                } else if (ci.pStages[s].pName) {
+                    funcName = [NSString stringWithUTF8String:ci.pStages[s].pName];
+                }
+
+                id<MTLFunction> func = funcName ? [lib newFunctionWithName:funcName] : nil;
+
+                // 如果找不到，尝试获取 library 中唯一的函数
+                if (!func) {
+                    NSArray<NSString*>* names = [lib functionNames];
+                    if (names.count > 0) {
+                        func = [lib newFunctionWithName:names[0]];
+                        SDL_Log("[VkMetal]   fallback: 使用 library 中的函数 '%s'",
+                                [names[0] UTF8String]);
+                    }
+                }
+
+                if (ci.pStages[s].stage == VK_SHADER_STAGE_VERTEX_BIT) {
+                    vertexFunc = func;
+                    vsMod = sm;
+                } else if (ci.pStages[s].stage == VK_SHADER_STAGE_FRAGMENT_BIT) {
+                    fragmentFunc = func;
+                    fsMod = sm;
+                }
             }
         }
 
@@ -2305,52 +2480,172 @@ static VKAPI_ATTR VkResult VKAPI_CALL mtl_vkCreateGraphicsPipelines(
         if (vsMod) pipe->vsBindings = vsMod->bindings;
         if (fsMod) pipe->fsBindings = fsMod->bindings;
 
+        // 为 Slang MSL 着色器构建 (set, binding) → Metal index 映射
+        //
+        // Slang 分配 metal index 的规则:
+        //   - 按 (set, binding) 顺序遍历所有同类型资源
+        //   - UBO: 按 (set, binding) 中 UBO 的出现顺序分配 buffer(0), buffer(1), ...
+        //   - Texture: 同理分配 texture(0), texture(1), ...（sampler index 相同）
+        //   - 即使某个 binding 在该 stage 中未使用，Slang 仍保留其位置（metal index 有间隙）
+        //     所以 metal index 就是该资源在 (set, binding) 排序表中的位置索引
+        //   - Push constants 获得最大 buffer index
+        //
+        // 策略: metal index 即为该资源在扁平化 (set, binding) 表中的位置
+        //       例如 texture(4) 对应第 5 个纹理绑定（按 set,binding 排序）
+        if (!isImguiPipeline && ci.layout) {
+            auto* pl = AS_MTL(PipelineLayout, ci.layout);
+            if (pl) {
+                // 收集所有 UBO 和 texture 绑定，按 (set, binding) 排序
+                struct BindingInfo {
+                    uint32_t set, binding;
+                    VkDescriptorType type;
+                };
+                std::vector<BindingInfo> allUBOs;
+                std::vector<BindingInfo> allTextures;
+
+                for (uint32_t s = 0; s < pl->setLayouts.size(); s++) {
+                    auto* setLayout = AS_MTL(DescriptorSetLayout, pl->setLayouts[s]);
+                    if (!setLayout) continue;
+                    for (auto& b : setLayout->bindings) {
+                        if (b.descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+                            b.descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC) {
+                            allUBOs.push_back({s, b.binding, b.descriptorType});
+                        } else if (b.descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ||
+                                   b.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
+                            for (uint32_t d = 0; d < b.descriptorCount; d++) {
+                                allTextures.push_back({s, b.binding + d, b.descriptorType});
+                            }
+                        }
+                    }
+                }
+
+                // 按 (set, binding) 排序 — Slang 按此顺序分配 metal index
+                auto cmp = [](const BindingInfo& a, const BindingInfo& b) {
+                    return (a.set < b.set) || (a.set == b.set && a.binding < b.binding);
+                };
+                std::sort(allUBOs.begin(), allUBOs.end(), cmp);
+                std::sort(allTextures.begin(), allTextures.end(), cmp);
+
+                // 构建 UBO (set, binding) → Metal buffer index
+                // Slang 分配规则: 按 (set, binding) 排序后，第 N 个 UBO 得到 buffer(N)
+                // metal index 就是 UBO 在排序表中的位置
+                auto buildUBOMapping = [&](MTL_ResourceBindings& stageBindings) {
+                    // 获取该 stage 实际使用的 metal buffer indices
+                    std::set<uint32_t> usedIndices;
+                    for (auto& [key, idx] : stageBindings.uboBindings)
+                        usedIndices.insert(idx);
+
+                    stageBindings.uboBindings.clear();
+
+                    // metal index N 对应 allUBOs[N]
+                    for (uint32_t metalIdx : usedIndices) {
+                        if (metalIdx < allUBOs.size()) {
+                            auto& ubo = allUBOs[metalIdx];
+                            stageBindings.uboBindings[{ubo.set, ubo.binding}] = metalIdx;
+                            SDL_Log("[VkMetal]   UBO set=%u bind=%u -> buffer(%u)",
+                                    ubo.set, ubo.binding, metalIdx);
+                        }
+                    }
+                };
+
+                // 构建 texture/sampler (set, binding) → Metal texture/sampler index
+                // metal index N 对应 allTextures[N]
+                auto buildTextureMapping = [&](MTL_ResourceBindings& stageBindings) {
+                    std::set<uint32_t> usedTexIndices;
+                    for (auto& [key, idx] : stageBindings.textureBindings)
+                        usedTexIndices.insert(idx);
+
+                    std::set<uint32_t> usedSmpIndices;
+                    for (auto& [key, idx] : stageBindings.samplerBindings)
+                        usedSmpIndices.insert(idx);
+
+                    stageBindings.textureBindings.clear();
+                    stageBindings.samplerBindings.clear();
+
+                    for (uint32_t metalIdx : usedTexIndices) {
+                        if (metalIdx < allTextures.size()) {
+                            auto& tex = allTextures[metalIdx];
+                            stageBindings.textureBindings[{tex.set, tex.binding}] = metalIdx;
+                            SDL_Log("[VkMetal]   Texture set=%u bind=%u -> texture(%u)",
+                                    tex.set, tex.binding, metalIdx);
+                        }
+                    }
+                    for (uint32_t metalIdx : usedSmpIndices) {
+                        if (metalIdx < allTextures.size()) {
+                            auto& tex = allTextures[metalIdx];
+                            stageBindings.samplerBindings[{tex.set, tex.binding}] = metalIdx;
+                        }
+                    }
+                };
+
+                if (vsMod) {
+                    buildUBOMapping(pipe->vsBindings);
+                    buildTextureMapping(pipe->vsBindings);
+                }
+                if (fsMod) {
+                    buildUBOMapping(pipe->fsBindings);
+                    buildTextureMapping(pipe->fsBindings);
+                }
+            }
+        }
+
         // 构建 MTLRenderPipelineDescriptor
         MTLRenderPipelineDescriptor* pipeDesc = [[MTLRenderPipelineDescriptor alloc] init];
         pipeDesc.vertexFunction = vertexFunc;
         pipeDesc.fragmentFunction = fragmentFunc;
 
         // 顶点描述符
+        // 全屏着色器使用 [[vertex_id]] 而非 [[stage_in]]，不需要顶点描述符
         if (ci.pVertexInputState) {
-            MTLVertexDescriptor* vertDesc = [[MTLVertexDescriptor alloc] init];
+            bool needsVertexDescriptor = isImguiPipeline ||
+                (vsMod && vsMod->bindings.hasVertexInputs) ||
+                (ci.pVertexInputState->vertexAttributeDescriptionCount > 0);
 
-            // 确定 SPIRV-Cross 分配给顶点输入的 Metal buffer index
-            uint32_t vbBaseIndex = 0;
-            if (vsMod && vsMod->bindings.hasVertexInputs) {
-                vbBaseIndex = vsMod->bindings.vertexBufferIndex;
-            }
+            if (needsVertexDescriptor) {
+                MTLVertexDescriptor* vertDesc = [[MTLVertexDescriptor alloc] init];
 
-            for (uint32_t a = 0; a < ci.pVertexInputState->vertexAttributeDescriptionCount; a++) {
-                auto& attr = ci.pVertexInputState->pVertexAttributeDescriptions[a];
-                MTLVertexFormat mtlFmt = toMTLVertexFormat(attr.format);
-                vertDesc.attributes[attr.location].format = mtlFmt;
-                vertDesc.attributes[attr.location].offset = attr.offset;
-                // Vulkan binding → Metal buffer index:
-                // SPIRV-Cross 通常把 binding 0 映射到 vbBaseIndex，
-                // binding 1 映射到 vbBaseIndex+1，以此类推
-                vertDesc.attributes[attr.location].bufferIndex = vbBaseIndex + attr.binding;
-            }
-
-            for (uint32_t b = 0; b < ci.pVertexInputState->vertexBindingDescriptionCount; b++) {
-                auto& binding = ci.pVertexInputState->pVertexBindingDescriptions[b];
-                uint32_t mtlBufIdx = vbBaseIndex + binding.binding;
-                vertDesc.layouts[mtlBufIdx].stride = binding.stride;
-                vertDesc.layouts[mtlBufIdx].stepFunction =
-                    (binding.inputRate == VK_VERTEX_INPUT_RATE_INSTANCE)
-                        ? MTLVertexStepFunctionPerInstance
-                        : MTLVertexStepFunctionPerVertex;
-                if (binding.binding < 8) {
-                    pipe->vertexStrides[binding.binding] = binding.stride;
-                    if (binding.binding + 1 > pipe->vertexBindingCount)
-                        pipe->vertexBindingCount = binding.binding + 1;
+                // 确定顶点缓冲的 Metal buffer index
+                // Slang MSL: vertexBufferIndex = MSL 中最大 buffer(N) + 1
+                // ImGui: vertexBufferIndex = 0（内置 MSL 使用 buffer(1) 为 uniforms）
+                uint32_t vbBaseIndex = 0;
+                if (isImguiPipeline) {
+                    vbBaseIndex = 0;  // ImGui 顶点缓冲使用 buffer(0)
+                } else if (vsMod && vsMod->bindings.hasVertexInputs) {
+                    vbBaseIndex = vsMod->bindings.vertexBufferIndex;
                 }
-            }
 
-            SDL_Log("[VkMetal]   vertex descriptor: %u attrs, %u bindings, vbBaseIndex=%u",
-                    ci.pVertexInputState->vertexAttributeDescriptionCount,
-                    ci.pVertexInputState->vertexBindingDescriptionCount,
-                    vbBaseIndex);
-            pipeDesc.vertexDescriptor = vertDesc;
+                for (uint32_t a = 0; a < ci.pVertexInputState->vertexAttributeDescriptionCount; a++) {
+                    auto& attr = ci.pVertexInputState->pVertexAttributeDescriptions[a];
+                    MTLVertexFormat mtlFmt = toMTLVertexFormat(attr.format);
+                    vertDesc.attributes[attr.location].format = mtlFmt;
+                    vertDesc.attributes[attr.location].offset = attr.offset;
+                    // Vulkan binding → Metal buffer index
+                    vertDesc.attributes[attr.location].bufferIndex = vbBaseIndex + attr.binding;
+                }
+
+                for (uint32_t b = 0; b < ci.pVertexInputState->vertexBindingDescriptionCount; b++) {
+                    auto& binding = ci.pVertexInputState->pVertexBindingDescriptions[b];
+                    uint32_t mtlBufIdx = vbBaseIndex + binding.binding;
+                    vertDesc.layouts[mtlBufIdx].stride = binding.stride;
+                    vertDesc.layouts[mtlBufIdx].stepFunction =
+                        (binding.inputRate == VK_VERTEX_INPUT_RATE_INSTANCE)
+                            ? MTLVertexStepFunctionPerInstance
+                            : MTLVertexStepFunctionPerVertex;
+                    if (binding.binding < 8) {
+                        pipe->vertexStrides[binding.binding] = binding.stride;
+                        if (binding.binding + 1 > pipe->vertexBindingCount)
+                            pipe->vertexBindingCount = binding.binding + 1;
+                    }
+                }
+
+                SDL_Log("[VkMetal]   vertex descriptor: %u attrs, %u bindings, vbBaseIndex=%u",
+                        ci.pVertexInputState->vertexAttributeDescriptionCount,
+                        ci.pVertexInputState->vertexBindingDescriptionCount,
+                        vbBaseIndex);
+                pipeDesc.vertexDescriptor = vertDesc;
+            } else {
+                SDL_Log("[VkMetal]   跳过顶点描述符（全屏着色器，使用 [[vertex_id]]）");
+            }
         }
 
         // 颜色附件格式和混合状态

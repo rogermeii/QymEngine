@@ -35,6 +35,8 @@ static std::string iblShaderVariant(const std::string& base) {
         return base + "_dxbc";
     if (vkIsOpenGLBackend() || vkIsGLESBackend())
         return base + "_glsl";
+    if (vkIsMetalBackend())
+        return base + "_msl";
     return base;
 }
 

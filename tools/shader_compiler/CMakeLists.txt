@@ -22,10 +22,23 @@ if(MSVC)
     target_compile_options(ShaderCompiler PRIVATE /utf-8)
 endif()
 
-# Slang from Vulkan SDK
-target_include_directories(ShaderCompiler PRIVATE "${Vulkan_INCLUDE_DIRS}/../Include/slang")
-target_link_directories(ShaderCompiler PRIVATE "${Vulkan_INCLUDE_DIRS}/../Lib")
-target_link_libraries(ShaderCompiler PRIVATE slang spirv_reflect_tool)
+# Slang SDK: 优先使用 SLANG_SDK_PATH，其次从 Vulkan SDK 查找
+if(DEFINED SLANG_SDK_PATH AND EXISTS "${SLANG_SDK_PATH}/include/slang.h")
+    message(STATUS "Using Slang SDK from: ${SLANG_SDK_PATH}")
+    target_include_directories(ShaderCompiler PRIVATE "${SLANG_SDK_PATH}/include")
+    target_link_directories(ShaderCompiler PRIVATE "${SLANG_SDK_PATH}/lib")
+    if(APPLE)
+        target_link_libraries(ShaderCompiler PRIVATE "${SLANG_SDK_PATH}/lib/libslang.dylib")
+    else()
+        target_link_libraries(ShaderCompiler PRIVATE slang)
+    endif()
+else()
+    # Fallback: Vulkan SDK 内置 Slang (Windows)
+    target_include_directories(ShaderCompiler PRIVATE "${Vulkan_INCLUDE_DIRS}/../Include/slang")
+    target_link_directories(ShaderCompiler PRIVATE "${Vulkan_INCLUDE_DIRS}/../Lib")
+    target_link_libraries(ShaderCompiler PRIVATE slang)
+endif()
+target_link_libraries(ShaderCompiler PRIVATE spirv_reflect_tool)
 
 # nlohmann/json for output
 target_include_directories(ShaderCompiler PRIVATE "${CMAKE_SOURCE_DIR}/3rd-party/nlohmann")

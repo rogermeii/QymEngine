@@ -216,11 +216,10 @@ struct MTL_Framebuffer {
 // Pipeline
 // ============================================================================
 
-// SPIRV-Cross 资源绑定映射信息
+// MSL 资源绑定信息（从 Slang 生成的 MSL 文本中解析）
 struct MTL_ResourceBindings {
-    // 顶点属性: Vulkan location → MSL buffer index
-    // (SPIRV-Cross 会把 stage_inputs 映射到某个 buffer index)
-    uint32_t                        vertexBufferIndex = 0;  // stage_inputs 使用的 Metal buffer index
+    // 顶点缓冲 Metal buffer index（= MSL 中最大 buffer(N) + 1，仅 vertex shader）
+    uint32_t                        vertexBufferIndex = 0;
     bool                            hasVertexInputs = false;
 
     // UBO: (desc_set, binding) → MSL buffer index
@@ -234,19 +233,29 @@ struct MTL_ResourceBindings {
 
     // Push constants → MSL buffer index
     uint32_t                        pushConstantBufferIndex = UINT32_MAX;
+
+    // 基于变量名的绑定映射（从 MSL 入口函数参数中解析）
+    // Slang MSL 中 UBO 参数名格式: frame_N, materialParams_N
+    // 纹理参数名格式: shadowMap_texture_N, albedoMap_texture_N
+    std::map<std::string, uint32_t> namedBufferBindings;   // varBaseName → metal buffer(N)
+    std::map<std::string, uint32_t> namedTextureBindings;  // varBaseName → metal texture(N)
+    std::map<std::string, uint32_t> namedSamplerBindings;  // varBaseName → metal sampler(N)
 };
 
 struct MTL_ShaderModule {
     std::string                     mslSource;
 
-    // SPIRV-Cross 生成的资源绑定映射
+    // 从 MSL 文本中解析的资源绑定
     MTL_ResourceBindings            bindings;
 
-    // SPIRV-Cross 可能重命名 entry point
+    // 入口函数名（从 MSL [[vertex]]/[[fragment]] 后解析）
     std::string                     entryPointName;
 
-    // 着色器执行模型
-    uint32_t                        executionModel = 0; // spv::ExecutionModelVertex 等
+    // 着色器执行模型: 0=vertex, 4=fragment
+    uint32_t                        executionModel = 0;
+
+    // ImGui 着色器标记（SPIR-V 输入，使用内置 MSL 替换）
+    bool                            isImguiReplacement = false;
 };
 
 struct MTL_PipelineLayout {
@@ -276,7 +285,7 @@ struct MTL_Pipeline {
     float                           depthBiasSlope = 0.f;
     float                           depthBiasClamp = 0.f;
 
-    // 顶点着色器 / 片段着色器的 SPIRV-Cross 资源绑定映射
+    // 顶点着色器 / 片段着色器的资源绑定映射（从 MSL 解析）
     MTL_ResourceBindings            vsBindings;
     MTL_ResourceBindings            fsBindings;
 };

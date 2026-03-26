@@ -96,42 +96,6 @@ target_sources(imgui PRIVATE "${CMAKE_SOURCE_DIR}/../3rd-party/imguizmo/ImGuizmo
 target_include_directories(imgui PUBLIC "${CMAKE_SOURCE_DIR}/../3rd-party/imguizmo")
 
 # ============================================================================
-# SPIRV-Cross (FetchContent — 交叉编译 arm64 iOS)
-#
-# 用于运行时 SPIR-V → MSL 转换 (Metal 后端)
-# ============================================================================
-FetchContent_Declare(spirv_cross
-    GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git
-    GIT_TAG main
-    GIT_SHALLOW TRUE
-)
-set(SPIRV_CROSS_CLI OFF CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_ENABLE_GLSL ON CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_ENABLE_HLSL OFF CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_ENABLE_MSL ON CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_ENABLE_CPP OFF CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_ENABLE_REFLECT OFF CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_ENABLE_UTIL OFF CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_ENABLE_C_API OFF CACHE BOOL "" FORCE)
-# 强制 SPIRV-Cross 使用 C++17（与主项目一致）
-# SPIRV-Cross 默认 C++11，但 VkMetal.mm 用 C++17 包含其头文件并调用其 API，
-# ABI 不匹配会导致 std::string/std::vector 析构时 "pointer being freed was not allocated"
-set(CMAKE_CXX_STANDARD 17 CACHE STRING "" FORCE)
-FetchContent_MakeAvailable(spirv_cross)
-# 恢复 CXX_STANDARD（FetchContent 子目录已处理完毕）
-set(CMAKE_CXX_STANDARD 17)
-# 同时直接设置目标属性，确保覆盖 SPIRV-Cross 内部的 set(CMAKE_CXX_STANDARD 11)
-foreach(_sc_target spirv-cross-core spirv-cross-glsl spirv-cross-msl)
-    if(TARGET ${_sc_target})
-        set_target_properties(${_sc_target} PROPERTIES CXX_STANDARD 17)
-        # iOS arm64 上 SPIRV-Cross 在 -O0 下 compile() 会 SIGSEGV（疑似自定义
-        # SmallVector 在无优化时的 UB），使用 -O2 可避免此问题
-        target_compile_options(${_sc_target} PRIVATE -O2)
-    endif()
-endforeach()
-
-# ============================================================================
 # 引擎源文件
 # ============================================================================
 file(GLOB_RECURSE ENGINE_SOURCES
@@ -144,8 +108,6 @@ file(GLOB_RECURSE ENGINE_SOURCES
 list(FILTER ENGINE_SOURCES EXCLUDE REGEX ".*/d3d11/.*")
 list(FILTER ENGINE_SOURCES EXCLUDE REGEX ".*/d3d12/.*")
 list(FILTER ENGINE_SOURCES EXCLUDE REGEX ".*/opengl/.*")
-# SpirvToMSL.cpp 编译为独立库（不受 -include VkDispatch.h 影响）
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX ".*/SpirvToMSL\\.cpp$")
 
 # Metal 后端 (.mm Objective-C++ 文件)
 file(GLOB METAL_SOURCES "${CMAKE_SOURCE_DIR}/../engine/renderer/metal/*.mm")
@@ -223,7 +185,6 @@ target_include_directories(QymEditorIOS PRIVATE
 target_link_libraries(QymEditorIOS PRIVATE
     SDL2::SDL2-static SDL2::SDL2main
     glm stb nlohmann_json tinyobjloader imgui
-    spirv-cross-msl spirv-cross-glsl spirv-cross-core
     "-framework Metal"
     "-framework QuartzCore"
     "-framework UIKit"
@@ -250,31 +211,9 @@ target_compile_definitions(QymEditorIOS PRIVATE
 )
 
 # VkDispatch.h 强制包含所有编译单元（与 engine/CMakeLists.txt 保持一致）
-# 注意：SpirvToMSL.cpp 从 ENGINE_SOURCES 中排除（见下方独立库）
 target_compile_options(QymEditorIOS PRIVATE
     -include "${CMAKE_SOURCE_DIR}/../engine/renderer/VkDispatch.h"
 )
-
-# ============================================================================
-# SpirvToMSL 独立静态库（不包含 -include VkDispatch.h）
-#
-# SPIRV-Cross 在被 vulkan.h 类型定义污染的编译单元中会崩溃。
-# 将其编译为独立库，不受 VkDispatch.h 的 -include 影响。
-# ============================================================================
-add_library(SpirvToMSL STATIC "${CMAKE_SOURCE_DIR}/../engine/renderer/metal/SpirvToMSL.cpp")
-target_include_directories(SpirvToMSL PRIVATE
-    "${CMAKE_SOURCE_DIR}/../engine"
-    ${VULKAN_INCLUDE_DIR}
-)
-target_link_libraries(SpirvToMSL PRIVATE
-    spirv-cross-msl spirv-cross-glsl spirv-cross-core
-    SDL2::SDL2-static
-)
-target_compile_definitions(SpirvToMSL PRIVATE
-    VK_NO_PROTOTYPES
-)
-set_target_properties(SpirvToMSL PROPERTIES CXX_STANDARD 17)
-target_link_libraries(QymEditorIOS PRIVATE SpirvToMSL)
 
 # ============================================================================
 # iOS app bundle 配置

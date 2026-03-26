@@ -49,14 +49,6 @@ if(APPLE)
         COMPILE_FLAGS "-fobjc-arc -xobjective-c++"
     )
     target_link_libraries(QymEngineLib PUBLIC "-framework Metal" "-framework QuartzCore")
-    # SPIRV-Cross: 运行时 SPIR-V → MSL 转换（Metal 后端用）
-    target_include_directories(QymEngineLib PRIVATE "/opt/homebrew/include")
-    target_link_libraries(QymEngineLib PRIVATE
-        /opt/homebrew/lib/libspirv-cross-msl.a
-        /opt/homebrew/lib/libspirv-cross-glsl.a
-        /opt/homebrew/lib/libspirv-cross-core.a
-        /opt/homebrew/lib/libspirv-cross-cpp.a
-    )
 endif()
 # UTF-8 source encoding
 if(MSVC)
