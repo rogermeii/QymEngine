@@ -102,6 +102,9 @@ struct GL_Image {
     uint32_t                    width = 0;
     uint32_t                    height = 0;
     uint32_t                    mipLevels = 1;
+    uint32_t                    arrayLayers = 1;
+    VkImageCreateFlags          flags = 0;
+    GLenum                      target = GL_TEXTURE_2D;
     VkImageUsageFlags           usage = 0;
     bool                        ownsResource = true;
     VkDeviceMemory              boundMemory = VK_NULL_HANDLE;
@@ -113,6 +116,8 @@ struct GL_ImageView {
     VkFormat                    format = VK_FORMAT_UNDEFINED;
     VkImageViewType             viewType = VK_IMAGE_VIEW_TYPE_2D;
     VkImageSubresourceRange     subresourceRange = {};
+    GLuint                      texture = 0;
+    GLenum                      target = GL_TEXTURE_2D;
 };
 
 // ============================================================================
@@ -264,6 +269,7 @@ struct GL_DescriptorSet {
     uint32_t                    uboCount = 0;
     // Texture/Sampler 绑定
     GLuint                      textures[8] = {};
+    GLenum                      textureTargets[8] = {};
     GLuint                      samplers[8] = {};
     uint32_t                    textureCount = 0;
 };

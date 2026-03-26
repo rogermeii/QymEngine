@@ -111,6 +111,7 @@ private:
     VkImage        m_bloomDownMipImage = VK_NULL_HANDLE;
     VkDeviceMemory m_bloomDownMipMemory = VK_NULL_HANDLE;
     VkImageView    m_bloomDownMipViews[MAX_BLOOM_MIPS]{};
+    VkImageView    m_bloomDownMipChainView = VK_NULL_HANDLE;
     VkFramebuffer  m_bloomDownsampleFBs[MAX_BLOOM_MIPS]{};
 
     // Bloom 资源 — 升采样链（独立 image，消除跨帧读写冲突）
@@ -177,6 +178,7 @@ private:
     VkImageView m_boundSceneHDR = VK_NULL_HANDLE;  // 缓存已绑定的 sceneHDR view
     VkImageView m_boundDepthView = VK_NULL_HANDLE; // 缓存已绑定的 depth view (DOF)
     VkImageView m_boundCompositeInput = VK_NULL_HANDLE; // 缓存 composite 绑定的输入 view
+    VkImageView m_boundCompositeBloom = VK_NULL_HANDLE; // 缓存 composite 绑定的 bloom view
     int m_lastBloomMipCount = -1;  // 缓存上次使用的 bloom mip 级数
 
     // DOF 专用最近邻采样器（深度纹理使用 NEAREST 滤波避免插值伪影）
