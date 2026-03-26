@@ -487,18 +487,19 @@ void PostProcessPipeline::init(VulkanContext& ctx, DescriptorLayoutCache& layout
     }
 
     // --- 4. 创建 3 个 RenderPass ---
-    // downsample: HDR format, loadOp=DONT_CARE, initialLayout=UNDEFINED
+    // downsample: HDR format, loadOp=CLEAR, initialLayout=UNDEFINED
+    // 使用 CLEAR 而非 DONT_CARE，避免 GLES 后端帧缓冲未清除导致 bloom 跨帧累积
     m_bloomDownsampleRenderPass = createColorOnlyRenderPass(
         device, VK_FORMAT_R16G16B16A16_SFLOAT,
-        VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        VK_ATTACHMENT_LOAD_OP_CLEAR,
         VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    // upsample: HDR format, loadOp=DONT_CARE, initialLayout=UNDEFINED
-    // 写入独立的 up image，不再需要保留旧内容；shader 负责合并 down+up 数据
+    // upsample: HDR format, loadOp=CLEAR, initialLayout=UNDEFINED
+    // 使用 CLEAR 而非 DONT_CARE，避免 GLES 后端 up image 保留上帧数据导致 bloom 白化
     m_bloomUpsampleRenderPass = createColorOnlyRenderPass(
         device, VK_FORMAT_R16G16B16A16_SFLOAT,
-        VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        VK_ATTACHMENT_LOAD_OP_CLEAR,
         VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
@@ -706,7 +707,7 @@ void PostProcessPipeline::createDofResources() {
 
     VkFramebufferCreateInfo fbInfo{};
     fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    fbInfo.renderPass = m_bloomDownsampleRenderPass;  // HDR format, LoadOp=DONT_CARE
+    fbInfo.renderPass = m_bloomDownsampleRenderPass;  // HDR format, LoadOp=CLEAR
     fbInfo.attachmentCount = 1;
     fbInfo.pAttachments = &m_dofImageView;
     fbInfo.width = m_width;
@@ -995,7 +996,7 @@ void PostProcessPipeline::createPipelines() {
 
         createFullscreenBundlePipeline(
             device,
-            m_bloomDownsampleRenderPass,  // HDR format, LoadOp=DONT_CARE
+            m_bloomDownsampleRenderPass,  // HDR format, LoadOp=CLEAR
             {m_postProcessSetLayout},
             ppShaderBundlePath("DOF"),
             variant,
@@ -1146,11 +1147,16 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
 
         // 描述符已在 init/首帧绑定，无需每帧更新
 
+        VkClearValue clearValue{};
+        clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+
         VkRenderPassBeginInfo rpBegin{};
         rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpBegin.renderPass = m_bloomDownsampleRenderPass;
         rpBegin.framebuffer = m_bloomDownsampleFBs[0];
         rpBegin.renderArea = {{0, 0}, {fbW, fbH}};
+        rpBegin.clearValueCount = 1;
+        rpBegin.pClearValues = &clearValue;
 
         vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -1197,11 +1203,16 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
 
         // 描述符已在 init 绑定 mip[i-1]，无需每帧更新
 
+        VkClearValue clearValue{};
+        clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+
         VkRenderPassBeginInfo rpBegin{};
         rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpBegin.renderPass = m_bloomDownsampleRenderPass;
         rpBegin.framebuffer = m_bloomDownsampleFBs[i];
         rpBegin.renderArea = {{0, 0}, {fbW, fbH}};
+        rpBegin.clearValueCount = 1;
+        rpBegin.pClearValues = &clearValue;
 
         vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -1242,13 +1253,18 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
         uint32_t fbW = std::max(mip0W >> i, 1u);
         uint32_t fbH = std::max(mip0H >> i, 1u);
 
-        // up image 使用 UNDEFINED initialLayout，不需要手动 barrier
+        // up image 使用 UNDEFINED initialLayout，CLEAR 确保不残留上帧数据
+
+        VkClearValue clearValue{};
+        clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
 
         VkRenderPassBeginInfo rpBegin{};
         rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpBegin.renderPass = m_bloomUpsampleRenderPass;
         rpBegin.framebuffer = m_bloomUpsampleFBs[i];
         rpBegin.renderArea = {{0, 0}, {fbW, fbH}};
+        rpBegin.clearValueCount = 1;
+        rpBegin.pClearValues = &clearValue;
 
         vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -1297,11 +1313,16 @@ void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR
 void PostProcessPipeline::executeDof(VkCommandBuffer cmd, VkImageView sceneHDR,
                                       VkImageView depthView, float nearPlane, float farPlane,
                                       const PostProcessSettings& settings) {
+    VkClearValue clearValue{};
+    clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+
     VkRenderPassBeginInfo rpBegin{};
     rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpBegin.renderPass = m_bloomDownsampleRenderPass;  // HDR format, LoadOp=DONT_CARE
+    rpBegin.renderPass = m_bloomDownsampleRenderPass;  // HDR format, LoadOp=CLEAR
     rpBegin.framebuffer = m_dofFramebuffer;
     rpBegin.renderArea = {{0, 0}, {m_width, m_height}};
+    rpBegin.clearValueCount = 1;
+    rpBegin.pClearValues = &clearValue;
 
     vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
