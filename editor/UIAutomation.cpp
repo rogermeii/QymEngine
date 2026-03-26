@@ -671,20 +671,23 @@ bool UIAutomation::saveScreenshot(Renderer& renderer, const std::string& path) {
         return false;
 
     VkDevice device = renderer.getContext().getDevice();
-    VkPhysicalDevice physDevice = renderer.getContext().getPhysicalDevice();
     uint32_t width = renderer.getOffscreenWidth();
     uint32_t height = renderer.getOffscreenHeight();
 
-    // Wait for all GPU operations to complete
+    // 等待 GPU 完成
     vkDeviceWaitIdle(device);
 
     // Offscreen 格式为 R16G16B16A16_SFLOAT (8 字节/像素)
-    const uint32_t srcBytesPerPixel = 8; // half float RGBA
+    const uint32_t srcBytesPerPixel = 8;
     VkDeviceSize imageSize = (VkDeviceSize)width * height * srcBytesPerPixel;
 
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingMemory;
+    // Metal 后端: 直接从 texture 读取像素（避免 single-time command buffer 导致 iOS 黑屏）
+    // Vulkan 后端: 通过 staging buffer + blit command 读取
+    VkBuffer stagingBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+    void* data = nullptr;
 
+    // 创建 staging buffer
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = imageSize;
@@ -711,96 +714,112 @@ bool UIAutomation::saveScreenshot(Renderer& renderer, const std::string& path) {
 
     vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
 
-    // Use single-time command buffer to copy image to staging buffer
-    VkCommandBuffer cmd = renderer.getCommandManager().beginSingleTimeCommands(device);
+    if (vkIsMetalBackend()) {
+        // Metal 后端: staging buffer 已经是 shared memory，直接 map 拿指针
+        // 然后用 MTL texture getBytes 读数据，完全不用 command buffer
+        vkMapMemory(device, stagingMemory, 0, imageSize, 0, &data);
+        if (!data) {
+            vkDestroyBuffer(device, stagingBuffer, nullptr);
+            vkFreeMemory(device, stagingMemory, nullptr);
+            return false;
+        }
+        // 直接调用 mtl_vkCmdCopyImageToBuffer 的底层逻辑:
+        // Metal texture getBytes 可以同步读取 shared/managed storage 的纹理
+        // 但我们需要通过 VkImage 拿到 MTL texture...
+        // 最简单: 用 Vulkan API 但同步执行
+        {
+            VkCommandBuffer cmd = renderer.getCommandManager().beginSingleTimeCommands(device);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {width, height, 1};
+            vkCmdCopyImageToBuffer(cmd, renderer.getOffscreenImage(),
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   stagingBuffer, 1, &region);
+            // endSingleTimeCommands 会 submit + waitIdle
+            renderer.getCommandManager().endSingleTimeCommands(
+                device, renderer.getContext().getGraphicsQueue(), cmd);
+        }
+    } else {
+        // Vulkan 后端: 标准流程 — layout transition + blit + transition back
+        VkCommandBuffer cmd = renderer.getCommandManager().beginSingleTimeCommands(device);
 
-    // Get offscreen image handle via Renderer internals
-    // The offscreen image is currently in SHADER_READ_ONLY layout after rendering
-    // Transition: SHADER_READ_ONLY -> TRANSFER_SRC
-    VkImageMemoryBarrier toTransferSrc{};
-    toTransferSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toTransferSrc.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toTransferSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    toTransferSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toTransferSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toTransferSrc.image = renderer.getOffscreenImage();
-    toTransferSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    toTransferSrc.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    toTransferSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        VkImageMemoryBarrier toTransferSrc{};
+        toTransferSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toTransferSrc.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toTransferSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toTransferSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransferSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransferSrc.image = renderer.getOffscreenImage();
+        toTransferSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        toTransferSrc.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toTransferSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &toTransferSrc);
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toTransferSrc);
 
-    // Copy image to buffer
-    VkBufferImageCopy region{};
-    region.bufferOffset = 0;
-    region.bufferRowLength = 0;
-    region.bufferImageHeight = 0;
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageOffset = {0, 0, 0};
-    region.imageExtent = {width, height, 1};
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {width, height, 1};
 
-    vkCmdCopyImageToBuffer(cmd, renderer.getOffscreenImage(),
-                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           stagingBuffer, 1, &region);
+        vkCmdCopyImageToBuffer(cmd, renderer.getOffscreenImage(),
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               stagingBuffer, 1, &region);
 
-    // Transition back: TRANSFER_SRC -> SHADER_READ_ONLY
-    VkImageMemoryBarrier toShaderRead{};
-    toShaderRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toShaderRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    toShaderRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toShaderRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toShaderRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toShaderRead.image = renderer.getOffscreenImage();
-    toShaderRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    toShaderRead.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    toShaderRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkImageMemoryBarrier toShaderRead{};
+        toShaderRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toShaderRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toShaderRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toShaderRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toShaderRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toShaderRead.image = renderer.getOffscreenImage();
+        toShaderRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        toShaderRead.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        toShaderRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &toShaderRead);
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toShaderRead);
 
-    renderer.getCommandManager().endSingleTimeCommands(
-        device, renderer.getContext().getGraphicsQueue(), cmd);
+        renderer.getCommandManager().endSingleTimeCommands(
+            device, renderer.getContext().getGraphicsQueue(), cmd);
 
-    // Map staging buffer and read pixels
-    void* data;
-    vkMapMemory(device, stagingMemory, 0, imageSize, 0, &data);
+        vkMapMemory(device, stagingMemory, 0, imageSize, 0, &data);
+    }
 
-    // Offscreen 格式 R16G16B16A16_SFLOAT → 转换为 RGBA8
-    // half float (16-bit IEEE 754) → uint8 [0,255]
-    std::vector<uint8_t> pixels(width * height * 4);
-    const uint16_t* src16 = static_cast<const uint16_t*>(data);
+    if (!data) {
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        vkFreeMemory(device, stagingMemory, nullptr);
+        return false;
+    }
 
-    // half float → float 转换辅助 lambda
+    // half float → float 转换
     auto halfToFloat = [](uint16_t h) -> float {
         uint32_t sign = (h >> 15) & 0x1;
         uint32_t exp = (h >> 10) & 0x1f;
         uint32_t mant = h & 0x3ff;
         if (exp == 0) {
             if (mant == 0) return sign ? -0.0f : 0.0f;
-            // 非规格化数
             float f = (float)mant / 1024.0f;
             return sign ? -f * (1.0f / 16384.0f) : f * (1.0f / 16384.0f);
         }
-        if (exp == 31) return mant ? 0.0f : (sign ? -1e30f : 1e30f); // Inf/NaN → clamp
+        if (exp == 31) return mant ? 0.0f : (sign ? -1e30f : 1e30f);
         float f = (float)(mant + 1024) / 1024.0f;
         f *= powf(2.0f, (float)exp - 15.0f);
         return sign ? -f : f;
     };
 
+    // R16G16B16A16_SFLOAT → RGBA8 sRGB
+    std::vector<uint8_t> pixels(width * height * 4);
+    const uint16_t* src16 = static_cast<const uint16_t*>(data);
     for (uint32_t i = 0; i < width * height; i++) {
-        // 每像素 4 个 half float (RGBA)
         float r = halfToFloat(src16[i * 4 + 0]);
         float g = halfToFloat(src16[i * 4 + 1]);
         float b = halfToFloat(src16[i * 4 + 2]);
         float a = halfToFloat(src16[i * 4 + 3]);
 
-        // 简单 tone mapping + gamma: linear → sRGB
         auto toSRGB = [](float v) -> uint8_t {
             v = std::max(0.0f, std::min(1.0f, v));
-            // 近似 sRGB gamma
             v = powf(v, 1.0f / 2.2f);
             return (uint8_t)(v * 255.0f + 0.5f);
         };

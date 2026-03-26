@@ -67,6 +67,7 @@ public:
     void destroyOffscreen();
     void drawSceneToOffscreen(VkCommandBuffer cmd, Scene& scene);
 
+    void        forceSwapchainRecreate() { m_framebufferResized = true; }
     VkSampler   getOffscreenSampler()   const { return m_offscreenSampler; }
     VkImageView getOffscreenImageView() const { return m_offscreenImageView; }
     VkImage     getOffscreenImage()     const { return m_offscreenImage; }

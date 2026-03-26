@@ -2126,7 +2126,11 @@ static VKAPI_ATTR VkResult VKAPI_CALL mtl_vkQueueSubmit(
                     }
                 }
 
-                s_lastCommittedBuffer = cb->commandBuffer;
+                // 只有帧提交才更新 s_lastCommittedBuffer
+                // single-time command（无 wait semaphore）不应干扰帧同步
+                if (isFrameSubmit) {
+                    s_lastCommittedBuffer = cb->commandBuffer;
+                }
                 [cb->commandBuffer commit];
                 cb->commandBuffer = nil;
             }
@@ -2141,10 +2145,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL mtl_vkQueueSubmit(
 static VKAPI_ATTR VkResult VKAPI_CALL mtl_vkQueueWaitIdle(VkQueue queue)
 {
     (void)queue;
-    // 等待最后提交的 command buffer 完成
+    // 等待最后提交的帧 command buffer 完成（不清除引用，acquireNextImage 需要它）
     if (s_lastCommittedBuffer) {
         [s_lastCommittedBuffer waitUntilCompleted];
-        s_lastCommittedBuffer = nil;
     }
     return VK_SUCCESS;
 }
