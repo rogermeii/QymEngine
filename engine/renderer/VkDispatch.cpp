@@ -329,6 +329,11 @@ static void loadFromVulkanSo()
     // SDL 内部会加载 libvulkan 并提供 vkGetInstanceProcAddr
     auto rawGetProcAddr = (PFN_vkGetInstanceProcAddr)SDL_Vulkan_GetVkGetInstanceProcAddr();
     if (!rawGetProcAddr) {
+        // 若已显式链接 Vulkan loader，优先直接取当前进程里的导出符号
+        rawGetProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+            dlsym(RTLD_DEFAULT, "vkGetInstanceProcAddr"));
+    }
+    if (!rawGetProcAddr) {
         // Fallback: 手动 dlopen
 #ifdef __APPLE__
         // macOS: 先尝试 Homebrew MoltenVK 路径，再尝试标准名

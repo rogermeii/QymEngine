@@ -13,6 +13,7 @@
 
 #include <stdexcept>
 #ifdef __APPLE__
+#include <SDL_metal.h>
 #include <TargetConditionals.h>
 #endif
 
@@ -28,6 +29,7 @@ void ImGuiLayer::init(Renderer& renderer)
     SwapChain&     sc  = renderer.getSwapChain();
     m_device  = ctx.getDevice();
     m_extent  = sc.getExtent();
+    m_window  = renderer.getWindow()->getNativeWindow();
 
     // --- 1. Descriptor pool for ImGui ---------------------------------------------------
     VkDescriptorPoolSize poolSizes[] = {
@@ -177,10 +179,25 @@ void ImGuiLayer::shutdown()
 
 void ImGuiLayer::beginFrame()
 {
-    fprintf(stderr, "[ImGuiLayer] Before VulkanNewFrame\n");
     ImGui_ImplVulkan_NewFrame();
-    fprintf(stderr, "[ImGuiLayer] After VulkanNewFrame\n");
     ImGui_ImplSDL2_NewFrame();
+
+#ifdef __APPLE__
+    if (QymEngine::vkIsMetalBackend() && m_window) {
+        int windowW = 0, windowH = 0;
+        int drawableW = 0, drawableH = 0;
+        SDL_GetWindowSize(m_window, &windowW, &windowH);
+        SDL_Metal_GetDrawableSize(m_window, &drawableW, &drawableH);
+
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2((float)windowW, (float)windowH);
+        io.DisplayFramebufferScale =
+            (windowW > 0 && windowH > 0)
+                ? ImVec2((float)drawableW / (float)windowW, (float)drawableH / (float)windowH)
+                : ImVec2(1.0f, 1.0f);
+    }
+#endif
+
     ImGui::NewFrame();
     ImGuizmo::BeginFrame();
 }
@@ -202,11 +219,7 @@ void ImGuiLayer::endFrame(VkCommandBuffer cmd, uint32_t imageIndex)
 
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
     auto* drawData = ImGui::GetDrawData();
-    fprintf(stderr, "[ImGuiLayer] RenderDrawData: valid=%d cmds=%d vtx=%d idx=%d textures=%d\n",
-            drawData->Valid, drawData->CmdListsCount, drawData->TotalVtxCount, drawData->TotalIdxCount,
-            drawData->Textures ? (int)drawData->Textures->Size : -1);
     ImGui_ImplVulkan_RenderDrawData(drawData, cmd);
-    fprintf(stderr, "[ImGuiLayer] After RenderDrawData\n");
     vkCmdEndRenderPass(cmd);
 }
 

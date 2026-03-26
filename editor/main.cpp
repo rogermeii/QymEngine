@@ -4,12 +4,18 @@
 #include <cstring>
 
 int main(int argc, char* argv[]) {
+#ifdef __APPLE__
+    QymEngine::RenderBackend backend = QymEngine::RenderBackend::Metal;
+#else
     QymEngine::RenderBackend backend = QymEngine::RenderBackend::Vulkan;
+#endif
     bool enableBindless = false;
 
     // Parse command line args
     for (int i = 1; i < argc; i++) {
-        if (std::strcmp(argv[i], "--d3d12") == 0)
+        if (std::strcmp(argv[i], "--vulkan") == 0)
+            backend = QymEngine::RenderBackend::Vulkan;
+        else if (std::strcmp(argv[i], "--d3d12") == 0)
             backend = QymEngine::RenderBackend::D3D12;
         else if (std::strcmp(argv[i], "--d3d11") == 0)
             backend = QymEngine::RenderBackend::D3D11;

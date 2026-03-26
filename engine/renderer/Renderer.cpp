@@ -536,6 +536,11 @@ void Renderer::blitToSwapchain()
 }
 
 VkImageView Renderer::getDisplayImageView(const Scene& scene) const {
+    if (m_displayImage != VK_NULL_HANDLE) {
+        VkImageView uiView = m_postProcess.getFinalUIImageView(scene.getPostProcessSettings());
+        if (uiView != VK_NULL_HANDLE)
+            return uiView;
+    }
     return m_displayImageView != VK_NULL_HANDLE ? m_displayImageView : m_offscreenImageView;
 }
 

@@ -143,8 +143,9 @@ static const char* s_imguiMSL = R"(
 #include <metal_stdlib>
 using namespace metal;
 
-struct ImGuiUniforms {
-    float4x4 projectionMatrix;
+struct ImGuiConstants {
+    float2 uScale;
+    float2 uTranslate;
 };
 
 struct VertexIn {
@@ -160,10 +161,11 @@ struct VertexOut {
 };
 
 vertex VertexOut imgui_vertex(VertexIn in [[stage_in]],
-                              constant ImGuiUniforms& uniforms [[buffer(1)]])
+                              constant ImGuiConstants& constants [[buffer(1)]])
 {
     VertexOut out;
-    out.position = uniforms.projectionMatrix * float4(in.position, 0.0, 1.0);
+    float2 pos = in.position * constants.uScale + constants.uTranslate;
+    out.position = float4(pos, 0.0, 1.0);
     out.texCoord = in.texCoord;
     out.color = in.color; // 已经是 [0,1] 范围
     return out;
@@ -1080,6 +1082,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL mtl_vkCreateImage(
             usage |= MTLTextureUsageShaderRead;
         if (pCreateInfo->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
             usage |= MTLTextureUsageShaderWrite;
+        // 允许创建 sRGB/UNORM 视图切换，用于编辑器在同一张 LDR 纹理上
+        // 分别满足“后处理写入 UNORM”和“ImGui 采样时 sRGB decode”两种需求。
+        usage |= MTLTextureUsagePixelFormatView;
         desc.usage = usage;
 
         // 深度纹理需要特殊处理
@@ -1173,6 +1178,8 @@ static VKAPI_ATTR VkResult VKAPI_CALL mtl_vkCreateImageView(
                                                                     slices:slices];
             // 如果创建视图失败，回退使用原始纹理
             if (!view->textureView) {
+                SDL_Log("[VkMetal] newTextureView failed: base=%u requested=%u",
+                        (unsigned)img->texture.pixelFormat, (unsigned)pixelFmt);
                 view->textureView = img->texture;
             }
         }
@@ -1423,6 +1430,18 @@ static VKAPI_ATTR void VKAPI_CALL mtl_vkCmdBeginRenderPass(
     cb->currentFramebuffer = pRenderPassBegin->framebuffer;
     if (!rp || !fb) return;
 
+    auto toLoadAction = [](VkAttachmentLoadOp loadOp) -> MTLLoadAction {
+        switch (loadOp) {
+        case VK_ATTACHMENT_LOAD_OP_CLEAR:
+            return MTLLoadActionClear;
+        case VK_ATTACHMENT_LOAD_OP_DONT_CARE:
+            return MTLLoadActionDontCare;
+        case VK_ATTACHMENT_LOAD_OP_LOAD:
+        default:
+            return MTLLoadActionLoad;
+        }
+    };
+
     // 构建 MTLRenderPassDescriptor
     MTLRenderPassDescriptor* rpDesc = [MTLRenderPassDescriptor renderPassDescriptor];
 
@@ -1443,8 +1462,7 @@ static VKAPI_ATTR void VKAPI_CALL mtl_vkCmdBeginRenderPass(
 
         if (isDepthFormat(att.format)) {
             rpDesc.depthAttachment.texture = tex;
-            rpDesc.depthAttachment.loadAction =
-                (att.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR) ? MTLLoadActionClear : MTLLoadActionLoad;
+            rpDesc.depthAttachment.loadAction = toLoadAction(att.loadOp);
             rpDesc.depthAttachment.storeAction = MTLStoreActionStore;
             if (att.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR && clearIdx < pRenderPassBegin->clearValueCount) {
                 rpDesc.depthAttachment.clearDepth = pRenderPassBegin->pClearValues[clearIdx].depthStencil.depth;
@@ -1452,16 +1470,15 @@ static VKAPI_ATTR void VKAPI_CALL mtl_vkCmdBeginRenderPass(
             // 如果有 stencil 分量
             if (att.format == VK_FORMAT_D24_UNORM_S8_UINT) {
                 rpDesc.stencilAttachment.texture = tex;
-                rpDesc.stencilAttachment.loadAction = rpDesc.depthAttachment.loadAction;
+                rpDesc.stencilAttachment.loadAction = toLoadAction(att.stencilLoadOp);
                 rpDesc.stencilAttachment.storeAction = MTLStoreActionStore;
-                if (att.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR && clearIdx < pRenderPassBegin->clearValueCount) {
+                if (att.stencilLoadOp == VK_ATTACHMENT_LOAD_OP_CLEAR && clearIdx < pRenderPassBegin->clearValueCount) {
                     rpDesc.stencilAttachment.clearStencil = pRenderPassBegin->pClearValues[clearIdx].depthStencil.stencil;
                 }
             }
         } else {
             rpDesc.colorAttachments[colorIdx].texture = tex;
-            rpDesc.colorAttachments[colorIdx].loadAction =
-                (att.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR) ? MTLLoadActionClear : MTLLoadActionLoad;
+            rpDesc.colorAttachments[colorIdx].loadAction = toLoadAction(att.loadOp);
             rpDesc.colorAttachments[colorIdx].storeAction = MTLStoreActionStore;
             if (att.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR && clearIdx < pRenderPassBegin->clearValueCount) {
                 auto& cv = pRenderPassBegin->pClearValues[clearIdx];
@@ -1843,6 +1860,7 @@ static VKAPI_ATTR void VKAPI_CALL mtl_vkCmdSetScissor(
     rect.y = pScissors[0].offset.y;
     rect.width = pScissors[0].extent.width;
     rect.height = pScissors[0].extent.height;
+
     [cb->encoder setScissorRect:rect];
 }
 
@@ -2416,7 +2434,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL mtl_vkCreateGraphicsPipelines(
             }
 
             // ImGui 固定绑定映射:
-            // VS: buffer(1) = projection matrix (push constants)
+            // VS: buffer(1) = uScale + uTranslate (push constants)
             // FS: texture(0) = font atlas, sampler(0) = font sampler
             pipe->vsBindings.hasVertexInputs = true;
             pipe->vsBindings.vertexBufferIndex = 0;  // [[stage_in]] via vertex descriptor at buffer(0)

@@ -61,7 +61,7 @@ private:
     void injectTextInput(const std::string& text, SDL_Window* window);
 
     // Screenshot implementation
-    bool saveScreenshot(Renderer& renderer, const std::string& path);
+    bool saveScreenshot(Renderer& renderer, Scene& scene, const std::string& path, bool captureDisplay);
 
     // Process deferred events (key up, mouse up from previous frame)
     void processDeferredEvents(SDL_Window* window);

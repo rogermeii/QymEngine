@@ -350,6 +350,8 @@ void UIAutomation::executeCommand(const std::string& jsonStr, Renderer& renderer
 
         } else if (command == "screenshot") {
             std::string path = params.value("path", "captures/screenshot.png");
+            std::string source = params.value("source", "offscreen");
+            bool captureDisplay = (source == "display" || source == "final");
             // If relative, make it relative to project root (或 iOS Documents 目录)
             if (path.find(':') == std::string::npos && path[0] != '/') {
 #if TARGET_OS_IOS
@@ -365,8 +367,9 @@ void UIAutomation::executeCommand(const std::string& jsonStr, Renderer& renderer
             // Ensure directory exists
             std::filesystem::create_directories(std::filesystem::path(path).parent_path());
 
-            if (saveScreenshot(renderer, path)) {
-                writeResult("{\"status\":\"ok\",\"command\":\"screenshot\",\"path\":\"" + path + "\"}");
+            if (saveScreenshot(renderer, scene, path, captureDisplay)) {
+                writeResult("{\"status\":\"ok\",\"command\":\"screenshot\",\"path\":\"" + path
+                            + "\",\"source\":\"" + source + "\"}");
             } else {
                 writeResult("{\"status\":\"error\",\"command\":\"screenshot\",\"message\":\"Failed to save screenshot\"}");
             }
@@ -666,19 +669,24 @@ void UIAutomation::injectTextInput(const std::string& text, SDL_Window* window) 
 // Screenshot - read back offscreen image and save as PNG
 // ========================================================================
 
-bool UIAutomation::saveScreenshot(Renderer& renderer, const std::string& path) {
+bool UIAutomation::saveScreenshot(Renderer& renderer, Scene& scene, const std::string& path, bool captureDisplay) {
     if (!renderer.isOffscreenReady())
         return false;
 
     VkDevice device = renderer.getContext().getDevice();
     uint32_t width = renderer.getOffscreenWidth();
     uint32_t height = renderer.getOffscreenHeight();
+    VkImage sourceImage = captureDisplay ? renderer.getDisplayImage(scene)
+                                         : renderer.getOffscreenImage();
+    bool sourceIsHDR = (!captureDisplay) || (sourceImage == renderer.getOffscreenImage());
+    if (sourceImage == VK_NULL_HANDLE)
+        return false;
 
     // 等待 GPU 完成
     vkDeviceWaitIdle(device);
 
-    // Offscreen 格式为 R16G16B16A16_SFLOAT (8 字节/像素)
-    const uint32_t srcBytesPerPixel = 8;
+    // offscreen 为 HDR half-float，display 为 LDR RGBA8
+    const uint32_t srcBytesPerPixel = sourceIsHDR ? 8u : 4u;
     VkDeviceSize imageSize = (VkDeviceSize)width * height * srcBytesPerPixel;
 
     // Metal 后端: 直接从 texture 读取像素（避免 single-time command buffer 导致 iOS 黑屏）
@@ -732,7 +740,7 @@ bool UIAutomation::saveScreenshot(Renderer& renderer, const std::string& path) {
             VkBufferImageCopy region{};
             region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             region.imageExtent = {width, height, 1};
-            vkCmdCopyImageToBuffer(cmd, renderer.getOffscreenImage(),
+            vkCmdCopyImageToBuffer(cmd, sourceImage,
                                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                    stagingBuffer, 1, &region);
             // endSingleTimeCommands 会 submit + waitIdle
@@ -749,7 +757,7 @@ bool UIAutomation::saveScreenshot(Renderer& renderer, const std::string& path) {
         toTransferSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         toTransferSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toTransferSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toTransferSrc.image = renderer.getOffscreenImage();
+        toTransferSrc.image = sourceImage;
         toTransferSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         toTransferSrc.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
         toTransferSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
@@ -762,7 +770,7 @@ bool UIAutomation::saveScreenshot(Renderer& renderer, const std::string& path) {
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {width, height, 1};
 
-        vkCmdCopyImageToBuffer(cmd, renderer.getOffscreenImage(),
+        vkCmdCopyImageToBuffer(cmd, sourceImage,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                stagingBuffer, 1, &region);
 
@@ -772,7 +780,7 @@ bool UIAutomation::saveScreenshot(Renderer& renderer, const std::string& path) {
         toShaderRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         toShaderRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toShaderRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toShaderRead.image = renderer.getOffscreenImage();
+        toShaderRead.image = sourceImage;
         toShaderRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         toShaderRead.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         toShaderRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -793,40 +801,44 @@ bool UIAutomation::saveScreenshot(Renderer& renderer, const std::string& path) {
         return false;
     }
 
-    // half float → float 转换
-    auto halfToFloat = [](uint16_t h) -> float {
-        uint32_t sign = (h >> 15) & 0x1;
-        uint32_t exp = (h >> 10) & 0x1f;
-        uint32_t mant = h & 0x3ff;
-        if (exp == 0) {
-            if (mant == 0) return sign ? -0.0f : 0.0f;
-            float f = (float)mant / 1024.0f;
-            return sign ? -f * (1.0f / 16384.0f) : f * (1.0f / 16384.0f);
-        }
-        if (exp == 31) return mant ? 0.0f : (sign ? -1e30f : 1e30f);
-        float f = (float)(mant + 1024) / 1024.0f;
-        f *= powf(2.0f, (float)exp - 15.0f);
-        return sign ? -f : f;
-    };
-
-    // R16G16B16A16_SFLOAT → RGBA8 sRGB
     std::vector<uint8_t> pixels(width * height * 4);
-    const uint16_t* src16 = static_cast<const uint16_t*>(data);
-    for (uint32_t i = 0; i < width * height; i++) {
-        float r = halfToFloat(src16[i * 4 + 0]);
-        float g = halfToFloat(src16[i * 4 + 1]);
-        float b = halfToFloat(src16[i * 4 + 2]);
-        float a = halfToFloat(src16[i * 4 + 3]);
-
-        auto toSRGB = [](float v) -> uint8_t {
-            v = std::max(0.0f, std::min(1.0f, v));
-            v = powf(v, 1.0f / 2.2f);
-            return (uint8_t)(v * 255.0f + 0.5f);
+    if (sourceIsHDR) {
+        auto halfToFloat = [](uint16_t h) -> float {
+            uint32_t sign = (h >> 15) & 0x1;
+            uint32_t exp = (h >> 10) & 0x1f;
+            uint32_t mant = h & 0x3ff;
+            if (exp == 0) {
+                if (mant == 0) return sign ? -0.0f : 0.0f;
+                float f = (float)mant / 1024.0f;
+                return sign ? -f * (1.0f / 16384.0f) : f * (1.0f / 16384.0f);
+            }
+            if (exp == 31) return mant ? 0.0f : (sign ? -1e30f : 1e30f);
+            float f = (float)(mant + 1024) / 1024.0f;
+            f *= powf(2.0f, (float)exp - 15.0f);
+            return sign ? -f : f;
         };
-        pixels[i * 4 + 0] = toSRGB(r);
-        pixels[i * 4 + 1] = toSRGB(g);
-        pixels[i * 4 + 2] = toSRGB(b);
-        pixels[i * 4 + 3] = (uint8_t)(std::max(0.0f, std::min(1.0f, a)) * 255.0f + 0.5f);
+
+        // R16G16B16A16_SFLOAT → RGBA8 sRGB
+        const uint16_t* src16 = static_cast<const uint16_t*>(data);
+        for (uint32_t i = 0; i < width * height; i++) {
+            float r = halfToFloat(src16[i * 4 + 0]);
+            float g = halfToFloat(src16[i * 4 + 1]);
+            float b = halfToFloat(src16[i * 4 + 2]);
+            float a = halfToFloat(src16[i * 4 + 3]);
+
+            auto toSRGB = [](float v) -> uint8_t {
+                v = std::max(0.0f, std::min(1.0f, v));
+                v = powf(v, 1.0f / 2.2f);
+                return (uint8_t)(v * 255.0f + 0.5f);
+            };
+            pixels[i * 4 + 0] = toSRGB(r);
+            pixels[i * 4 + 1] = toSRGB(g);
+            pixels[i * 4 + 2] = toSRGB(b);
+            pixels[i * 4 + 3] = (uint8_t)(std::max(0.0f, std::min(1.0f, a)) * 255.0f + 0.5f);
+        }
+    } else {
+        // final display 图已经是 LDR RGBA8，直接拷贝保存即可
+        std::memcpy(pixels.data(), data, pixels.size());
     }
 
     vkUnmapMemory(device, stagingMemory);

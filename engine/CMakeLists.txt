@@ -38,7 +38,15 @@ target_include_directories(QymEngineLib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(QymEngineLib PUBLIC ${Vulkan_INCLUDE_DIRS})
 # GLAD 头文件路径：支持 #include <glad/glad.h> 和 #include <KHR/khrplatform.h>
 target_include_directories(QymEngineLib PUBLIC ${GLAD_INCLUDE})
-target_link_libraries(QymEngineLib PUBLIC SDL2::SDL2-static glm stb nlohmann_json tinyobjloader glad)
+target_link_libraries(QymEngineLib PUBLIC
+    SDL2::SDL2-static
+    Vulkan::Vulkan
+    glm
+    stb
+    nlohmann_json
+    tinyobjloader
+    glad
+)
 # Windows 上链接 OpenGL32
 if(WIN32)
     target_link_libraries(QymEngineLib PUBLIC opengl32)

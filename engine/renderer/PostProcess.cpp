@@ -740,6 +740,13 @@ void PostProcessPipeline::createLdrResources() {
                   m_compositeImage, m_compositeMemory);
     m_compositeImageView = createImageView2D(device, m_compositeImage,
                                               VK_FORMAT_R8G8B8A8_UNORM, 0, 1);
+    if (vkIsMetalBackend()) {
+        // Metal 编辑器视口会把这张 LDR 结果图再次贴到 sRGB swapchain 上。
+        // 这里额外创建一个 sRGB 采样视图，让 ImGui 采样时自动 decode，
+        // 避免 gamma 图被当线性值再次编码后整体发白。
+        m_compositeUIImageView = createImageView2D(device, m_compositeImage,
+                                                   VK_FORMAT_R8G8B8A8_SRGB, 0, 1);
+    }
 
     {
         VkFramebufferCreateInfo fbInfo{};
@@ -761,6 +768,10 @@ void PostProcessPipeline::createLdrResources() {
                   m_fxaaImage, m_fxaaMemory);
     m_fxaaImageView = createImageView2D(device, m_fxaaImage,
                                          VK_FORMAT_R8G8B8A8_UNORM, 0, 1);
+    if (vkIsMetalBackend()) {
+        m_fxaaUIImageView = createImageView2D(device, m_fxaaImage,
+                                              VK_FORMAT_R8G8B8A8_SRGB, 0, 1);
+    }
 
     {
         VkFramebufferCreateInfo fbInfo{};
@@ -781,11 +792,13 @@ void PostProcessPipeline::destroyLdrResources() {
     VkDevice device = m_context->getDevice();
 
     if (m_fxaaFramebuffer) { vkDestroyFramebuffer(device, m_fxaaFramebuffer, nullptr); m_fxaaFramebuffer = VK_NULL_HANDLE; }
+    if (m_fxaaUIImageView) { vkDestroyImageView(device, m_fxaaUIImageView, nullptr); m_fxaaUIImageView = VK_NULL_HANDLE; }
     if (m_fxaaImageView)   { vkDestroyImageView(device, m_fxaaImageView, nullptr); m_fxaaImageView = VK_NULL_HANDLE; }
     if (m_fxaaImage)       { vkDestroyImage(device, m_fxaaImage, nullptr); m_fxaaImage = VK_NULL_HANDLE; }
     if (m_fxaaMemory)      { vkFreeMemory(device, m_fxaaMemory, nullptr); m_fxaaMemory = VK_NULL_HANDLE; }
 
     if (m_compositeFramebuffer) { vkDestroyFramebuffer(device, m_compositeFramebuffer, nullptr); m_compositeFramebuffer = VK_NULL_HANDLE; }
+    if (m_compositeUIImageView) { vkDestroyImageView(device, m_compositeUIImageView, nullptr); m_compositeUIImageView = VK_NULL_HANDLE; }
     if (m_compositeImageView)   { vkDestroyImageView(device, m_compositeImageView, nullptr); m_compositeImageView = VK_NULL_HANDLE; }
     if (m_compositeImage)       { vkDestroyImage(device, m_compositeImage, nullptr); m_compositeImage = VK_NULL_HANDLE; }
     if (m_compositeMemory)      { vkFreeMemory(device, m_compositeMemory, nullptr); m_compositeMemory = VK_NULL_HANDLE; }
@@ -1462,6 +1475,16 @@ VkImageView PostProcessPipeline::getFinalImageView(const PostProcessSettings& se
     if (settings.fxaaEnabled)
         return m_fxaaImageView;
     return m_compositeImageView;
+}
+
+VkImageView PostProcessPipeline::getFinalUIImageView(const PostProcessSettings& settings) const {
+    if (vkIsMetalBackend()) {
+        if (settings.fxaaEnabled && m_fxaaUIImageView != VK_NULL_HANDLE)
+            return m_fxaaUIImageView;
+        if (!settings.fxaaEnabled && m_compositeUIImageView != VK_NULL_HANDLE)
+            return m_compositeUIImageView;
+    }
+    return getFinalImageView(settings);
 }
 
 // ========================================================================

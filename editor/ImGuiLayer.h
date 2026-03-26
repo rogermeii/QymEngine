@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <SDL.h>
 #include <vector>
 
 namespace QymEngine {
@@ -29,6 +30,7 @@ private:
     VkRenderPass               m_renderPass = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> m_framebuffers;
     VkExtent2D                 m_extent{};
+    SDL_Window*                m_window     = nullptr;
 };
 
 } // namespace QymEngine

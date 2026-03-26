@@ -84,6 +84,7 @@ public:
 
     VkImage     getFinalImage(const PostProcessSettings& settings) const;
     VkImageView getFinalImageView(const PostProcessSettings& settings) const;
+    VkImageView getFinalUIImageView(const PostProcessSettings& settings) const;
 
 private:
     void executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR,
@@ -130,12 +131,14 @@ private:
     VkImage        m_compositeImage = VK_NULL_HANDLE;
     VkDeviceMemory m_compositeMemory = VK_NULL_HANDLE;
     VkImageView    m_compositeImageView = VK_NULL_HANDLE;
+    VkImageView    m_compositeUIImageView = VK_NULL_HANDLE;
     VkFramebuffer  m_compositeFramebuffer = VK_NULL_HANDLE;
 
     // FXAA 资源
     VkImage        m_fxaaImage = VK_NULL_HANDLE;
     VkDeviceMemory m_fxaaMemory = VK_NULL_HANDLE;
     VkImageView    m_fxaaImageView = VK_NULL_HANDLE;
+    VkImageView    m_fxaaUIImageView = VK_NULL_HANDLE;
     VkFramebuffer  m_fxaaFramebuffer = VK_NULL_HANDLE;
 
     // 1x1 黑色纹理备用 (bloom 禁用时使用)
