@@ -141,12 +141,21 @@ set(LAUNCH_STORYBOARD "${CMAKE_CURRENT_SOURCE_DIR}/LaunchScreen.storyboard")
 # ============================================================================
 # 可执行文件 (iOS app bundle)
 # ============================================================================
+# App 图标 — 直接用 PNG 文件 + CFBundleIcons
+file(GLOB ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/Assets.xcassets/AppIcon.appiconset/icon_*.png")
+
 add_executable(QymEditorIOS MACOSX_BUNDLE
     ${IOS_MAIN}
     ${ENGINE_SOURCES}
     ${EDITOR_SOURCES}
     ${ASSET_FILES}
     ${LAUNCH_STORYBOARD}
+    ${ICON_FILES}
+)
+
+# 图标文件放到 bundle 根目录
+set_source_files_properties(${ICON_FILES} PROPERTIES
+    MACOSX_PACKAGE_LOCATION Resources
 )
 
 # 资源文件设置为 bundle resource，保持目录结构
