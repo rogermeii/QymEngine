@@ -595,8 +595,13 @@ bool compileShader(const std::string& inputPath, const std::string& outputDir) {
     // 6. MSL 变体 (Metal 后端用)
     if (g_emitMsl) {
         std::cout << "  [msl default]" << std::endl;
+        // Metal 编译传入 __METAL__ 宏，着色器可用于平台条件编译
+        slang::PreprocessorMacroDesc metalMacro;
+        metalMacro.name = "__METAL__";
+        metalMacro.value = "1";
+        std::vector<slang::PreprocessorMacroDesc> mslMacros = { metalMacro };
         VariantResult mslDefault;
-        if (compileShaderVariant(inputPath, baseName, {}, mslDefault, SLANG_METAL)) {
+        if (compileShaderVariant(inputPath, baseName, mslMacros, mslDefault, SLANG_METAL)) {
             mslDefault.reflectJson = variants["default"].reflectJson;
             std::cout << "  vert: " << mslDefault.vertSpv.size() << "B, frag: "
                       << mslDefault.fragSpv.size() << "B (MSL)" << std::endl;

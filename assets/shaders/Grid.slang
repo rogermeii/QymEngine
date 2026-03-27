@@ -97,10 +97,29 @@ struct FSOutput
     float depth : SV_Depth;
 };
 
+// Metal: Slang 的 Metal target 不支持 fwidth，用 ddx/ddy 替代
+float2 myFwidth(float2 v)
+{
+#if __METAL__
+    return abs(ddx(v)) + abs(ddy(v));
+#else
+    return fwidth(v);
+#endif
+}
+
+float myFwidthF(float v)
+{
+#if __METAL__
+    return abs(ddx(v)) + abs(ddy(v));
+#else
+    return fwidth(v);
+#endif
+}
+
 float4 gridLine(float3 fragPos, float scale, float4 color)
 {
     float2 coord = fragPos.xz / scale;
-    float2 deriv = fwidth(coord);
+    float2 deriv = myFwidth(coord);
     float2 g = abs(frac(coord - 0.5) - 0.5) / (deriv * 0.5);
     float line = min(g.x, g.y);
     float alpha = 1.0 - min(line, 1.0);
@@ -114,8 +133,17 @@ FSOutput fragmentMain(VSOutput input)
 
     float t = -input.nearPoint.y / (input.farPoint.y - input.nearPoint.y);
 
+    // Metal target 不支持 discard，用 alpha=0 + early return 替代
+#if __METAL__
+    if (t < 0.0 || t > 1.0) {
+        output.color = float4(0, 0, 0, 0);
+        output.depth = 1.0;
+        return output;
+    }
+#else
     if (t < 0.0 || t > 1.0)
         discard;
+#endif
 
     float3 fragPos = input.nearPoint + t * (input.farPoint - input.nearPoint);
 
@@ -125,8 +153,8 @@ FSOutput fragmentMain(VSOutput input)
     float4 smallGrid = gridLine(fragPos, 0.5, float4(0.4, 0.4, 0.4, 0.4));
     float4 largeGrid = gridLine(fragPos, 5.0, float4(0.5, 0.5, 0.5, 0.7));
 
-    float xAxis = 1.0 - min(abs(fragPos.z) / fwidth(fragPos.z), 1.0);
-    float zAxis = 1.0 - min(abs(fragPos.x) / fwidth(fragPos.x), 1.0);
+    float xAxis = 1.0 - min(abs(fragPos.z) / myFwidthF(fragPos.z), 1.0);
+    float zAxis = 1.0 - min(abs(fragPos.x) / myFwidthF(fragPos.x), 1.0);
 
     float4 color = smallGrid;
     color = lerp(color, largeGrid, largeGrid.a);
@@ -136,8 +164,16 @@ FSOutput fragmentMain(VSOutput input)
 
     color.a *= fade;
 
+#if __METAL__
+    if (color.a < 0.01) {
+        output.color = float4(0, 0, 0, 0);
+        output.depth = 1.0;
+        return output;
+    }
+#else
     if (color.a < 0.01)
         discard;
+#endif
 
     output.color = color;
 
