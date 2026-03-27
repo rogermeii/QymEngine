@@ -67,8 +67,20 @@ static void createFullscreenBundlePipeline(
     const VkPipelineColorBlendAttachmentState* customBlendState = nullptr)
 {
     ShaderBundle bundle;
-    if (!bundle.load(bundlePath) || !bundle.hasVariant(variant))
-        throw std::runtime_error(std::string("Failed to load ") + debugName + " variant: " + variant);
+    std::string actualVariant = variant;
+    if (!bundle.load(bundlePath)) {
+        SDL_Log("[Renderer] WARNING: 无法加载 %s: %s", debugName, bundlePath.c_str());
+        return;
+    }
+    if (!bundle.hasVariant(actualVariant)) {
+        // 回退到 default 变体
+        SDL_Log("[Renderer] WARNING: %s 缺少变体 '%s'，尝试回退到 'default'", debugName, actualVariant.c_str());
+        actualVariant = "default";
+        if (!bundle.hasVariant(actualVariant)) {
+            SDL_Log("[Renderer] WARNING: %s 也缺少 'default' 变体，跳过", debugName);
+            return;
+        }
+    }
 
     auto createShaderModule = [&](const std::vector<char>& code) -> VkShaderModule {
         VkShaderModuleCreateInfo ci{};
@@ -81,8 +93,8 @@ static void createFullscreenBundlePipeline(
         return mod;
     };
 
-    VkShaderModule vert = createShaderModule(bundle.getVertSpv(variant));
-    VkShaderModule frag = createShaderModule(bundle.getFragSpv(variant));
+    VkShaderModule vert = createShaderModule(bundle.getVertSpv(actualVariant));
+    VkShaderModule frag = createShaderModule(bundle.getFragSpv(actualVariant));
 
     if (outPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, outPipeline, nullptr);

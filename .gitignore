@@ -441,3 +441,7 @@ fabric.properties
 /task_plan.md
 /findings.md
 /temp_vertex_layout*
+
+# 着色器编译产物（由 ShaderCompiler 本地生成）
+*.shaderbundle
+
