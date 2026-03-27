@@ -328,11 +328,14 @@ static void loadFromVulkanSo()
 {
     // SDL 内部会加载 libvulkan 并提供 vkGetInstanceProcAddr
     auto rawGetProcAddr = (PFN_vkGetInstanceProcAddr)SDL_Vulkan_GetVkGetInstanceProcAddr();
+#ifndef __ANDROID__
+    // Android 不静态链接 libvulkan，RTLD_DEFAULT 可能返回无效地址
     if (!rawGetProcAddr) {
         // 若已显式链接 Vulkan loader，优先直接取当前进程里的导出符号
         rawGetProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
             dlsym(RTLD_DEFAULT, "vkGetInstanceProcAddr"));
     }
+#endif
     if (!rawGetProcAddr) {
         // Fallback: 手动 dlopen
 #ifdef __APPLE__
