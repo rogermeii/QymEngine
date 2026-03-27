@@ -84,7 +84,12 @@ void ImGuiLayer::init(Renderer& renderer)
     }
     if (!font) {
         // 无法加载中文字体，使用 ImGui 默认字体
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+        // iOS: 不放大字体，Retina 屏 DPI 足够
+        io.FontGlobalScale = 1.0f;
+#else
         io.FontGlobalScale = 1.5f;
+#endif
     }
 
     ImGui::StyleColorsDark();
