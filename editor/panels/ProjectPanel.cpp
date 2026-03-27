@@ -2,11 +2,17 @@
 #include "UIAutomation.h"
 #include <imgui.h>
 #include <json.hpp>
-#include <filesystem>
 #include <algorithm>
+#ifndef __ANDROID__
+#include <filesystem>
 #include <fstream>
-
 namespace fs = std::filesystem;
+#else
+#include <SDL.h>
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
+#include <jni.h>
+#endif
 
 namespace QymEngine {
 
@@ -77,13 +83,6 @@ void ProjectPanel::onImGuiRender()
         fullPath += "/" + m_currentDir;
     }
 
-    // Check if directory exists
-    if (!fs::exists(fullPath) || !fs::is_directory(fullPath)) {
-        ImGui::Text("Directory not found: %s", fullPath.c_str());
-        ImGui::End();
-        return;
-    }
-
     // Collect entries: separate directories and files
     struct Entry {
         std::string name;
@@ -91,6 +90,62 @@ void ProjectPanel::onImGuiRender()
     };
     std::vector<Entry> dirs;
     std::vector<Entry> files;
+
+#ifdef __ANDROID__
+    // Android: 用 AAssetManager 列举 APK 内的 assets 目录
+    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+    jobject activity = (jobject)SDL_AndroidGetActivity();
+    jclass clazz = env->GetObjectClass(activity);
+    jmethodID getAssets = env->GetMethodID(clazz, "getAssets", "()Landroid/content/res/AssetManager;");
+    jobject jAssetMgr = env->CallObjectMethod(activity, getAssets);
+    AAssetManager* mgr = AAssetManager_fromJava(env, jAssetMgr);
+    env->DeleteLocalRef(clazz);
+    env->DeleteLocalRef(jAssetMgr);
+    env->DeleteLocalRef(activity);
+
+    if (mgr) {
+        // 对 Android，fullPath 就是相对于 assets/ 的路径，根目录用 ""
+        const char* dirPath = m_currentDir.empty() ? "" : m_currentDir.c_str();
+        AAssetDir* assetDir = AAssetManager_openDir(mgr, dirPath);
+        if (assetDir) {
+            // AAssetDir_getNextFileName 只返回文件名
+            const char* filename = nullptr;
+            while ((filename = AAssetDir_getNextFileName(assetDir)) != nullptr) {
+                files.push_back({std::string(filename), false});
+            }
+            AAssetDir_close(assetDir);
+        }
+        // AAssetDir 不返回子目录，通过尝试打开已知子目录名来检测
+        // 收集文件名中的路径前缀作为子目录候选
+        // 更简单的方案：对根目录硬编码已知子目录
+        if (m_currentDir.empty()) {
+            const char* knownDirs[] = {"branding", "materials", "models", "scenes", "shaders", "textures"};
+            for (auto* d : knownDirs) {
+                AAssetDir* subDir = AAssetManager_openDir(mgr, d);
+                if (subDir) {
+                    // 检查是否有内容
+                    if (AAssetDir_getNextFileName(subDir) != nullptr) {
+                        dirs.push_back({std::string(d), true});
+                    }
+                    AAssetDir_close(subDir);
+                }
+            }
+        } else {
+            // 非根目录：扫描已有文件路径的前缀推断子目录
+            // 通过列举更深一级的路径来检测子目录
+            // AAssetManager_openDir 对子目录也能工作
+            // 用一个简单的启发式：尝试常见子目录名
+            // 先收集当前目录下的所有文件，从文件名推断不出子目录
+            // 实际上 Android AAssetDir 的行为因设备而异，这里保守处理
+        }
+    }
+#else
+    // Desktop: 用 std::filesystem 列举真实文件系统
+    if (!fs::exists(fullPath) || !fs::is_directory(fullPath)) {
+        ImGui::Text("Directory not found: %s", fullPath.c_str());
+        ImGui::End();
+        return;
+    }
 
     try {
         for (auto& entry : fs::directory_iterator(fullPath)) {
@@ -106,6 +161,7 @@ void ProjectPanel::onImGuiRender()
         ImGui::End();
         return;
     }
+#endif
 
     // Sort alphabetically
     std::sort(dirs.begin(), dirs.end(), [](const Entry& a, const Entry& b) {
@@ -218,7 +274,8 @@ void ProjectPanel::onImGuiRender()
     if (ImGui::IsMouseClicked(0) && ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered())
         m_selectedFile.clear();
 
-    // Right-click context menu
+#ifndef __ANDROID__
+    // Right-click context menu (仅 PC，Android APK assets 只读)
     if (ImGui::BeginPopupContextWindow("ProjectContextMenu")) {
         if (ImGui::MenuItem("New Material")) {
             std::string dir = m_currentDir.empty() ? "materials" : m_currentDir;
@@ -250,6 +307,7 @@ void ProjectPanel::onImGuiRender()
         }
         ImGui::EndPopup();
     }
+#endif
 
     ImGui::End();
 }

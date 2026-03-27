@@ -532,11 +532,16 @@ bool compileShader(const std::string& inputPath, const std::string& outputDir) {
         }
     }
 
+    // DX 后端的 NDC Y 方向与 Vulkan 相反，全屏 quad UV 需要翻转
+    slang::PreprocessorMacroDesc flipYMacro;
+    flipYMacro.name = "GRAPHICS_FLIP_Y";
+    flipYMacro.value = "1";
+
     // 3. DXIL 变体 (D3D12 后端用)
     if (g_emitDxil) {
         std::cout << "  [dxil default]" << std::endl;
         VariantResult dxilDefault;
-        if (compileShaderVariant(inputPath, baseName, {}, dxilDefault, SLANG_DXIL)) {
+        if (compileShaderVariant(inputPath, baseName, {flipYMacro}, dxilDefault, SLANG_DXIL)) {
             // DXIL 变体复用 SPIRV 的反射数据
             dxilDefault.reflectJson = variants["default"].reflectJson;
             std::cout << "  vert: " << dxilDefault.vertSpv.size() << "B, frag: "
@@ -551,7 +556,7 @@ bool compileShader(const std::string& inputPath, const std::string& outputDir) {
             slang::PreprocessorMacroDesc bindlessMacro;
             bindlessMacro.name = "USE_BINDLESS";
             bindlessMacro.value = "1";
-            std::vector<slang::PreprocessorMacroDesc> macros = { bindlessMacro };
+            std::vector<slang::PreprocessorMacroDesc> macros = { bindlessMacro, flipYMacro };
             VariantResult dxilBindless;
             if (compileShaderVariant(inputPath, baseName, macros, dxilBindless, SLANG_DXIL)) {
                 dxilBindless.reflectJson = variants["bindless"].reflectJson;
@@ -568,7 +573,7 @@ bool compileShader(const std::string& inputPath, const std::string& outputDir) {
     if (g_emitDxbc) {
         std::cout << "  [dxbc default]" << std::endl;
         VariantResult dxbcDefault;
-        if (compileShaderVariant(inputPath, baseName, {}, dxbcDefault, SLANG_DXBC)) {
+        if (compileShaderVariant(inputPath, baseName, {flipYMacro}, dxbcDefault, SLANG_DXBC)) {
             dxbcDefault.reflectJson = variants["default"].reflectJson;
             std::cout << "  vert: " << dxbcDefault.vertSpv.size() << "B, frag: "
                       << dxbcDefault.fragSpv.size() << "B (DXBC)" << std::endl;

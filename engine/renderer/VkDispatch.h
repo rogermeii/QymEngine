@@ -52,6 +52,9 @@ bool vkIsMetalBackend();
 bool vkHasClipControl();
 void vkSetClipControlSupport(bool enabled);
 
+/// 全屏 quad 渲染是否需要 Y 翻转 (NDC Y 方向与 Vulkan 不同的后端)
+bool vkGraphicsNeedFlipY();
+
 } // namespace QymEngine
 
 // ============================================================================

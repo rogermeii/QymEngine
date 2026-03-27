@@ -3,6 +3,7 @@
 #include "renderer/DescriptorLayoutCache.h"
 #include "renderer/VkDispatch.h"
 #include "asset/ShaderBundle.h"
+#include "core/Log.h"
 
 #include <array>
 #include <stdexcept>
@@ -1041,13 +1042,14 @@ void PostProcessPipeline::createPipelines() {
             &pcRange);
     }
 
-    // FXAA: 不需要混合
+    // FXAA（缺少着色器变体时跳过）
     {
         VkPushConstantRange pcRange{};
         pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pcRange.offset = 0;
         pcRange.size = sizeof(FxaaPushConstant);
 
+        try {
         createFullscreenBundlePipeline(
             device,
             m_ldrRenderPass,
@@ -1059,6 +1061,11 @@ void PostProcessPipeline::createPipelines() {
             m_fxaaLayout,
             "fxaa",
             &pcRange);
+        } catch (const std::runtime_error& e) {
+            Log::warn(std::string("[PostProcess] FXAA: ") + e.what() + " (skipped)");
+            m_fxaaPipeline = VK_NULL_HANDLE;
+            m_fxaaLayout = VK_NULL_HANDLE;
+        }
     }
 }
 
@@ -1133,6 +1140,11 @@ void PostProcessPipeline::execute(VkCommandBuffer cmd, VkImageView sceneHDR,
 void PostProcessPipeline::executeBloom(VkCommandBuffer cmd, VkImageView sceneHDR,
                                         const PostProcessSettings& settings) {
     VkDevice device = m_context->getDevice();
+    static int s_bloomDbg = 0;
+    if (s_bloomDbg < 3) {
+        fprintf(stderr, "[PP] executeBloom: mipCount=%d\n", settings.bloomMipCount);
+        s_bloomDbg++;
+    }
     int mipCount = std::clamp(settings.bloomMipCount, 1, MAX_BLOOM_MIPS);
 
     // 升采样描述符依赖运行时 mipCount（最深层需要从 down image 读取）
@@ -1420,6 +1432,7 @@ void PostProcessPipeline::executeComposite(VkCommandBuffer cmd, VkImageView scen
 // ========================================================================
 
 void PostProcessPipeline::executeFxaa(VkCommandBuffer cmd, const PostProcessSettings& settings) {
+    if (!m_fxaaPipeline) return;
     // 描述符已在 init 绑定 compositeImageView，无需每帧更新
 
     VkRenderPassBeginInfo rpBegin{};
@@ -1466,13 +1479,13 @@ void PostProcessPipeline::executeFxaa(VkCommandBuffer cmd, const PostProcessSett
 // ========================================================================
 
 VkImage PostProcessPipeline::getFinalImage(const PostProcessSettings& settings) const {
-    if (settings.fxaaEnabled)
+    if (settings.fxaaEnabled && m_fxaaPipeline)
         return m_fxaaImage;
     return m_compositeImage;
 }
 
 VkImageView PostProcessPipeline::getFinalImageView(const PostProcessSettings& settings) const {
-    if (settings.fxaaEnabled)
+    if (settings.fxaaEnabled && m_fxaaPipeline)
         return m_fxaaImageView;
     return m_compositeImageView;
 }

@@ -65,8 +65,19 @@ void ImGuiLayer::init(Renderer& renderer)
     fontConfig.OversampleH = 2;
     fontConfig.OversampleV = 2;
 #ifdef __ANDROID__
-    const char* fontPath = "/system/fonts/NotoSansCJK-Regular.ttc";
+    // Android: 从 APK assets 读取字体（AddFontFromFileTTF 无法访问 APK 内文件）
     float fontSize = 36.0f;
+    SDL_RWops* rw = SDL_RWFromFile("fonts/msyh.ttc", "rb");
+    if (rw) {
+        Sint64 size = SDL_RWsize(rw);
+        void* fontData = IM_ALLOC(size);  // ImGui 接管 ownership，不需要手动 free
+        SDL_RWread(rw, fontData, 1, (size_t)size);
+        SDL_RWclose(rw);
+        io.Fonts->AddFontFromMemoryTTF(fontData, (int)size, fontSize, &fontConfig, io.Fonts->GetGlyphRangesChineseFull());
+    } else {
+        SDL_Log("[ImGuiLayer] Failed to load font from assets, using default");
+        io.FontGlobalScale = 1.5f;
+    }
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
     // iOS: 使用默认字体，不加载系统中文字体（iOS 沙箱限制访问系统字体文件）
     const char* fontPath = nullptr;
@@ -78,19 +89,19 @@ void ImGuiLayer::init(Renderer& renderer)
     const char* fontPath = "C:/Windows/Fonts/msyh.ttc";
     float fontSize = 16.0f;
 #endif
+#ifndef __ANDROID__
     ImFont* font = nullptr;
     if (fontPath) {
         font = io.Fonts->AddFontFromFileTTF(fontPath, fontSize, &fontConfig, io.Fonts->GetGlyphRangesChineseFull());
     }
     if (!font) {
-        // 无法加载中文字体，使用 ImGui 默认字体
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-        // iOS: 不放大字体，Retina 屏 DPI 足够
         io.FontGlobalScale = 1.0f;
 #else
         io.FontGlobalScale = 1.5f;
 #endif
     }
+#endif
 
     ImGui::StyleColorsDark();
 

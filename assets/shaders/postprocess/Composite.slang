@@ -41,6 +41,9 @@ VSOutput vertexMain(uint vertexID : SV_VertexID) {
     float3 p = positions[vertexID];
     o.sv_position = float4(p, 1.0);
     o.uv = p.xy * 0.5 + 0.5;
+#ifdef GRAPHICS_FLIP_Y
+    o.uv.y = 1.0 - o.uv.y;
+#endif
     return o;
 }
 

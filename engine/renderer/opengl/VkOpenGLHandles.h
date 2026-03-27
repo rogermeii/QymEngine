@@ -34,6 +34,7 @@
 #include <SDL.h>
 #include <vector>
 #include <string>
+#include <map>
 #include <cstdint>
 
 // ============================================================================
@@ -196,11 +197,18 @@ struct GL_Framebuffer {
 // Pipeline
 // ============================================================================
 
+struct GL_SamplerUnitInfo {
+    std::string name;
+    int set;
+    int binding;
+    int texUnit;    // 由 fixupGLSL 分配的全局 texture unit (跨 set 唯一)
+};
+
 struct GL_ShaderModule {
     std::string                 glslSource;
     bool                        isImguiReplacement = false;
-    // GLES: sampler 名称 → texture unit 映射 (由 fixupGLSL 生成)
-    std::vector<std::pair<std::string, int>> samplerUnits;
+    // sampler 映射 (由 fixupGLSL 生成): 名称、原始 set/binding、分配的 texture unit
+    std::vector<GL_SamplerUnitInfo> samplerUnits;
 };
 
 struct GL_PipelineLayout {
@@ -240,6 +248,10 @@ struct GL_Pipeline {
     float                       depthBiasConstant = 0.f;
     float                       depthBiasSlope = 0.f;
     float                       depthBiasClamp = 0.f;
+    // Sampler texture unit 映射: key = (set << 16 | binding), value = texUnit
+    // 由 fixupGLSL 的 sampler 映射在 pipeline 创建时填充，
+    // 确保 draw-time 绑定与 GLSL shader 的 binding/uniform 分配一致
+    std::map<uint32_t, int>     samplerTexUnits;
     // GLES 3.0 顶点属性缓存 (glVertexAttribPointer 需要这些信息)
     uint32_t                    attribCount = 0;
     int                         attribComponents[16] = {};
@@ -271,6 +283,8 @@ struct GL_DescriptorSet {
     GLuint                      textures[8] = {};
     GLenum                      textureTargets[8] = {};
     GLuint                      samplers[8] = {};
+    uint32_t                    textureMipBase[8] = {};   // baseMipLevel（无 TextureView 时用于 GL_TEXTURE_BASE_LEVEL）
+    uint32_t                    textureMipCount[8] = {};  // levelCount（0 = 全部 mip）
     uint32_t                    textureCount = 0;
 };
 

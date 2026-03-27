@@ -1873,9 +1873,7 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
     m_postProcess.init(m_context, m_layoutCache, m_offscreenWidth, m_offscreenHeight);
 
     // --- 6. 初始化 IBL 生成器并生成 IBL 贴图 ---
-    // GLES/OpenGL 后端的 IBL cubemap 生成存在兼容性问题（cubemap 纹理完整性/sampling 错误），
-    // 暂时跳过，使用 fallback 黑色纹理（Lit.slang 中 IBL 贡献为 0，退化为 ambientColor * albedo）
-    if (!vkIsGLESBackend() && !vkIsOpenGLBackend() && !m_iblGenerator.isGenerated()) {
+    if (!m_iblGenerator.isGenerated()) {
         m_iblGenerator.init(m_context, m_layoutCache, m_commandManager);
         m_iblGenerator.generateBrdfLut();
 

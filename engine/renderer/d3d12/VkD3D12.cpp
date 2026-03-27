@@ -1002,7 +1002,10 @@ static VkResult VKAPI_CALL d3d12_vkCreateImageView(
                 srvDesc.TextureCube.MostDetailedMip = 0;
             } else {
                 srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-                srvDesc.Texture2D.MipLevels = (img->mipLevels > 0) ? img->mipLevels : 1;
+                srvDesc.Texture2D.MostDetailedMip = view->subresourceRange.baseMipLevel;
+                UINT mipCount = view->subresourceRange.levelCount;
+                if (mipCount == 0) mipCount = (img->mipLevels > 0) ? img->mipLevels : 1;
+                srvDesc.Texture2D.MipLevels = mipCount;
             }
             device->device->CreateShaderResourceView(img->resource.Get(), &srvDesc, view->srvHandle);
             view->hasSrv = true;

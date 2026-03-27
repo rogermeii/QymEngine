@@ -245,6 +245,11 @@ static void compat_CreateTextures(GLenum target, GLsizei n, GLuint* textures) {
         }
     } else {
         glCreateTextures(target, n, textures);
+        // 诊断
+        GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            SDL_Log("[VkOpenGL] CreateTextures ERROR: target=0x%x tex=%u err=0x%x", target, textures[0], err);
+        }
     }
 }
 
@@ -255,6 +260,10 @@ static void compat_TextureStorage2D(GLenum target, GLuint tex, GLsizei levels, G
         glBindTexture(target, 0);
     } else {
         glTextureStorage2D(tex, levels, internalFormat, w, h);
+        GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            SDL_Log("[VkOpenGL] TextureStorage2D ERROR: tex=%u levels=%d fmt=0x%x %dx%d err=0x%x", tex, levels, internalFormat, w, h, err);
+        }
     }
 }
 
@@ -293,7 +302,18 @@ static void compat_BindTextureUnit(GLuint unit, GLenum target, GLuint texture) {
         glActiveTexture(GL_TEXTURE0 + unit);
         glBindTexture(target, texture);
     } else {
+        // 清空之前的 GL 错误
+        while (glGetError() != GL_NO_ERROR) {}
         glBindTextureUnit(unit, texture);
+        GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            static int s_errLog = 0;
+            if (s_errLog < 10) {
+                SDL_Log("[VkOpenGL] BindTextureUnit ERROR: unit=%u target=0x%x tex=%u err=0x%x",
+                        unit, target, texture, err);
+                s_errLog++;
+            }
+        }
     }
 }
 
@@ -450,10 +470,10 @@ static void compat_VertexArrayElementBuffer(GLuint vao, GLuint buffer) {
 
 // 移除 layout(..., set = N, ...) 中的 set = N, 并将 binding 重新编号
 // 同时将 std430 替换为 std140 (uniform blocks 不支持 std430)
-// outSamplerUnits: 输出 sampler 名称 → texture unit 映射 (GLES 用)
+// outSamplerUnits: 输出 sampler 名称 → texture unit 映射 (全 GL 后端均收集)
 static void replaceAll(std::string& s, const std::string& from, const std::string& to);
 static std::string fixupGLSL(const std::string& source,
-                             std::vector<std::pair<std::string, int>>* outSamplerUnits = nullptr)
+                             std::vector<GL_SamplerUnitInfo>* outSamplerUnits = nullptr)
 {
     // === 第一遍: 收集所有 sampler 的 (set, binding)，按 (set, binding) 排序后分配连续编号 ===
     // 这确保 layout(binding=N) 与 flushGraphicsState 的 walk 顺序一致
@@ -594,33 +614,40 @@ static std::string fixupGLSL(const std::string& source,
                 }
                 line = line.substr(0, layoutPos + 7) + cleaned + line.substr(parenEnd);
 
-                // 如果下一行是 sampler，替换 binding 值为按 (set,binding) 排序后的编号
-                if (pos < result.size()) {
+                // sampler binding 替换: 支持同行和下一行两种格式
+                // 格式1: layout(...) uniform sampler2D tex; (同一行)
+                // 格式2: layout(...)\n uniform sampler2D tex; (分两行)
+                std::string samplerDeclLine;
+                if (line.find("sampler") != std::string::npos && line.find("uniform") != std::string::npos) {
+                    samplerDeclLine = line;
+                } else if (pos < result.size()) {
                     size_t peekEnd = result.find('\n', pos);
                     if (peekEnd == std::string::npos) peekEnd = result.size();
                     std::string nextLine = result.substr(pos, peekEnd - pos);
-                    if (nextLine.find("sampler") != std::string::npos && nextLine.find("uniform") != std::string::npos) {
-                        // 从 nextLine 提取 sampler 名称
-                        auto sp = nextLine.rfind(' ');
-                        std::string sName = (sp != std::string::npos) ? nextLine.substr(sp + 1) : "";
-                        if (!sName.empty() && sName.back() == ';') sName.pop_back();
-                        // 查找对应的 newBinding
-                        for (auto& si : samplers) {
-                            if (si.name == sName) {
-                                // 替换 binding = N
-                                size_t bPos = line.find("binding");
-                                if (bPos != std::string::npos) {
-                                    size_t eqPos = line.find('=', bPos);
-                                    if (eqPos != std::string::npos) {
-                                        size_t numStart = eqPos + 1;
-                                        while (numStart < line.size() && line[numStart] == ' ') numStart++;
-                                        size_t numEnd = numStart;
-                                        while (numEnd < line.size() && line[numEnd] >= '0' && line[numEnd] <= '9') numEnd++;
-                                        line = line.substr(0, numStart) + std::to_string(si.newBinding) + line.substr(numEnd);
-                                    }
+                    if (nextLine.find("sampler") != std::string::npos && nextLine.find("uniform") != std::string::npos)
+                        samplerDeclLine = nextLine;
+                }
+                if (!samplerDeclLine.empty()) {
+                    // 从 samplerDeclLine 提取 sampler 名称
+                    auto sp = samplerDeclLine.rfind(' ');
+                    std::string sName = (sp != std::string::npos) ? samplerDeclLine.substr(sp + 1) : "";
+                    if (!sName.empty() && sName.back() == ';') sName.pop_back();
+                    // 查找对应的 newBinding
+                    for (auto& si : samplers) {
+                        if (si.name == sName) {
+                            // 替换 binding = N
+                            size_t bPos = line.find("binding");
+                            if (bPos != std::string::npos) {
+                                size_t eqPos = line.find('=', bPos);
+                                if (eqPos != std::string::npos) {
+                                    size_t numStart = eqPos + 1;
+                                    while (numStart < line.size() && line[numStart] == ' ') numStart++;
+                                    size_t numEnd = numStart;
+                                    while (numEnd < line.size() && line[numEnd] >= '0' && line[numEnd] <= '9') numEnd++;
+                                    line = line.substr(0, numStart) + std::to_string(si.newBinding) + line.substr(numEnd);
                                 }
-                                break;
                             }
+                            break;
                         }
                     }
                 }
@@ -832,7 +859,9 @@ static std::string fixupGLSL(const std::string& source,
     if (outSamplerUnits) {
         outSamplerUnits->clear();
         for (auto& si : samplers) {
-            outSamplerUnits->push_back({si.name, si.newBinding});
+            outSamplerUnits->push_back({si.name, si.set, si.binding, si.newBinding});
+            SDL_Log("[fixupGLSL] sampler: name=%s set=%d binding=%d → texUnit=%d",
+                    si.name.c_str(), si.set, si.binding, si.newBinding);
         }
     }
 
@@ -1026,6 +1055,10 @@ static std::string fixupGLSL(const std::string& source,
         replaceAll(pass2,
             "gl_Position = (((worldPos_0) * (unpackStorage_0(frame_0.lightVP_0))));",
             "gl_Position = (transpose(unpackStorage_0(frame_0.lightVP_0)) * worldPos_0);");
+        // Shadow shader: Slang 内联了 worldPos，没有中间变量，需要匹配组合表达式
+        replaceAll(pass2,
+            "gl_Position = ((((((vec4(input_position_0, 1.0)) * (unpackStorage_1(pc_0.model_0))))) * (unpackStorage_0(frame_0.lightVP_0))));",
+            "gl_Position = (transpose(unpackStorage_0(frame_0.lightVP_0)) * (unpackStorage_1(pc_0.model_0) * vec4(input_position_0, 1.0)));");
         replaceAll(pass2,
             "vec4 lightClip_0 = (((vec4(worldPos_0, 1.0)) * (unpackStorage_0(frame_0.lightVP_0))));",
             "vec4 lightClip_0 = (transpose(unpackStorage_0(frame_0.lightVP_0)) * vec4(worldPos_0, 1.0));");
@@ -2546,7 +2579,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateImageView(
             const bool needsDistinctView = !(fullMipRange && fullLayerRange && sameTarget);
 
             if (needsDistinctView) {
-                compat_CreateTextures(view->target, 1, &view->texture);
+                // glTextureView 要求纹理尚未被指定 target，
+                // 因此必须用 glGenTextures 而非 glCreateTextures
+                glGenTextures(1, &view->texture);
                 auto fi = vkFormatToGL(view->format);
                 if (!compat_TextureView(view->texture, view->target, img->texture, fi.internalFormat,
                                         pCreateInfo->subresourceRange.baseMipLevel,
@@ -2855,10 +2890,9 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdBeginRenderPass(
         glEnable(GL_SCISSOR_TEST);
     }
 
-    // GLES: 对 DONT_CARE 的 attachment 执行 glClear 丢弃旧内容
-    // GLES 上 DONT_CARE 不保证丢弃旧数据，导致 bloom mip chain 跨帧累积变白
-    // Desktop OpenGL (4.5) 不需要此处理（DONT_CARE 行为正确）
-    if (s_isGLES && fb->fbo != 0 && !clearMask) {
+    // 对 DONT_CARE 的 attachment 执行 glClear 丢弃旧内容
+    // DONT_CARE 不保证丢弃旧数据，导致 bloom mip chain 跨帧累积变白
+    if (fb->fbo != 0 && !clearMask) {
         GLbitfield dontCareClear = 0;
         for (size_t i = 0; i < fb->attachments.size() && i < rp->attachments.size(); i++) {
             auto& att = rp->attachments[i];
@@ -3131,7 +3165,6 @@ static void flushGraphicsState(GL_CommandBuffer* cb)
     }
 
     uint32_t uboSlot = 0;
-    uint32_t texUnit = 0;
 
     for (uint32_t s = 0; s < pl->setLayouts.size() && s < 4; s++) {
         auto* setLayout = AS_GL(DescriptorSetLayout, pl->setLayouts[s]);
@@ -3150,15 +3183,28 @@ static void flushGraphicsState(GL_CommandBuffer* cb)
                        binding.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
                 for (uint32_t d = 0; d < binding.descriptorCount; d++) {
                     uint32_t bIdx = binding.binding + d;
+                    uint32_t key = (s << 16) | bIdx;
+                    auto it = pipeline->samplerTexUnits.find(key);
+                    if (it == pipeline->samplerTexUnits.end()) continue;
+                    int texUnit = it->second;
                     if (set && bIdx < 8) {
+                        GLenum texTarget = set->textureTargets[bIdx] ? set->textureTargets[bIdx] : GL_TEXTURE_2D;
                         if (set->textures[bIdx])
-                            compat_BindTextureUnit(texUnit,
-                                set->textureTargets[bIdx] ? set->textureTargets[bIdx] : GL_TEXTURE_2D,
-                                set->textures[bIdx]);
+                            compat_BindTextureUnit(texUnit, texTarget, set->textures[bIdx]);
                         if (set->samplers[bIdx])
                             glBindSampler(texUnit, set->samplers[bIdx]);
+                        // 无 TextureView 时，通过 BASE/MAX_LEVEL 限制采样到指定 mip
+                        // 必须对所有纹理设置（包括 mipBase==0），因为上次 draw 可能修改过同一纹理的 level 范围
+                        if (!s_hasTextureView && set->textures[bIdx]) {
+                            glActiveTexture(GL_TEXTURE0 + texUnit);
+                            uint32_t base = set->textureMipBase[bIdx];
+                            uint32_t count = set->textureMipCount[bIdx];
+                            GLint maxLevel = (count == 0 || count == VK_REMAINING_MIP_LEVELS)
+                                ? 1000 : static_cast<GLint>(base + count - 1);
+                            glTexParameteri(texTarget, GL_TEXTURE_BASE_LEVEL, static_cast<GLint>(base));
+                            glTexParameteri(texTarget, GL_TEXTURE_MAX_LEVEL, maxLevel);
+                        }
                     }
-                    texUnit++;
                 }
             }
         }
@@ -3594,9 +3640,46 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdCopyBufferToImage(
         const void* data = static_cast<const uint8_t*>(srcMem->mapped) + r.bufferOffset;
 
         glPixelStorei(GL_UNPACK_ROW_LENGTH, r.bufferRowLength > 0 ? r.bufferRowLength : 0);
-        compat_TextureSubImage2D(dst->texture, mip,
-            r.imageOffset.x, r.imageOffset.y, w, h,
-            fi.format, fi.type, data);
+        if (dst->arrayLayers > 1 && dst->target == GL_TEXTURE_CUBE_MAP) {
+            // Cubemap: 上传每个 face
+            uint32_t baseLayer = r.imageSubresource.baseArrayLayer;
+            uint32_t layerCount = r.imageSubresource.layerCount;
+            if (layerCount == 0) layerCount = 1;
+            // 计算每个 face 的数据大小
+            uint32_t faceSize = w * h * fi.texelSize;
+            for (uint32_t face = 0; face < layerCount; face++) {
+                GLenum target = GL_TEXTURE_CUBE_MAP_POSITIVE_X + baseLayer + face;
+                const void* faceData = static_cast<const uint8_t*>(data) + face * faceSize;
+                if (s_isGLES) {
+                    glBindTexture(GL_TEXTURE_CUBE_MAP, dst->texture);
+                    glTexSubImage2D(target, mip,
+                        r.imageOffset.x, r.imageOffset.y, w, h,
+                        fi.format, fi.type, faceData);
+                    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+                } else {
+#ifdef __ANDROID__
+                    // Android 只走 GLES 路径，不会到这里
+                    glBindTexture(GL_TEXTURE_CUBE_MAP, dst->texture);
+                    glTexSubImage2D(target, mip,
+                        r.imageOffset.x, r.imageOffset.y, w, h,
+                        fi.format, fi.type, faceData);
+                    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+#else
+                    // Desktop GL 4.5 DSA: cubemap 使用 glTextureSubImage3D，
+                    // zoffset = face index
+                    while (glGetError() != GL_NO_ERROR) {} // clear
+                    glTextureSubImage3D(dst->texture, mip,
+                        r.imageOffset.x, r.imageOffset.y, baseLayer + face,
+                        w, h, 1,
+                        fi.format, fi.type, faceData);
+#endif
+                }
+            }
+        } else {
+            compat_TextureSubImage2D(dst->texture, mip,
+                r.imageOffset.x, r.imageOffset.y, w, h,
+                fi.format, fi.type, data);
+        }
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     }
 }
@@ -3688,6 +3771,7 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdBlitImage(
         uint32_t srcW = std::abs(r.srcOffsets[1].x - r.srcOffsets[0].x);
         uint32_t srcH = std::abs(r.srcOffsets[1].y - r.srcOffsets[0].y);
         if (src->texture && dst->texture) {
+            // 两端都是离屏纹理
             if (s_isGLES) {
                 // GLES 3.0 没有 glCopyImageSubData，用 FBO + glBlitFramebuffer 替代
                 GLuint srcFbo = 0, dstFbo = 0;
@@ -3714,6 +3798,23 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdBlitImage(
                     r.dstOffsets[0].x, r.dstOffsets[0].y, 0,
                     srcW, srcH, 1);
             }
+        } else if (src->texture && !dst->ownsResource) {
+            // Blit 到默认帧缓冲 (swapchain image, texture=0)
+            uint32_t dstW = std::abs(r.dstOffsets[1].x - r.dstOffsets[0].x);
+            uint32_t dstH = std::abs(r.dstOffsets[1].y - r.dstOffsets[0].y);
+            GLenum glFilter = (filter == VK_FILTER_LINEAR) ? GL_LINEAR : GL_NEAREST;
+            GLuint srcFbo = 0;
+            glGenFramebuffers(1, &srcFbo);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
+            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                GL_TEXTURE_2D, src->texture, r.srcSubresource.mipLevel);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBlitFramebuffer(
+                r.srcOffsets[0].x, r.srcOffsets[0].y, r.srcOffsets[0].x + srcW, r.srcOffsets[0].y + srcH,
+                r.dstOffsets[0].x, r.dstOffsets[0].y, r.dstOffsets[0].x + dstW, r.dstOffsets[0].y + dstH,
+                GL_COLOR_BUFFER_BIT, glFilter);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteFramebuffers(1, &srcFbo);
         }
     }
 }
@@ -3887,7 +3988,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateShaderModule(
                                 pCreateInfo->codeSize);
                 while (!raw.empty() && raw.back() == '\0')
                     raw.pop_back();
-                mod->glslSource = fixupGLSL(raw, s_isGLES ? &mod->samplerUnits : nullptr);
+                mod->glslSource = fixupGLSL(raw, &mod->samplerUnits);
                 // 诊断: 输出 GLSL 的前几个 "in " 和 "layout" 行
                 {
                 static int s_shaderDumpCount = 0;
@@ -4102,33 +4203,76 @@ static VKAPI_ATTR VkResult VKAPI_CALL gl_vkCreateGraphicsPipelines(
                 glUniformBlockBinding(pipe->program, blocks[i].index, i);
             }
 
-            // GLES: sampler uniform 没有 layout(binding=N)，需要手动设置 texture unit
-            // 使用 fixupGLSL 生成的 (name → newBinding) 映射
-            if (s_isGLES) {
-                // 收集所有 stage 的 sampler 映射
-                std::vector<std::pair<std::string, int>> allSamplerUnits;
+            // sampler uniform → texture unit 映射
+            // fixupGLSL 对 VS/FS 独立处理，可能给同名 sampler 分配了不同 binding，
+            // 导致 link 后 binding 冲突。这里统一按 (set, binding) 重新分配 texUnit，
+            // 并通过 glUniform1i 强制设置，覆盖 GLSL layout(binding=N) 的值。
+            {
+                // 收集所有 stage 的 sampler 映射（按 name 去重，取 set/binding 信息最大的那个）
+                std::vector<GL_SamplerUnitInfo> allSamplerUnits;
                 for (uint32_t s = 0; s < ci.stageCount; s++) {
                     auto* sm = AS_GL(ShaderModule, ci.pStages[s].module);
                     if (sm) {
                         for (auto& su : sm->samplerUnits) {
-                            // 避免重复（VS 和 PS 可能共享 sampler）
                             bool found = false;
                             for (auto& existing : allSamplerUnits) {
-                                if (existing.first == su.first) { found = true; break; }
+                                if (existing.name == su.name) { found = true; break; }
                             }
                             if (!found) allSamplerUnits.push_back(su);
                         }
                     }
                 }
                 if (!allSamplerUnits.empty()) {
+                    // 按 (set, binding) 排序后重新分配全局唯一的 texUnit
+                    std::sort(allSamplerUnits.begin(), allSamplerUnits.end(),
+                        [](const GL_SamplerUnitInfo& a, const GL_SamplerUnitInfo& b) {
+                            return (a.set != b.set) ? (a.set < b.set) : (a.binding < b.binding);
+                        });
+                    for (int i = 0; i < (int)allSamplerUnits.size(); i++)
+                        allSamplerUnits[i].texUnit = i;
+
+                    // 所有 GL 后端都需要 glUniform1i 来覆盖 VS/FS 各自的 layout(binding=N)
                     glUseProgram(pipe->program);
                     for (auto& su : allSamplerUnits) {
-                        GLint loc = glGetUniformLocation(pipe->program, su.first.c_str());
+                        GLint loc = glGetUniformLocation(pipe->program, su.name.c_str());
                         if (loc >= 0) {
-                            glUniform1i(loc, su.second);
+                            glUniform1i(loc, su.texUnit);
                         }
                     }
                     glUseProgram(0);
+
+                    // 填充 samplerTexUnits 映射
+                    for (auto& su : allSamplerUnits) {
+                        uint32_t key = (uint32_t(su.set) << 16) | uint32_t(su.binding);
+                        pipe->samplerTexUnits[key] = su.texUnit;
+                    }
+                }
+
+                // ImGui 等管线的 shader module 没有经过 fixupGLSL（isImguiReplacement = true），
+                // samplerUnits 为空，导致 samplerTexUnits 未填充。
+                // 根据描述符集布局自动生成映射: 按 (set, binding) 递增分配 texture unit。
+                if (pipe->samplerTexUnits.empty()) {
+                    auto* pLayout = AS_GL(PipelineLayout, pipe->layout);
+                    if (pLayout) {
+                        int autoTexUnit = 0;
+                        for (uint32_t s = 0; s < pLayout->setLayouts.size() && s < 4; s++) {
+                            auto* setLayout = AS_GL(DescriptorSetLayout, pLayout->setLayouts[s]);
+                            if (!setLayout) continue;
+                            for (auto& binding : setLayout->bindings) {
+                                if (binding.descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ||
+                                    binding.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
+                                    for (uint32_t d = 0; d < binding.descriptorCount; d++) {
+                                        uint32_t key = (s << 16) | (binding.binding + d);
+                                        pipe->samplerTexUnits[key] = autoTexUnit++;
+                                    }
+                                }
+                            }
+                        }
+                        if (autoTexUnit > 0) {
+                            SDL_Log("[VkOpenGL] Auto-assigned %d texture units for pipeline prog=%u",
+                                    autoTexUnit, pipe->program);
+                        }
+                    }
                 }
             }
         }
@@ -4505,6 +4649,9 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkUpdateDescriptorSets(
                     ds->textures[slot] = imageViewTextureObject(img, view);
                     ds->textureTargets[slot] = imageViewTextureTarget(img, view, false);
                     ds->samplers[slot] = samp ? samp->sampler : 0;
+                    // 记录 mip 范围，无 TextureView 时 flushGraphicsState 需要设置 BASE/MAX_LEVEL
+                    ds->textureMipBase[slot] = view ? view->subresourceRange.baseMipLevel : 0;
+                    ds->textureMipCount[slot] = view ? view->subresourceRange.levelCount : 0;
                     if (slot >= ds->textureCount)
                         ds->textureCount = slot + 1;
                 }

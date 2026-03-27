@@ -494,6 +494,12 @@ void vkSetClipControlSupport(bool enabled)
     s_hasClipControl = enabled;
 }
 
+bool vkGraphicsNeedFlipY()
+{
+    // DX 后端的 NDC Y 方向与 Vulkan 相反，全屏 quad 渲染需要翻转 UV Y
+    return vkIsDirectXBackend();
+}
+
 void vkPostInstanceInit(VkInstance instance)
 {
     // 非 Vulkan 后端不需要 post-instance 加载

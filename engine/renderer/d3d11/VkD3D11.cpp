@@ -1165,7 +1165,7 @@ static VkResult VKAPI_CALL d3d11_vkCreateImageView(
                 rtvDesc.Texture2DArray.ArraySize = view->subresourceRange.layerCount;
             } else {
                 rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-                rtvDesc.Texture2D.MipSlice = 0;
+                rtvDesc.Texture2D.MipSlice = view->subresourceRange.baseMipLevel;
             }
 
             HRESULT hr = dev->device->CreateRenderTargetView(
@@ -1191,8 +1191,11 @@ static VkResult VKAPI_CALL d3d11_vkCreateImageView(
                 srvDesc.TextureCube.MostDetailedMip = 0;
             } else {
                 srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                srvDesc.Texture2D.MipLevels = (img->mipLevels > 0) ? img->mipLevels : 1;
-                srvDesc.Texture2D.MostDetailedMip = 0;
+                srvDesc.Texture2D.MostDetailedMip = view->subresourceRange.baseMipLevel;
+                UINT mipCount = view->subresourceRange.levelCount;
+                // levelCount==0 或 VK_REMAINING_MIP_LEVELS(0xFFFFFFFF) 时使用全部 mip
+                if (mipCount == 0) mipCount = (img->mipLevels > 0) ? img->mipLevels : 1;
+                srvDesc.Texture2D.MipLevels = mipCount;
             }
 
             HRESULT hr = dev->device->CreateShaderResourceView(
