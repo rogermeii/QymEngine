@@ -62,8 +62,15 @@ target_link_libraries(imgui PUBLIC SDL2::SDL2-static)
 target_sources(imgui PRIVATE "3rd-party/imguizmo/ImGuizmo.cpp")
 target_include_directories(imgui PUBLIC "${CMAKE_SOURCE_DIR}/3rd-party/imguizmo")
 
-# Shader compiler tool (需要 Slang SDK，macOS 上可选)
+# Shader compiler tool
+# 自动检测 Slang SDK：SLANG_SDK_PATH 变量 或 Vulkan SDK 内置
 option(BUILD_SHADER_COMPILER "Build the Slang shader compiler tool" OFF)
+if(NOT BUILD_SHADER_COMPILER AND DEFINED SLANG_SDK_PATH)
+    if(EXISTS "${SLANG_SDK_PATH}/include/slang.h")
+        message(STATUS "Auto-enabling ShaderCompiler (Slang SDK found at ${SLANG_SDK_PATH})")
+        set(BUILD_SHADER_COMPILER ON)
+    endif()
+endif()
 if(BUILD_SHADER_COMPILER)
     add_subdirectory(tools/shader_compiler)
 endif()
