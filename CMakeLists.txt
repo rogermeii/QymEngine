@@ -63,11 +63,18 @@ target_sources(imgui PRIVATE "3rd-party/imguizmo/ImGuizmo.cpp")
 target_include_directories(imgui PUBLIC "${CMAKE_SOURCE_DIR}/3rd-party/imguizmo")
 
 # Shader compiler tool
-# 自动检测 Slang SDK：SLANG_SDK_PATH 变量 或 Vulkan SDK 内置
+# 自动检测 Slang SDK：
+#   1. SLANG_SDK_PATH 变量（独立 Slang SDK）
+#   2. Vulkan SDK 内置（Windows: VulkanSDK/Include/slang）
 option(BUILD_SHADER_COMPILER "Build the Slang shader compiler tool" OFF)
-if(NOT BUILD_SHADER_COMPILER AND DEFINED SLANG_SDK_PATH)
-    if(EXISTS "${SLANG_SDK_PATH}/include/slang.h")
-        message(STATUS "Auto-enabling ShaderCompiler (Slang SDK found at ${SLANG_SDK_PATH})")
+if(NOT BUILD_SHADER_COMPILER)
+    # 优先检查 SLANG_SDK_PATH
+    if(DEFINED SLANG_SDK_PATH AND EXISTS "${SLANG_SDK_PATH}/include/slang.h")
+        message(STATUS "Auto-enabling ShaderCompiler (Slang SDK: ${SLANG_SDK_PATH})")
+        set(BUILD_SHADER_COMPILER ON)
+    # 其次检查 Vulkan SDK 内置 Slang（Windows）
+    elseif(Vulkan_INCLUDE_DIRS AND EXISTS "${Vulkan_INCLUDE_DIRS}/../Include/slang/slang.h")
+        message(STATUS "Auto-enabling ShaderCompiler (Slang in Vulkan SDK)")
         set(BUILD_SHADER_COMPILER ON)
     endif()
 endif()
