@@ -2812,45 +2812,16 @@ void Renderer::createShadowResources()
     {
         std::vector<char> vertSpv;
         std::vector<char> fragSpv;
-        if (glesShadowColor) {
-            static const char* kGlesShadowVS = R"(#version 300 es
-precision highp float;
-layout(std140) uniform block_FrameData_std140_0 {
-    mat4 view_0;
-    mat4 proj_0;
-    vec3 ambientColor_0; float _framePad0;
-    vec3 cameraPos_0; float _framePad1;
-    ivec4 lightCountPad_0;
-    vec4 lights_0[32];
-    mat4 lightVP_0;
-    ivec4 shadowParams_0;
-} frame_0;
-layout(std140) uniform block_PushConstants_std140_0 {
-    mat4 model_0;
-    int highlighted_0;
-    vec3 _pcPad0;
-} pc_0;
-layout(location = 0) in vec3 input_position_0;
-void main() {
-    vec4 worldPos = pc_0.model_0 * vec4(input_position_0, 1.0);
-    gl_Position = frame_0.lightVP_0 * worldPos;
-})";
-            static const char* kGlesShadowFS = R"(#version 300 es
-precision highp float;
-layout(location = 0) out float outShadow_0;
-void main() {
-    outShadow_0 = gl_FragCoord.z;
-})";
-            vertSpv.assign(kGlesShadowVS, kGlesShadowVS + std::strlen(kGlesShadowVS));
-            fragSpv.assign(kGlesShadowFS, kGlesShadowFS + std::strlen(kGlesShadowFS));
-        } else {
+        {
+            // GLES shadow 用 gles_shadow 变体（fragment shader 输出深度到 R32F 颜色附件）
+            // 其他后端用 default 变体（fragment shader 为空，硬件自动写深度）
+            std::string shadowVariantName = glesShadowColor ? "gles_shadow" : shaderVariant("default");
             std::string bundlePath = std::string(ASSETS_DIR) + "/shaders/Shadow.shaderbundle";
             ShaderBundle bundle;
-            std::string sVar = shaderVariant("default");
-            if (!bundle.load(bundlePath) || !bundle.hasVariant(sVar))
-                throw std::runtime_error("Failed to load Shadow.shaderbundle variant: " + sVar);
-            vertSpv = bundle.getVertSpv(sVar);
-            fragSpv = bundle.getFragSpv(sVar);
+            if (!bundle.load(bundlePath) || !bundle.hasVariant(shadowVariantName))
+                throw std::runtime_error("Failed to load Shadow.shaderbundle variant: " + shadowVariantName);
+            vertSpv = bundle.getVertSpv(shadowVariantName);
+            fragSpv = bundle.getFragSpv(shadowVariantName);
         }
 
         auto createModule = [&](const std::vector<char>& code) -> VkShaderModule {

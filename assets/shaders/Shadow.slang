@@ -49,5 +49,19 @@ float4 vertexMain(VSInput input) : SV_Position
     return mul(frame.lightVP, worldPos);
 }
 
+struct FSOutput {
+    [[vk::location(0)]] float depth : SV_Target;
+};
+
 [shader("fragment")]
+#ifdef SHADOW_COLOR_OUTPUT
+// GLES: 无法从深度纹理采样，用 R32F 颜色附件手动存深度
+FSOutput fragmentMain(float4 pos : SV_Position)
+{
+    FSOutput o;
+    o.depth = pos.z;
+    return o;
+}
+#else
 void fragmentMain() {}
+#endif

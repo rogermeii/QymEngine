@@ -78,9 +78,9 @@ struct PushConstants
 struct VSInput
 {
     [[vk::location(0)]] float3 position : POSITION;
-    [[vk::location(1)]] float3 color : COLOR;
+    [[vk::location(1)]] float3 color : COLOR;       // 未使用，保留以匹配 vertex buffer 布局
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
-    [[vk::location(3)]] float3 normal : NORMAL;
+    [[vk::location(3)]] float3 normal : NORMAL;     // 未使用，保留以匹配 vertex buffer 布局
 };
 
 struct VSOutput
@@ -100,10 +100,10 @@ VSOutput vertexMain(VSInput input)
     VSOutput output;
     float4 worldPos = mul(pc.model, float4(input.position, 1.0));
     output.sv_position = mul(frame.proj, mul(frame.view, worldPos));
-    output.color = float3(0.0);
+    output.color = input.color;
     output.texCoord = input.texCoord;
     output.highlighted = float(pc.highlighted);
-    output.normal = float3(0.0, 1.0, 0.0);
+    output.normal = input.normal;
     output.worldPos = float3(0.0);
 #ifdef USE_BINDLESS
     MaterialEntry entry = materialEntries[pc.materialIndex];

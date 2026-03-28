@@ -597,6 +597,24 @@ bool compileShader(const std::string& inputPath, const std::string& outputDir) {
         }
     }
 
+    // 5b. GLSL GLES shadow 变体：Shadow shader 的 SHADOW_COLOR_OUTPUT 宏版本
+    if (g_emitGlsl && baseName == "Shadow") {
+        std::cout << "  [glsl gles_shadow]" << std::endl;
+        slang::PreprocessorMacroDesc shadowMacro;
+        shadowMacro.name = "SHADOW_COLOR_OUTPUT";
+        shadowMacro.value = "1";
+        std::vector<slang::PreprocessorMacroDesc> shadowMacros = { shadowMacro };
+        VariantResult glesShadow;
+        if (compileShaderVariant(inputPath, baseName, shadowMacros, glesShadow, SLANG_GLSL)) {
+            glesShadow.reflectJson = variants["default"].reflectJson;
+            std::cout << "  vert: " << glesShadow.vertSpv.size() << "B, frag: "
+                      << glesShadow.fragSpv.size() << "B (GLSL GLES shadow)" << std::endl;
+            variants["gles_shadow"] = std::move(glesShadow);
+        } else {
+            std::cerr << "  WARNING: GLES shadow variant failed" << std::endl;
+        }
+    }
+
     // 6. MSL 变体 (Metal 后端用)
     if (g_emitMsl) {
         std::cout << "  [msl default]" << std::endl;
