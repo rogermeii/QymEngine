@@ -2862,18 +2862,6 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdEndRenderPass(VkCommandBuffer commandB
     // 诊断: 读取 offscreen FBO 中心像素
     {
         static int s_endRPColorLog = 0;
-        auto* fb_diag = AS_GL(Framebuffer, cb->currentFramebuffer);
-        if (fb_diag && fb_diag->fbo != 0) {
-            GLenum err = GL_NO_ERROR;
-            if (fb_diag->fbo != 1 && s_endRPColorLog < 5) {
-                uint8_t pixel[4] = {0};
-                glReadPixels(fb_diag->width/2, fb_diag->height/2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-                err = glGetError();
-                SDL_Log("[VkOpenGL] EndRP fbo=%u center pixel: R=%u G=%u B=%u A=%u err=0x%x",
-                        fb_diag->fbo, pixel[0], pixel[1], pixel[2], pixel[3], err);
-                s_endRPColorLog++;
-            }
-        }
     }
 
     // 更新 image layout 追踪
@@ -3052,52 +3040,6 @@ static void flushGraphicsState(GL_CommandBuffer* cb)
     // 5. 绑定 descriptor set 资源
     auto* pl = AS_GL(PipelineLayout, pipeline->layout);
     if (!pl) return;
-    // 诊断: 检查 descriptor set 绑定状态
-    {
-        static int s_descLog = 0;
-        auto* fb_diag2 = AS_GL(Framebuffer, cb->currentFramebuffer);
-        if (fb_diag2 && fb_diag2->fbo == 2 && s_descLog < 3) {
-            for (uint32_t s = 0; s < 4; s++) {
-                auto* dset = AS_GL(DescriptorSet, cb->boundSets[s]);
-                if (dset) {
-                    SDL_Log("[VkOpenGL] descDiag fbo=2: set[%u] bound, ubo0=%u ubo1=%u tex0=%u tex1=%u",
-                            s, dset->uboBuffers[0], dset->uboBuffers[1],
-                            dset->textures[0], dset->textures[1]);
-                } else {
-                    SDL_Log("[VkOpenGL] descDiag fbo=2: set[%u] = NULL", s);
-                }
-            }
-            // 读取 FrameData UBO 前 16 字节 (view 矩阵的第一行)
-            auto* set0 = AS_GL(DescriptorSet, cb->boundSets[0]);
-            if (set0 && set0->uboBuffers[0]) {
-                float data[4] = {0};
-                glBindBuffer(GL_UNIFORM_BUFFER, set0->uboBuffers[0]);
-                if (s_isGLES) {
-                    void* mapped = glMapBufferRange(GL_UNIFORM_BUFFER, 0, 16, GL_MAP_READ_BIT);
-                    if (mapped) {
-                        memcpy(data, mapped, 16);
-                        glUnmapBuffer(GL_UNIFORM_BUFFER);
-                    }
-                } else {
-                    glGetBufferSubData(GL_UNIFORM_BUFFER, 0, 16, data);
-                }
-                SDL_Log("[VkOpenGL] FrameData UBO first 16B: %.3f %.3f %.3f %.3f", data[0], data[1], data[2], data[3]);
-                int shadowParams[4] = {0};
-                if (s_isGLES) {
-                    void* mapped = glMapBufferRange(GL_UNIFORM_BUFFER, 752, 16, GL_MAP_READ_BIT);
-                    if (mapped) {
-                        memcpy(shadowParams, mapped, 16);
-                        glUnmapBuffer(GL_UNIFORM_BUFFER);
-                    }
-                } else {
-                    glGetBufferSubData(GL_UNIFORM_BUFFER, 752, 16, shadowParams);
-                }
-                SDL_Log("[VkOpenGL] FrameData shadowParams: %d %d %d %d",
-                        shadowParams[0], shadowParams[1], shadowParams[2], shadowParams[3]);
-            }
-            s_descLog++;
-        }
-    }
 
     uint32_t uboSlot = 0;
 
@@ -3255,21 +3197,6 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdDraw(
         }
     } else {
         glDrawArrays(pipeline->topology, firstVertex, vertexCount);
-    }
-    // 诊断: 在 offscreen FBO 上的 draw 后读取像素
-    {
-        static int s_postDrawRead = 0;
-        auto* fb_d = AS_GL(Framebuffer, cb->currentFramebuffer);
-        if (fb_d && fb_d->fbo != 0 && s_postDrawRead < 3) {
-            glFinish();
-            uint8_t px[4] = {0};
-            glReadPixels(fb_d->width/2, fb_d->height/2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-            GLenum e2 = glGetError();
-            SDL_Log("[VkOpenGL] PostDraw fbo=%u prog=%u pixel: R=%u G=%u B=%u A=%u depthTest=%d err=0x%x",
-                    fb_d->fbo, pipeline->program, px[0], px[1], px[2], px[3],
-                    pipeline->depthTestEnable, e2);
-            s_postDrawRead++;
-        }
     }
 }
 
@@ -3441,20 +3368,6 @@ static VKAPI_ATTR void VKAPI_CALL gl_vkCmdDrawIndexed(
         }
     } else {
         glDrawElements(pipeline->topology, indexCount, cb->indexType, offset);
-    }
-    // 诊断: 在 offscreen FBO 上的 DrawIndexed 后读取像素
-    {
-        static int s_postDrawIdxRead = 0;
-        auto* fb_d = AS_GL(Framebuffer, cb->currentFramebuffer);
-        if (fb_d && fb_d->fbo != 0 && fb_d->fbo != 1 && s_postDrawIdxRead < 5) {
-            glFinish();
-            uint8_t px[4] = {0};
-            glReadPixels(fb_d->width/2, fb_d->height/2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-            SDL_Log("[VkOpenGL] PostDrawIdx fbo=%u prog=%u pixel: R=%u G=%u B=%u A=%u depthEn=%d depthFunc=0x%x",
-                    fb_d->fbo, pipeline->program, px[0], px[1], px[2], px[3],
-                    pipeline->depthTestEnable, pipeline->depthFunc);
-            s_postDrawIdxRead++;
-        }
     }
 }
 
