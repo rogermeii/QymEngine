@@ -8,24 +8,6 @@ val shaderSourceDir = File(repoRootDir, "assets/shaders")
 val externalAssetsDir = File(repoRootDir, "assets")
 val generatedAssetsDir = layout.buildDirectory.dir("generated/qymAssets/main").get().asFile
 val isWindowsHost = System.getProperty("os.name").lowercase().contains("windows")
-val hostConfigureArgs = mutableListOf(
-    "cmake",
-    "-S", repoRootDir.absolutePath,
-    "-B", hostBuildDir.absolutePath
-).apply {
-    if (isWindowsHost) {
-        addAll(listOf("-G", "Visual Studio 17 2022", "-A", "x64"))
-    }
-}
-val hostBuildArgs = mutableListOf(
-    "cmake",
-    "--build", hostBuildDir.absolutePath,
-    "--config", "Debug",
-    "--target", "ShaderCompiler",
-    "--"
-).apply {
-    add(if (isWindowsHost) "/m:4" else "-j4")
-}
 val shaderCompilerExe = if (isWindowsHost) {
     File(hostBuildDir, "tools/shader_compiler/Debug/ShaderCompiler.exe")
 } else {
@@ -33,54 +15,37 @@ val shaderCompilerExe = if (isWindowsHost) {
 }
 
 val shaderSourceFiles = fileTree(shaderSourceDir) {
-    include("*.slang")
+    include("**/*.slang")
 }
-val shaderCompilerSourceFiles = fileTree(File(repoRootDir, "tools/shader_compiler")) {
-    include("**/*.cpp", "**/*.c", "**/*.h", "**/*.hpp", "CMakeLists.txt")
-}
-val shaderBundleOutputs = provider {
-    shaderSourceFiles.files.map { shaderFile ->
-        File(shaderSourceDir, "${shaderFile.nameWithoutExtension}.shaderbundle")
+
+// Shader 编译：假设 ShaderCompiler 已由 PC cmake 构建好
+// 如果不存在则跳过（开发者需先在 PC 上编译引擎）
+val compileShaderBundles by tasks.registering {
+    group = "build"
+    description = "编译 shader bundle（需要先在 PC 上编译 ShaderCompiler）"
+    inputs.files(shaderSourceFiles)
+    doLast {
+        if (!shaderCompilerExe.exists()) {
+            logger.warn("[QymEngine] ShaderCompiler not found: ${shaderCompilerExe.absolutePath}")
+            logger.warn("[QymEngine] 请先在 PC 上执行 cmake --build build3 编译引擎")
+            logger.warn("[QymEngine] 跳过 shader 编译，使用已有的 .shaderbundle 文件")
+            return@doLast
+        }
+        exec {
+            commandLine(
+                shaderCompilerExe.absolutePath,
+                "--no-msl",
+                shaderSourceDir.absolutePath,
+                shaderSourceDir.absolutePath
+            )
+        }
     }
 }
 
-val configureHostTools by tasks.registering(Exec::class) {
-    group = "build"
-    description = "配置桌面 ShaderCompiler 构建目录"
-    inputs.files(
-        File(repoRootDir, "CMakeLists.txt"),
-        File(repoRootDir, "tools/shader_compiler/CMakeLists.txt")
-    )
-    outputs.file(File(hostBuildDir, "CMakeCache.txt"))
-    commandLine(hostConfigureArgs)
-}
-
-val buildHostShaderCompiler by tasks.registering(Exec::class) {
-    group = "build"
-    description = "编译桌面 ShaderCompiler 工具"
-    dependsOn(configureHostTools)
-    inputs.files(shaderCompilerSourceFiles)
-    outputs.file(shaderCompilerExe)
-    commandLine(hostBuildArgs)
-}
-
-val compileShaderBundles by tasks.registering(Exec::class) {
-    group = "build"
-    description = "编译 Android 打包所需的 shader bundle"
-    dependsOn(buildHostShaderCompiler)
-    inputs.files(shaderSourceFiles, shaderCompilerSourceFiles)
-    outputs.files(shaderBundleOutputs)
-    commandLine(
-        shaderCompilerExe.absolutePath,
-        shaderSourceDir.absolutePath,
-        shaderSourceDir.absolutePath
-    )
-}
-
+// Assets 同步：独立于 shader 编译，始终执行
 val syncExternalAssets by tasks.registering(Sync::class) {
     group = "build"
     description = "同步仓库根目录的 assets 到 Android 构建目录"
-    dependsOn(compileShaderBundles)
     from(externalAssetsDir)
     into(generatedAssetsDir)
 }
@@ -130,6 +95,5 @@ android {
 }
 
 tasks.named("preBuild") {
-    dependsOn(compileShaderBundles)
     dependsOn(syncExternalAssets)
 }

@@ -2520,8 +2520,15 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
             depthFix[3][2] = -1.0f;
             proj = depthFix * proj;
         }
-        ubo.view = glm::transpose(view);
-        ubo.proj = glm::transpose(proj);
+        // OpenGL/GLES: 不转置，Slang GLSL 的 unpackStorage 内部转置 + v*M 形式直接正确
+        // Vulkan/D3D: 转置以适配 SPIR-V/HLSL 的行主序解读
+        if (vkIsOpenGLBackend() || vkIsGLESBackend()) {
+            ubo.view = view;
+            ubo.proj = proj;
+        } else {
+            ubo.view = glm::transpose(view);
+            ubo.proj = glm::transpose(proj);
+        }
     } else {
         ubo.view = glm::lookAt(glm::vec3(2,2,2), glm::vec3(0,0,0), glm::vec3(0,1,0));
         ubo.proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
@@ -2532,8 +2539,12 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
             depthFix[3][2] = -1.0f;
             ubo.proj = depthFix * ubo.proj;
         }
-        ubo.view = glm::transpose(ubo.view);
-        ubo.proj = glm::transpose(ubo.proj);
+        if (vkIsOpenGLBackend() || vkIsGLESBackend()) {
+            // fallback 路径同样不转置
+        } else {
+            ubo.view = glm::transpose(ubo.view);
+            ubo.proj = glm::transpose(ubo.proj);
+        }
     }
 
     ubo.ambientColor = glm::vec3(3.0f, 3.0f, 3.0f);  // IBL 强度乘数（补偿 LDR 全景图）
@@ -2601,7 +2612,7 @@ void Renderer::updateUniformBuffer(uint32_t currentImage)
                 lightProj = depthFix * lightProj;
             }
             glm::mat4 lightVP = lightProj * lightView;
-            ubo.lightVP = glm::transpose(lightVP);
+            ubo.lightVP = (vkIsOpenGLBackend() || vkIsGLESBackend()) ? lightVP : glm::transpose(lightVP);
             hasShadow = true;
             break;
         }
@@ -2822,7 +2833,7 @@ layout(std140) uniform block_PushConstants_std140_0 {
 layout(location = 0) in vec3 input_position_0;
 void main() {
     vec4 worldPos = pc_0.model_0 * vec4(input_position_0, 1.0);
-    gl_Position = transpose(frame_0.lightVP_0) * worldPos;
+    gl_Position = frame_0.lightVP_0 * worldPos;
 })";
             static const char* kGlesShadowFS = R"(#version 300 es
 precision highp float;

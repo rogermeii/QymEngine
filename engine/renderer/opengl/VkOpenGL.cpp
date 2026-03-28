@@ -1016,79 +1016,14 @@ static std::string fixupGLSL(const std::string& source,
     }
 
     {
+        // 清理 Slang 生成的 row_major 声明（OpenGL 用 column-major）
         replaceAll(pass2, "layout(row_major) uniform;\n", "");
         replaceAll(pass2, "layout(row_major) buffer;\n", "");
-        replaceAll(pass2,
-            "struct _MatrixStorage_float4x4_ColMajorstd140_0\n{\n    vec4  data_0[4];\n};",
-            "struct _MatrixStorage_float4x4_ColMajorstd140_0\n{\n    mat4 data_0;\n};");
-        replaceAll(pass2,
-            "struct _MatrixStorage_float4x4_ColMajorstd430_0\n{\n    vec4  data_0[4];\n};",
-            "struct _MatrixStorage_float4x4_ColMajorstd430_0\n{\n    mat4 data_0;\n};");
-        replaceAll(pass2,
-            "struct _MatrixStorage_float4x4_ColMajorstd140_0\n{\n    mat4 data_0;\n};",
-            "");
-        replaceAll(pass2,
-            "struct _MatrixStorage_float4x4_ColMajorstd430_0\n{\n    mat4 data_0;\n};",
-            "");
-        replaceAll(pass2, "_MatrixStorage_float4x4_ColMajorstd140_0", "mat4");
-        replaceAll(pass2, "_MatrixStorage_float4x4_ColMajorstd430_0", "mat4");
-        replaceAll(pass2,
-            "return mat4x4(_S1.data_0[0][0], _S1.data_0[1][0], _S1.data_0[2][0], _S1.data_0[3][0], _S1.data_0[0][1], _S1.data_0[1][1], _S1.data_0[2][1], _S1.data_0[3][1], _S1.data_0[0][2], _S1.data_0[1][2], _S1.data_0[2][2], _S1.data_0[3][2], _S1.data_0[0][3], _S1.data_0[1][3], _S1.data_0[2][3], _S1.data_0[3][3]);",
-            "return _S1.data_0;");
-        replaceAll(pass2,
-            "return mat4x4(_S2.data_0[0][0], _S2.data_0[1][0], _S2.data_0[2][0], _S2.data_0[3][0], _S2.data_0[0][1], _S2.data_0[1][1], _S2.data_0[2][1], _S2.data_0[3][1], _S2.data_0[0][2], _S2.data_0[1][2], _S2.data_0[2][2], _S2.data_0[3][2], _S2.data_0[0][3], _S2.data_0[1][3], _S2.data_0[2][3], _S2.data_0[3][3]);",
-            "return _S2.data_0;");
-        replaceAll(pass2, "return _S1.data_0;", "return _S1;");
-        replaceAll(pass2, "return _S2.data_0;", "return _S2;");
-        replaceAll(pass2,
-            "vec4 worldPos_1 = (((vec4(input_position_0, 1.0)) * (unpackStorage_1(pc_0.model_0))));",
-            "vec4 worldPos_1 = (unpackStorage_1(pc_0.model_0) * vec4(input_position_0, 1.0));");
-        replaceAll(pass2,
-            "vec4 worldPos_0 = (((vec4(input_position_0, 1.0)) * (unpackStorage_1(pc_0.model_0))));",
-            "vec4 worldPos_0 = (unpackStorage_1(pc_0.model_0) * vec4(input_position_0, 1.0));");
-        replaceAll(pass2,
-            "vec4 _S3 = ((((((worldPos_1) * (unpackStorage_0(frame_0.view_0))))) * (unpackStorage_0(frame_0.proj_0))));",
-            "vec4 _S3 = (transpose(unpackStorage_0(frame_0.proj_0)) * (transpose(unpackStorage_0(frame_0.view_0)) * worldPos_1));");
-        replaceAll(pass2,
-            "output_0.sv_position_0 = ((((((worldPos_1) * (unpackStorage_0(frame_0.view_0))))) * (unpackStorage_0(frame_0.proj_0))));",
-            "output_0.sv_position_0 = (transpose(unpackStorage_0(frame_0.proj_0)) * (transpose(unpackStorage_0(frame_0.view_0)) * worldPos_1));");
-        replaceAll(pass2,
-            "gl_Position = (((worldPos_0) * (unpackStorage_0(frame_0.lightVP_0))));",
-            "gl_Position = (transpose(unpackStorage_0(frame_0.lightVP_0)) * worldPos_0);");
-        // Shadow shader: Slang 内联了 worldPos，没有中间变量，需要匹配组合表达式
-        replaceAll(pass2,
-            "gl_Position = ((((((vec4(input_position_0, 1.0)) * (unpackStorage_1(pc_0.model_0))))) * (unpackStorage_0(frame_0.lightVP_0))));",
-            "gl_Position = (transpose(unpackStorage_0(frame_0.lightVP_0)) * (unpackStorage_1(pc_0.model_0) * vec4(input_position_0, 1.0)));");
-        replaceAll(pass2,
-            "vec4 lightClip_0 = (((vec4(worldPos_0, 1.0)) * (unpackStorage_0(frame_0.lightVP_0))));",
-            "vec4 lightClip_0 = (transpose(unpackStorage_0(frame_0.lightVP_0)) * vec4(worldPos_0, 1.0));");
-        replaceAll(pass2,
-            "vec4 lightClip_0 = (((vec4(input_worldPos_0, 1.0)) * (unpackStorage_0(frame_0.lightVP_0))));",
-            "vec4 lightClip_0 = (transpose(unpackStorage_0(frame_0.lightVP_0)) * vec4(input_worldPos_0, 1.0));");
-        replaceAll(pass2,
-            "mat4x4 viewProjInv_0 = mat4Inverse_0((((unpackStorage_0(frame_0.view_0)) * (unpackStorage_0(frame_0.proj_0)))));",
-            "mat4x4 viewProjInv_0 = mat4Inverse_0((transpose(unpackStorage_0(frame_0.proj_0)) * transpose(unpackStorage_0(frame_0.view_0))));");
-        replaceAll(pass2,
-            "vec4 unprojected_0 = (((vec4(p_0, 1.0)) * (viewProjInv_0)));",
-            "vec4 unprojected_0 = (viewProjInv_0 * vec4(p_0, 1.0));");
-        replaceAll(pass2,
-            "vec4 unprojected_0 = (((vec4(p_0, 1.0)) * (mat4Inverse_0((((unpackStorage_0(frame_0.view_0)) * (unpackStorage_0(frame_0.proj_0))))))));",
-            "vec4 unprojected_0 = (mat4Inverse_0((transpose(unpackStorage_0(frame_0.proj_0)) * transpose(unpackStorage_0(frame_0.view_0)))) * vec4(p_0, 1.0));");
-        replaceAll(pass2,
-            "vec4 clipPos_0 = ((((((vec4(fragPos_1, 1.0)) * (unpackStorage_0(frame_0.view_0))))) * (unpackStorage_0(frame_0.proj_0))));",
-            "vec4 clipPos_0 = (transpose(unpackStorage_0(frame_0.proj_0)) * (transpose(unpackStorage_0(frame_0.view_0)) * vec4(fragPos_1, 1.0)));");
-        replaceAll(pass2,
-            "output_0.sv_position_0 = (((((((((vec4(input_position_0, 1.0)) * (unpackStorage_1(pc_0.model_0))))) * (unpackStorage_0(frame_0.view_0))))) * (unpackStorage_0(frame_0.proj_0))));",
-            "output_0.sv_position_0 = (transpose(unpackStorage_0(frame_0.proj_0)) * (transpose(unpackStorage_0(frame_0.view_0)) * (unpackStorage_1(pc_0.model_0) * vec4(input_position_0, 1.0))));");
-        replaceAll(pass2,
-            "vec3 _S7 = (((input_normal_0) * (_S6)));",
-            "vec3 _S7 = (_S6 * input_normal_0);");
-        replaceAll(pass2,
-            "output_0.normal_0 = (((input_normal_0) * (mat3x3(_S3[0].xyz, _S3[1].xyz, _S3[2].xyz))));",
-            "output_0.normal_0 = (mat3x3(_S3[0].xyz, _S3[1].xyz, _S3[2].xyz) * input_normal_0);");
-        replaceAll(pass2,
-            "mat4x4 _S5 = unpackStorage_1(pc_0.model_0);",
-            "mat4x4 _S5 = unpackStorage_1(pc_0.model_0);");
+        // 注意：矩阵修正规则已不再需要。
+        // C++ 侧 OpenGL/GLES 后端不对 UBO 矩阵做 glm::transpose()，
+        // Slang 生成的 v * unpackStorage(M) 形式在此约定下直接正确：
+        //   unpackStorage 内部转置 → 得到 transpose(M_stored) = transpose(M) = M^T
+        //   v * M^T 在 GLSL 中 = M * v ← 正确
     }
 
     return pass2;
