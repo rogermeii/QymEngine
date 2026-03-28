@@ -240,8 +240,17 @@ float4 fragmentMain(VSOutput input) : SV_Target
     float4 rt2 = gbufferRT2.Sample(uv);
     float depth = depthTex.Sample(uv).r;
 
-    // 天空像素（深度 = 1.0）直接跳过
-    if (depth >= 0.9999) discard;
+    // 天空像素（深度 = 1.0）：从深度重建视线方向，采样环境贴图
+    if (depth >= 0.9999) {
+        float4 clipPos = float4(uv * 2.0 - 1.0, 1.0, 1.0);
+        float4x4 invView = mat4Inverse(frame.view);
+        float4x4 invProj = mat4Inverse(frame.proj);
+        float4 viewDir = mul(invProj, clipPos);
+        viewDir.xyz = normalize(viewDir.xyz);
+        float3 worldDir = mul((float3x3)invView, viewDir.xyz);
+        float3 skyColor = prefilteredMap.SampleLevel(worldDir, 0.0).rgb;
+        return float4(skyColor, 1.0);
+    }
 
     float3 albedo = rt0.rgb;
     float metallic = rt0.a;

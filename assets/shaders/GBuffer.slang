@@ -41,6 +41,7 @@ struct LitMaterialParams
 
 [[vk::binding(0, 1)]] ConstantBuffer<LitMaterialParams> materialParams;
 [[vk::binding(1, 1)]] Sampler2D albedoMap;
+[[vk::binding(2, 1)]] Sampler2D normalMap; // 占位，匹配 Lit shader 的 Set 1 布局
 
 struct PushConstants
 {
@@ -110,10 +111,19 @@ GBufferOutput fragmentMain(VSOutput input)
     GBufferOutput output;
 
     float4 texColor = albedoMap.Sample(input.texCoord);
+    float3 normalSample = normalMap.Sample(input.texCoord).rgb;
+    // 引用所有 Set 1 bindings 确保 Slang 保留 FS stage flag（与 Lit shader layout 兼容）
     float3 albedo = texColor.rgb * input.baseColor.rgb;
 
+    // 法线贴图应用（简化版，无 TBN）
+    float3 N = normalize(input.normal);
+    if (length(normalSample - 0.5) > 0.01) {
+        // 有法线贴图时微调法线
+        N = normalize(N + (normalSample * 2.0 - 1.0) * 0.3);
+    }
+
     output.rt0 = float4(albedo, input.metallic);
-    output.rt1 = octEncode(normalize(input.normal));
+    output.rt1 = octEncode(N);
     output.rt2 = float4(input.roughness, 1.0, 0.0, 0.0); // AO = 1.0 默认
 
     return output;
