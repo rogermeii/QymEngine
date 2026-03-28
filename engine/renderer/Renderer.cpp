@@ -3474,6 +3474,292 @@ void Renderer::createDeferredResources()
         vkAllocateDescriptorSets(device, &allocInfo, &m_lightingSet);
     }
 
+    // 10. SSAO 资源
+    {
+        // SSAO 输出纹理 (R8, 单通道 AO 值)
+        VkImageCreateInfo ssaoImgInfo{};
+        ssaoImgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ssaoImgInfo.imageType = VK_IMAGE_TYPE_2D;
+        ssaoImgInfo.extent = {w, h, 1};
+        ssaoImgInfo.mipLevels = 1;
+        ssaoImgInfo.arrayLayers = 1;
+        ssaoImgInfo.format = VK_FORMAT_R8_UNORM;
+        ssaoImgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ssaoImgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        ssaoImgInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ssaoImgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        ssaoImgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        vkCreateImage(device, &ssaoImgInfo, nullptr, &m_ssaoImage);
+
+        VkMemoryRequirements ssaoMemReqs;
+        vkGetImageMemoryRequirements(device, m_ssaoImage, &ssaoMemReqs);
+        VkMemoryAllocateInfo ssaoAllocInfo{};
+        ssaoAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ssaoAllocInfo.allocationSize = ssaoMemReqs.size;
+        ssaoAllocInfo.memoryTypeIndex = m_context.findMemoryType(ssaoMemReqs.memoryTypeBits,
+                                                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        vkAllocateMemory(device, &ssaoAllocInfo, nullptr, &m_ssaoMemory);
+        vkBindImageMemory(device, m_ssaoImage, m_ssaoMemory, 0);
+
+        VkImageViewCreateInfo ssaoViewInfo{};
+        ssaoViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        ssaoViewInfo.image = m_ssaoImage;
+        ssaoViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        ssaoViewInfo.format = VK_FORMAT_R8_UNORM;
+        ssaoViewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCreateImageView(device, &ssaoViewInfo, nullptr, &m_ssaoView);
+
+        // 4x4 噪声纹理
+        std::vector<uint8_t> noiseData(4 * 4 * 4); // RGBA8
+        srand(42);
+        for (int i = 0; i < 4 * 4; i++) {
+            noiseData[i * 4 + 0] = (uint8_t)(rand() % 256); // 随机方向 X
+            noiseData[i * 4 + 1] = (uint8_t)(rand() % 256); // 随机方向 Y
+            noiseData[i * 4 + 2] = 0;
+            noiseData[i * 4 + 3] = 255;
+        }
+
+        VkImageCreateInfo noiseImgInfo{};
+        noiseImgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        noiseImgInfo.imageType = VK_IMAGE_TYPE_2D;
+        noiseImgInfo.extent = {4, 4, 1};
+        noiseImgInfo.mipLevels = 1;
+        noiseImgInfo.arrayLayers = 1;
+        noiseImgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        noiseImgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        noiseImgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        noiseImgInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        noiseImgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        noiseImgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        vkCreateImage(device, &noiseImgInfo, nullptr, &m_ssaoNoiseImage);
+
+        VkMemoryRequirements noiseMemReqs;
+        vkGetImageMemoryRequirements(device, m_ssaoNoiseImage, &noiseMemReqs);
+        VkMemoryAllocateInfo noiseAllocInfo{};
+        noiseAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        noiseAllocInfo.allocationSize = noiseMemReqs.size;
+        noiseAllocInfo.memoryTypeIndex = m_context.findMemoryType(noiseMemReqs.memoryTypeBits,
+                                                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        vkAllocateMemory(device, &noiseAllocInfo, nullptr, &m_ssaoNoiseMemory);
+        vkBindImageMemory(device, m_ssaoNoiseImage, m_ssaoNoiseMemory, 0);
+
+        VkImageViewCreateInfo noiseViewInfo{};
+        noiseViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        noiseViewInfo.image = m_ssaoNoiseImage;
+        noiseViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        noiseViewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        noiseViewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCreateImageView(device, &noiseViewInfo, nullptr, &m_ssaoNoiseView);
+
+        // 上传噪声数据到 GPU（通过 staging buffer）
+        {
+            VkBuffer stagingBuf;
+            VkDeviceMemory stagingMem;
+            VkBufferCreateInfo bufInfo{};
+            bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bufInfo.size = noiseData.size();
+            bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            vkCreateBuffer(device, &bufInfo, nullptr, &stagingBuf);
+
+            VkMemoryRequirements bufReqs;
+            vkGetBufferMemoryRequirements(device, stagingBuf, &bufReqs);
+            VkMemoryAllocateInfo bufAlloc{};
+            bufAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            bufAlloc.allocationSize = bufReqs.size;
+            bufAlloc.memoryTypeIndex = m_context.findMemoryType(bufReqs.memoryTypeBits,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkAllocateMemory(device, &bufAlloc, nullptr, &stagingMem);
+            vkBindBufferMemory(device, stagingBuf, stagingMem, 0);
+
+            void* mapped;
+            vkMapMemory(device, stagingMem, 0, noiseData.size(), 0, &mapped);
+            memcpy(mapped, noiseData.data(), noiseData.size());
+            vkUnmapMemory(device, stagingMem);
+
+            // 一次性 command buffer 上传
+            VkCommandBuffer uploadCmd = m_commandManager.beginSingleTimeCommands(device);
+
+            VkImageMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.image = m_ssaoNoiseImage;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(uploadCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {4, 4, 1};
+            vkCmdCopyBufferToImage(uploadCmd, stagingBuf, m_ssaoNoiseImage,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(uploadCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            m_commandManager.endSingleTimeCommands(device, m_context.getGraphicsQueue(), uploadCmd);
+
+            vkDestroyBuffer(device, stagingBuf, nullptr);
+            vkFreeMemory(device, stagingMem, nullptr);
+        }
+
+        // SSAO render pass
+        {
+            VkAttachmentDescription aoAttach{};
+            aoAttach.format = VK_FORMAT_R8_UNORM;
+            aoAttach.samples = VK_SAMPLE_COUNT_1_BIT;
+            aoAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            aoAttach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            aoAttach.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            aoAttach.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            aoAttach.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            aoAttach.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            VkAttachmentReference aoRef = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+            VkSubpassDescription subpass{};
+            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            subpass.colorAttachmentCount = 1;
+            subpass.pColorAttachments = &aoRef;
+
+            VkRenderPassCreateInfo rpInfo{};
+            rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+            rpInfo.attachmentCount = 1;
+            rpInfo.pAttachments = &aoAttach;
+            rpInfo.subpassCount = 1;
+            rpInfo.pSubpasses = &subpass;
+            vkCreateRenderPass(device, &rpInfo, nullptr, &m_ssaoRenderPass);
+        }
+
+        // SSAO framebuffer
+        {
+            VkFramebufferCreateInfo fbInfo{};
+            fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fbInfo.renderPass = m_ssaoRenderPass;
+            fbInfo.attachmentCount = 1;
+            fbInfo.pAttachments = &m_ssaoView;
+            fbInfo.width = w;
+            fbInfo.height = h;
+            fbInfo.layers = 1;
+            vkCreateFramebuffer(device, &fbInfo, nullptr, &m_ssaoFramebuffer);
+        }
+
+        // SSAO pipeline
+        {
+            std::string bundlePath = std::string(ASSETS_DIR) + "/shaders/postprocess/SSAO.shaderbundle";
+            std::string var = shaderVariant("default");
+            ShaderBundle bundle;
+            if (bundle.load(bundlePath) && bundle.hasVariant(var)) {
+                auto vertSpv = bundle.getVertSpv(var);
+                auto fragSpv = bundle.getFragSpv(var);
+                auto reflectJson = bundle.getReflectJson(var);
+
+                ShaderReflectionData reflection;
+                reflection.loadFromString(reflectJson);
+                auto bindings = reflection.buildBindings(0);
+                m_ssaoSetLayout = m_layoutCache.getOrCreate(device, bindings);
+                auto pcRanges = reflection.createPushConstantRanges();
+
+                VkShaderModuleCreateInfo vsCI{}, fsCI{};
+                vsCI.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                vsCI.codeSize = vertSpv.size();
+                vsCI.pCode = reinterpret_cast<const uint32_t*>(vertSpv.data());
+                fsCI.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                fsCI.codeSize = fragSpv.size();
+                fsCI.pCode = reinterpret_cast<const uint32_t*>(fragSpv.data());
+
+                VkShaderModule vsMod, fsMod;
+                vkCreateShaderModule(device, &vsCI, nullptr, &vsMod);
+                vkCreateShaderModule(device, &fsCI, nullptr, &fsMod);
+
+                VkPipelineShaderStageCreateInfo stages[2] = {};
+                stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+                stages[0].module = vsMod;
+                stages[0].pName = "main";
+                stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+                stages[1].module = fsMod;
+                stages[1].pName = "main";
+
+                VkPipelineVertexInputStateCreateInfo vertexInput{};
+                vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+                VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+                inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+                inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+                VkPipelineViewportStateCreateInfo viewportState{};
+                viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+                viewportState.viewportCount = 1;
+                viewportState.scissorCount = 1;
+                VkPipelineRasterizationStateCreateInfo rasterizer{};
+                rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+                rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+                rasterizer.lineWidth = 1.0f;
+                rasterizer.cullMode = VK_CULL_MODE_NONE;
+                VkPipelineMultisampleStateCreateInfo multisampling{};
+                multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+                multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+                VkPipelineColorBlendAttachmentState blendAttach{};
+                blendAttach.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+                blendAttach.blendEnable = VK_FALSE;
+                VkPipelineColorBlendStateCreateInfo colorBlending{};
+                colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+                colorBlending.attachmentCount = 1;
+                colorBlending.pAttachments = &blendAttach;
+                VkPipelineDepthStencilStateCreateInfo depthStencil{};
+                depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+                depthStencil.depthTestEnable = VK_FALSE;
+                std::vector<VkDynamicState> dynStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+                VkPipelineDynamicStateCreateInfo dynamicState{};
+                dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+                dynamicState.dynamicStateCount = (uint32_t)dynStates.size();
+                dynamicState.pDynamicStates = dynStates.data();
+
+                VkPipelineLayoutCreateInfo plInfo{};
+                plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+                plInfo.setLayoutCount = 1;
+                plInfo.pSetLayouts = &m_ssaoSetLayout;
+                plInfo.pushConstantRangeCount = (uint32_t)pcRanges.size();
+                plInfo.pPushConstantRanges = pcRanges.data();
+                vkCreatePipelineLayout(device, &plInfo, nullptr, &m_ssaoPipelineLayout);
+
+                VkGraphicsPipelineCreateInfo pipelineInfo{};
+                pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+                pipelineInfo.stageCount = 2;
+                pipelineInfo.pStages = stages;
+                pipelineInfo.pVertexInputState = &vertexInput;
+                pipelineInfo.pInputAssemblyState = &inputAssembly;
+                pipelineInfo.pViewportState = &viewportState;
+                pipelineInfo.pRasterizationState = &rasterizer;
+                pipelineInfo.pMultisampleState = &multisampling;
+                pipelineInfo.pDepthStencilState = &depthStencil;
+                pipelineInfo.pColorBlendState = &colorBlending;
+                pipelineInfo.pDynamicState = &dynamicState;
+                pipelineInfo.layout = m_ssaoPipelineLayout;
+                pipelineInfo.renderPass = m_ssaoRenderPass;
+                vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_ssaoPipeline);
+
+                vkDestroyShaderModule(device, fsMod, nullptr);
+                vkDestroyShaderModule(device, vsMod, nullptr);
+            }
+        }
+
+        // SSAO descriptor set
+        if (m_ssaoSetLayout != VK_NULL_HANDLE) {
+            VkDescriptorSetAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            allocInfo.descriptorPool = m_descriptor.getPool();
+            allocInfo.descriptorSetCount = 1;
+            allocInfo.pSetLayouts = &m_ssaoSetLayout;
+            vkAllocateDescriptorSets(device, &allocInfo, &m_ssaoSet);
+        }
+    }
+
     SDL_Log("[Deferred] 资源创建完成 (%ux%u)", w, h);
 }
 
@@ -3499,6 +3785,30 @@ void Renderer::destroyDeferredResources()
         m_gbufferImages[i] = VK_NULL_HANDLE;
         m_gbufferMemory[i] = VK_NULL_HANDLE;
     }
+
+    // SSAO 资源
+    if (m_ssaoPipeline) vkDestroyPipeline(device, m_ssaoPipeline, nullptr);
+    if (m_ssaoPipelineLayout) vkDestroyPipelineLayout(device, m_ssaoPipelineLayout, nullptr);
+    if (m_ssaoFramebuffer) vkDestroyFramebuffer(device, m_ssaoFramebuffer, nullptr);
+    if (m_ssaoRenderPass) vkDestroyRenderPass(device, m_ssaoRenderPass, nullptr);
+    if (m_ssaoView) vkDestroyImageView(device, m_ssaoView, nullptr);
+    if (m_ssaoImage) vkDestroyImage(device, m_ssaoImage, nullptr);
+    if (m_ssaoMemory) vkFreeMemory(device, m_ssaoMemory, nullptr);
+    if (m_ssaoNoiseView) vkDestroyImageView(device, m_ssaoNoiseView, nullptr);
+    if (m_ssaoNoiseImage) vkDestroyImage(device, m_ssaoNoiseImage, nullptr);
+    if (m_ssaoNoiseMemory) vkFreeMemory(device, m_ssaoNoiseMemory, nullptr);
+
+    m_ssaoPipeline = VK_NULL_HANDLE;
+    m_ssaoPipelineLayout = VK_NULL_HANDLE;
+    m_ssaoFramebuffer = VK_NULL_HANDLE;
+    m_ssaoRenderPass = VK_NULL_HANDLE;
+    m_ssaoView = VK_NULL_HANDLE;
+    m_ssaoImage = VK_NULL_HANDLE;
+    m_ssaoMemory = VK_NULL_HANDLE;
+    m_ssaoNoiseView = VK_NULL_HANDLE;
+    m_ssaoNoiseImage = VK_NULL_HANDLE;
+    m_ssaoNoiseMemory = VK_NULL_HANDLE;
+    m_ssaoSet = VK_NULL_HANDLE;
 
     m_lightingPipeline = VK_NULL_HANDLE;
     m_lightingPipelineLayout = VK_NULL_HANDLE;
@@ -3581,9 +3891,117 @@ void Renderer::renderGBufferPass(VkCommandBuffer cmd, Scene& scene)
     vkCmdEndRenderPass(cmd);
 }
 
-void Renderer::renderSSAOPass(VkCommandBuffer /*cmd*/)
+void Renderer::renderSSAOPass(VkCommandBuffer cmd)
 {
-    // TODO: SSAO pass 实现（待 G-Buffer + Lighting 验证通过后添加）
+    if (m_ssaoPipeline == VK_NULL_HANDLE || m_ssaoRenderPass == VK_NULL_HANDLE) return;
+
+    // 更新 SSAO descriptor set
+    {
+        VkDescriptorImageInfo depthInfo{};
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depthInfo.imageView = m_offscreenDepthImageView;
+        depthInfo.sampler = m_gbufferSampler;
+
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView = m_gbufferViews[1]; // RT1 = Normal
+        normalInfo.sampler = m_gbufferSampler;
+
+        VkDescriptorImageInfo noiseInfo{};
+        noiseInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        noiseInfo.imageView = m_ssaoNoiseView;
+        noiseInfo.sampler = m_gbufferSampler;
+
+        // Binding 3: FrameData（view/proj 矩阵）
+        VkDescriptorBufferInfo uboInfo{};
+        uboInfo.buffer = m_buffer.getUniformBuffers()[m_currentFrame];
+        uboInfo.offset = 0;
+        uboInfo.range = sizeof(UniformBufferObject);
+
+        std::array<VkWriteDescriptorSet, 4> writes{};
+        // 0: depthTex
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = m_ssaoSet;
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].descriptorCount = 1;
+        writes[0].pImageInfo = &depthInfo;
+        // 1: normalTex
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = m_ssaoSet;
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &normalInfo;
+        // 2: noiseTex
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = m_ssaoSet;
+        writes[2].dstBinding = 2;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].descriptorCount = 1;
+        writes[2].pImageInfo = &noiseInfo;
+        // 3: frameSSAO (UBO)
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet = m_ssaoSet;
+        writes[3].dstBinding = 3;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[3].descriptorCount = 1;
+        writes[3].pBufferInfo = &uboInfo;
+
+        vkUpdateDescriptorSets(m_context.getDevice(), (uint32_t)writes.size(), writes.data(), 0, nullptr);
+    }
+
+    VkRenderPassBeginInfo rpBegin{};
+    rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpBegin.renderPass = m_ssaoRenderPass;
+    rpBegin.framebuffer = m_ssaoFramebuffer;
+    rpBegin.renderArea = {{0, 0}, {m_offscreenWidth, m_offscreenHeight}};
+    VkClearValue clearColor{};
+    clearColor.color = {{1, 1, 1, 1}}; // 默认无遮蔽
+    rpBegin.clearValueCount = 1;
+    rpBegin.pClearValues = &clearColor;
+
+    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ssaoPipeline);
+
+    VkViewport vp{0, 0, (float)m_offscreenWidth, (float)m_offscreenHeight, 0, 1};
+    VkRect2D scissor{{0, 0}, {m_offscreenWidth, m_offscreenHeight}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_ssaoPipelineLayout, 0, 1, &m_ssaoSet, 0, nullptr);
+
+    // Push constants
+    struct {
+        float screenW, screenH;
+        float noiseScaleX, noiseScaleY;
+        float radius;
+        float bias;
+        float intensity;
+        int algorithm;
+        int kernelSize;
+        float power;
+    } ssaoPC;
+    ssaoPC.screenW = (float)m_offscreenWidth;
+    ssaoPC.screenH = (float)m_offscreenHeight;
+    ssaoPC.noiseScaleX = m_offscreenWidth / 4.0f;
+    ssaoPC.noiseScaleY = m_offscreenHeight / 4.0f;
+    ssaoPC.radius = 0.5f;
+    ssaoPC.bias = 0.025f;
+    ssaoPC.intensity = 1.0f;
+    ssaoPC.algorithm = 0; // Classic SSAO
+    ssaoPC.kernelSize = 32;
+    ssaoPC.power = 1.5f;
+
+    vkCmdPushConstants(cmd, m_ssaoPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(ssaoPC), &ssaoPC);
+
+    vkCmdDraw(cmd, 6, 1, 0, 0);
+
+    vkCmdEndRenderPass(cmd);
 }
 
 void Renderer::renderLightingPass(VkCommandBuffer cmd)
@@ -3696,10 +4114,10 @@ void Renderer::renderLightingPass(VkCommandBuffer cmd)
             writes.push_back(w);
         }
 
-        // Binding 9: SSAO texture（暂用 fallback）
+        // Binding 9: SSAO texture
         VkDescriptorImageInfo ssaoInfo{};
         ssaoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        ssaoInfo.imageView = m_offscreenImageView; // TODO: 替换为真实 SSAO 纹理
+        ssaoInfo.imageView = m_ssaoView ? m_ssaoView : m_offscreenImageView;
         ssaoInfo.sampler = m_gbufferSampler;
         {
             VkWriteDescriptorSet w{};
@@ -3742,7 +4160,7 @@ void Renderer::renderLightingPass(VkCommandBuffer cmd)
     struct { float screenW, screenH; int ssaoEnabled; int _pad; } lightingPC;
     lightingPC.screenW = (float)m_offscreenWidth;
     lightingPC.screenH = (float)m_offscreenHeight;
-    lightingPC.ssaoEnabled = 0; // TODO: SSAO 开关
+    lightingPC.ssaoEnabled = (m_ssaoPipeline != VK_NULL_HANDLE) ? 1 : 0;
     lightingPC._pad = 0;
     vkCmdPushConstants(cmd, m_lightingPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
