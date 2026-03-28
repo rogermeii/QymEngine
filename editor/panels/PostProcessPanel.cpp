@@ -1,12 +1,28 @@
 #include "PostProcessPanel.h"
 #include <imgui.h>
 #include "renderer/PostProcess.h"
+#include "renderer/Renderer.h"
 
 namespace QymEngine {
+
+// 外部引用渲染器（由 EditorApp 设置）
+static Renderer* s_renderer = nullptr;
+void PostProcessPanel::setRenderer(Renderer* r) { s_renderer = r; }
 
 void PostProcessPanel::onImGuiRender(Scene& scene) {
     ImGui::Begin("后处理");
     auto& pp = scene.getPostProcessSettings();
+
+    // 渲染模式切换
+    if (s_renderer) {
+        bool deferred = s_renderer->isDeferredEnabled();
+        const char* modes[] = {"前向渲染 (Forward)", "延迟渲染 (Deferred)"};
+        int currentMode = deferred ? 1 : 0;
+        if (ImGui::Combo("渲染模式", &currentMode, modes, 2)) {
+            s_renderer->setDeferredEnabled(currentMode == 1);
+        }
+        ImGui::Separator();
+    }
 
     if (ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("启用##bloom", &pp.bloomEnabled);

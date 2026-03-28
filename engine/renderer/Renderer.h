@@ -251,6 +251,52 @@ private:
     void createShadowResources();
     void destroyShadowResources();
     void renderShadowPass(VkCommandBuffer cmd, Scene& scene);
+
+    // --- Deferred rendering ---
+    bool m_deferredEnabled = false;
+
+    // G-Buffer: RT0(Albedo+Metallic), RT1(Normal.xy), RT2(Roughness+AO)
+    VkImage          m_gbufferImages[3]   = {};
+    VkDeviceMemory   m_gbufferMemory[3]   = {};
+    VkImageView      m_gbufferViews[3]    = {};
+    VkSampler        m_gbufferSampler     = VK_NULL_HANDLE;
+    VkRenderPass     m_gbufferRenderPass  = VK_NULL_HANDLE;
+    VkFramebuffer    m_gbufferFramebuffer = VK_NULL_HANDLE;
+
+    // Lighting pass
+    VkPipeline       m_lightingPipeline       = VK_NULL_HANDLE;
+    VkPipelineLayout m_lightingPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_lightingSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet       m_lightingSet       = VK_NULL_HANDLE;
+    VkRenderPass     m_lightingRenderPass     = VK_NULL_HANDLE;
+    VkFramebuffer    m_lightingFramebuffer    = VK_NULL_HANDLE;
+
+    // G-Buffer pipeline
+    Pipeline         m_gbufferPipeline;
+
+    // SSAO
+    VkImage          m_ssaoImage        = VK_NULL_HANDLE;
+    VkDeviceMemory   m_ssaoMemory       = VK_NULL_HANDLE;
+    VkImageView      m_ssaoView         = VK_NULL_HANDLE;
+    VkImage          m_ssaoNoiseImage   = VK_NULL_HANDLE;
+    VkDeviceMemory   m_ssaoNoiseMemory  = VK_NULL_HANDLE;
+    VkImageView      m_ssaoNoiseView    = VK_NULL_HANDLE;
+    VkPipeline       m_ssaoPipeline       = VK_NULL_HANDLE;
+    VkPipelineLayout m_ssaoPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_ssaoSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet       m_ssaoSet       = VK_NULL_HANDLE;
+    VkRenderPass     m_ssaoRenderPass     = VK_NULL_HANDLE;
+    VkFramebuffer    m_ssaoFramebuffer    = VK_NULL_HANDLE;
+
+    void createDeferredResources();
+    void destroyDeferredResources();
+    void renderGBufferPass(VkCommandBuffer cmd, Scene& scene);
+    void renderSSAOPass(VkCommandBuffer cmd);
+    void renderLightingPass(VkCommandBuffer cmd);
+
+public:
+    void setDeferredEnabled(bool enabled) { m_deferredEnabled = enabled; }
+    bool isDeferredEnabled() const { return m_deferredEnabled; }
 };
 
 } // namespace QymEngine

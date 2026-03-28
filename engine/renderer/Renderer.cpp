@@ -460,7 +460,16 @@ void Renderer::drawScene(Scene& scene)
             && m_shadowVkPipeline != VK_NULL_HANDLE) {
             renderShadowPass(cmdBuf, scene);
         }
-        drawSceneToOffscreen(cmdBuf, scene);
+
+        if (m_deferredEnabled && m_gbufferRenderPass != VK_NULL_HANDLE) {
+            // 延迟渲染路径：G-Buffer → SSAO → Lighting
+            renderGBufferPass(cmdBuf, scene);
+            renderSSAOPass(cmdBuf);
+            renderLightingPass(cmdBuf);
+        } else {
+            // 前向渲染路径
+            drawSceneToOffscreen(cmdBuf, scene);
+        }
 
         // 后处理：在离屏渲染完成后执行
         auto& ppSettings = scene.getPostProcessSettings();
@@ -1899,6 +1908,9 @@ void Renderer::createOffscreen(uint32_t width, uint32_t height)
             writeIBLDescriptors();
         }
     }
+
+    // 延迟渲染资源（依赖 offscreen depth + perFrameLayout）
+    createDeferredResources();
 }
 
 void Renderer::reloadShaders()
@@ -2198,6 +2210,8 @@ void Renderer::resizeOffscreen(uint32_t width, uint32_t height)
 void Renderer::destroyOffscreen()
 {
     VkDevice device = m_context.getDevice();
+
+    destroyDeferredResources();
 
     if (m_offscreenFramebuffer != VK_NULL_HANDLE)
     {
@@ -3144,6 +3158,597 @@ void Renderer::renderShadowPass(VkCommandBuffer cmd, Scene& scene)
             vkCmdDrawIndexed(cmd, m_meshLibrary.getIndexCount(node->meshType), 1, 0, 0, 0);
         }
     });
+
+    vkCmdEndRenderPass(cmd);
+}
+
+// ============================================================================
+// 延迟渲染
+// ============================================================================
+
+void Renderer::createDeferredResources()
+{
+    VkDevice device = m_context.getDevice();
+    uint32_t w = m_offscreenWidth;
+    uint32_t h = m_offscreenHeight;
+
+    // G-Buffer 格式: RT0=RGBA8(Albedo+Metallic), RT1=RG16F(Normal), RT2=RGBA8(Roughness+AO)
+    VkFormat gbufferFormats[3] = {
+        VK_FORMAT_R8G8B8A8_UNORM,
+        VK_FORMAT_R16G16_SFLOAT,
+        VK_FORMAT_R8G8B8A8_UNORM,
+    };
+
+    // 1. 创建 G-Buffer images + views
+    for (int i = 0; i < 3; i++) {
+        VkImageCreateInfo imgInfo{};
+        imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imgInfo.imageType = VK_IMAGE_TYPE_2D;
+        imgInfo.extent = {w, h, 1};
+        imgInfo.mipLevels = 1;
+        imgInfo.arrayLayers = 1;
+        imgInfo.format = gbufferFormats[i];
+        imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imgInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        vkCreateImage(device, &imgInfo, nullptr, &m_gbufferImages[i]);
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(device, m_gbufferImages[i], &memReqs);
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits,
+                                                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        vkAllocateMemory(device, &allocInfo, nullptr, &m_gbufferMemory[i]);
+        vkBindImageMemory(device, m_gbufferImages[i], m_gbufferMemory[i], 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_gbufferImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = gbufferFormats[i];
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCreateImageView(device, &viewInfo, nullptr, &m_gbufferViews[i]);
+    }
+
+    // 2. G-Buffer sampler
+    if (m_gbufferSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo sampInfo{};
+        sampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sampInfo.magFilter = VK_FILTER_NEAREST;
+        sampInfo.minFilter = VK_FILTER_NEAREST;
+        sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        vkCreateSampler(device, &sampInfo, nullptr, &m_gbufferSampler);
+    }
+
+    // 3. G-Buffer render pass (3 color + 1 depth)
+    {
+        std::array<VkAttachmentDescription, 4> attachments{};
+        for (int i = 0; i < 3; i++) {
+            attachments[i].format = gbufferFormats[i];
+            attachments[i].samples = VK_SAMPLE_COUNT_1_BIT;
+            attachments[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            attachments[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            attachments[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            attachments[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            attachments[i].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            attachments[i].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        // Depth（共用 offscreen depth）
+        attachments[3].format = VK_FORMAT_D32_SFLOAT;
+        attachments[3].samples = VK_SAMPLE_COUNT_1_BIT;
+        attachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[3].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[3].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[3].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[3].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference colorRefs[3] = {
+            {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+            {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+            {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+        };
+        VkAttachmentReference depthRef = {3, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 3;
+        subpass.pColorAttachments = colorRefs;
+        subpass.pDepthStencilAttachment = &depthRef;
+
+        VkRenderPassCreateInfo rpInfo{};
+        rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rpInfo.attachmentCount = 4;
+        rpInfo.pAttachments = attachments.data();
+        rpInfo.subpassCount = 1;
+        rpInfo.pSubpasses = &subpass;
+        vkCreateRenderPass(device, &rpInfo, nullptr, &m_gbufferRenderPass);
+    }
+
+    // 4. G-Buffer framebuffer
+    {
+        VkImageView fbViews[4] = {
+            m_gbufferViews[0], m_gbufferViews[1], m_gbufferViews[2],
+            m_offscreenDepthImageView  // 共用 offscreen depth
+        };
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_gbufferRenderPass;
+        fbInfo.attachmentCount = 4;
+        fbInfo.pAttachments = fbViews;
+        fbInfo.width = w;
+        fbInfo.height = h;
+        fbInfo.layers = 1;
+        vkCreateFramebuffer(device, &fbInfo, nullptr, &m_gbufferFramebuffer);
+    }
+
+    // 5. G-Buffer pipeline（从 GBuffer.shaderbundle 加载）
+    {
+        std::string bundlePath = shaderBundlePath("GBuffer");
+        std::string var = shaderVariant("default");
+        ShaderBundle bundle;
+        if (bundle.load(bundlePath) && bundle.hasVariant(var)) {
+            auto vertSpv = bundle.getVertSpv(var);
+            auto fragSpv = bundle.getFragSpv(var);
+            auto reflectJson = bundle.getReflectJson(var);
+            m_gbufferPipeline.createFromMemory(device, m_gbufferRenderPass,
+                {w, h}, m_layoutCache, VK_POLYGON_MODE_FILL,
+                vertSpv, fragSpv, reflectJson, m_perFrameLayout);
+        } else {
+            SDL_Log("[Deferred] GBuffer.shaderbundle 加载失败，延迟渲染不可用");
+            m_deferredEnabled = false;
+            return;
+        }
+    }
+
+    // 6. Lighting render pass（输出到 offscreen HDR target）
+    {
+        VkAttachmentDescription colorAttach{};
+        colorAttach.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        colorAttach.samples = VK_SAMPLE_COUNT_1_BIT;
+        colorAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttach.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttach.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttach.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttach.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference colorRef = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+
+        VkRenderPassCreateInfo rpInfo{};
+        rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rpInfo.attachmentCount = 1;
+        rpInfo.pAttachments = &colorAttach;
+        rpInfo.subpassCount = 1;
+        rpInfo.pSubpasses = &subpass;
+        vkCreateRenderPass(device, &rpInfo, nullptr, &m_lightingRenderPass);
+    }
+
+    // 7. Lighting framebuffer（输出到 offscreen HDR image）
+    {
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_lightingRenderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &m_offscreenImageView;
+        fbInfo.width = w;
+        fbInfo.height = h;
+        fbInfo.layers = 1;
+        vkCreateFramebuffer(device, &fbInfo, nullptr, &m_lightingFramebuffer);
+    }
+
+    // 8. Lighting pipeline（从 DeferredLighting.shaderbundle 加载）
+    {
+        std::string bundlePath = shaderBundlePath("DeferredLighting");
+        std::string var = shaderVariant("default");
+        ShaderBundle bundle;
+        if (bundle.load(bundlePath) && bundle.hasVariant(var)) {
+            auto vertSpv = bundle.getVertSpv(var);
+            auto fragSpv = bundle.getFragSpv(var);
+            auto reflectJson = bundle.getReflectJson(var);
+
+            // Lighting pass 使用自定义的 descriptor set layout
+            ShaderReflectionData reflection;
+            reflection.loadFromString(reflectJson);
+
+            // 创建 descriptor set layout
+            auto bindings = reflection.buildBindings(0);
+            m_lightingSetLayout = m_layoutCache.getOrCreate(device, bindings);
+
+            auto pcRanges = reflection.createPushConstantRanges();
+
+            std::vector<VkDescriptorSetLayout> layouts = {m_lightingSetLayout};
+
+            // 创建 fullscreen pipeline（无顶点输入）
+            VkShaderModuleCreateInfo vsCI{}, fsCI{};
+            vsCI.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vsCI.codeSize = vertSpv.size();
+            vsCI.pCode = reinterpret_cast<const uint32_t*>(vertSpv.data());
+            fsCI.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fsCI.codeSize = fragSpv.size();
+            fsCI.pCode = reinterpret_cast<const uint32_t*>(fragSpv.data());
+
+            VkShaderModule vsMod, fsMod;
+            vkCreateShaderModule(device, &vsCI, nullptr, &vsMod);
+            vkCreateShaderModule(device, &fsCI, nullptr, &fsMod);
+
+            VkPipelineShaderStageCreateInfo stages[2] = {};
+            stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vsMod;
+            stages[0].pName = "main";
+            stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = fsMod;
+            stages[1].pName = "main";
+
+            // 无顶点输入
+            VkPipelineVertexInputStateCreateInfo vertexInput{};
+            vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+            VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+            inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+            VkPipelineViewportStateCreateInfo viewportState{};
+            viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            viewportState.viewportCount = 1;
+            viewportState.scissorCount = 1;
+
+            VkPipelineRasterizationStateCreateInfo rasterizer{};
+            rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+            rasterizer.lineWidth = 1.0f;
+            rasterizer.cullMode = VK_CULL_MODE_NONE;
+
+            VkPipelineMultisampleStateCreateInfo multisampling{};
+            multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+            VkPipelineColorBlendAttachmentState blendAttach{};
+            blendAttach.colorWriteMask = 0xF;
+            blendAttach.blendEnable = VK_FALSE;
+
+            VkPipelineColorBlendStateCreateInfo colorBlending{};
+            colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            colorBlending.attachmentCount = 1;
+            colorBlending.pAttachments = &blendAttach;
+
+            VkPipelineDepthStencilStateCreateInfo depthStencil{};
+            depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            depthStencil.depthTestEnable = VK_FALSE;
+            depthStencil.depthWriteEnable = VK_FALSE;
+
+            std::vector<VkDynamicState> dynStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dynamicState{};
+            dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dynamicState.dynamicStateCount = (uint32_t)dynStates.size();
+            dynamicState.pDynamicStates = dynStates.data();
+
+            VkPipelineLayoutCreateInfo plInfo{};
+            plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plInfo.setLayoutCount = (uint32_t)layouts.size();
+            plInfo.pSetLayouts = layouts.data();
+            plInfo.pushConstantRangeCount = (uint32_t)pcRanges.size();
+            plInfo.pPushConstantRanges = pcRanges.data();
+            vkCreatePipelineLayout(device, &plInfo, nullptr, &m_lightingPipelineLayout);
+
+            VkGraphicsPipelineCreateInfo pipelineInfo{};
+            pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            pipelineInfo.stageCount = 2;
+            pipelineInfo.pStages = stages;
+            pipelineInfo.pVertexInputState = &vertexInput;
+            pipelineInfo.pInputAssemblyState = &inputAssembly;
+            pipelineInfo.pViewportState = &viewportState;
+            pipelineInfo.pRasterizationState = &rasterizer;
+            pipelineInfo.pMultisampleState = &multisampling;
+            pipelineInfo.pDepthStencilState = &depthStencil;
+            pipelineInfo.pColorBlendState = &colorBlending;
+            pipelineInfo.pDynamicState = &dynamicState;
+            pipelineInfo.layout = m_lightingPipelineLayout;
+            pipelineInfo.renderPass = m_lightingRenderPass;
+            vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_lightingPipeline);
+
+            vkDestroyShaderModule(device, fsMod, nullptr);
+            vkDestroyShaderModule(device, vsMod, nullptr);
+        }
+    }
+
+    // 9. Lighting descriptor set
+    {
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_descriptor.getPool();
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &m_lightingSetLayout;
+        vkAllocateDescriptorSets(device, &allocInfo, &m_lightingSet);
+    }
+
+    SDL_Log("[Deferred] 资源创建完成 (%ux%u)", w, h);
+}
+
+void Renderer::destroyDeferredResources()
+{
+    VkDevice device = m_context.getDevice();
+
+    m_gbufferPipeline.cleanup(device);
+
+    if (m_lightingPipeline) vkDestroyPipeline(device, m_lightingPipeline, nullptr);
+    if (m_lightingPipelineLayout) vkDestroyPipelineLayout(device, m_lightingPipelineLayout, nullptr);
+    if (m_lightingFramebuffer) vkDestroyFramebuffer(device, m_lightingFramebuffer, nullptr);
+    if (m_lightingRenderPass) vkDestroyRenderPass(device, m_lightingRenderPass, nullptr);
+    if (m_gbufferFramebuffer) vkDestroyFramebuffer(device, m_gbufferFramebuffer, nullptr);
+    if (m_gbufferRenderPass) vkDestroyRenderPass(device, m_gbufferRenderPass, nullptr);
+    if (m_gbufferSampler) vkDestroySampler(device, m_gbufferSampler, nullptr);
+
+    for (int i = 0; i < 3; i++) {
+        if (m_gbufferViews[i]) vkDestroyImageView(device, m_gbufferViews[i], nullptr);
+        if (m_gbufferImages[i]) vkDestroyImage(device, m_gbufferImages[i], nullptr);
+        if (m_gbufferMemory[i]) vkFreeMemory(device, m_gbufferMemory[i], nullptr);
+        m_gbufferViews[i] = VK_NULL_HANDLE;
+        m_gbufferImages[i] = VK_NULL_HANDLE;
+        m_gbufferMemory[i] = VK_NULL_HANDLE;
+    }
+
+    m_lightingPipeline = VK_NULL_HANDLE;
+    m_lightingPipelineLayout = VK_NULL_HANDLE;
+    m_lightingFramebuffer = VK_NULL_HANDLE;
+    m_lightingRenderPass = VK_NULL_HANDLE;
+    m_gbufferFramebuffer = VK_NULL_HANDLE;
+    m_gbufferRenderPass = VK_NULL_HANDLE;
+    m_gbufferSampler = VK_NULL_HANDLE;
+    m_lightingSet = VK_NULL_HANDLE;
+}
+
+void Renderer::renderGBufferPass(VkCommandBuffer cmd, Scene& scene)
+{
+    if (m_gbufferRenderPass == VK_NULL_HANDLE) return;
+
+    VkRenderPassBeginInfo rpBegin{};
+    rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpBegin.renderPass = m_gbufferRenderPass;
+    rpBegin.framebuffer = m_gbufferFramebuffer;
+    rpBegin.renderArea = {{0, 0}, {m_offscreenWidth, m_offscreenHeight}};
+
+    std::array<VkClearValue, 4> clearValues{};
+    clearValues[0].color = {{0, 0, 0, 0}};
+    clearValues[1].color = {{0.5f, 0.5f, 0, 0}}; // 法线默认 (0,0,1) 的八面体编码
+    clearValues[2].color = {{0, 1, 0, 0}};        // roughness=0, ao=1
+    clearValues[3].depthStencil = {1.0f, 0};
+    rpBegin.clearValueCount = (uint32_t)clearValues.size();
+    rpBegin.pClearValues = clearValues.data();
+
+    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_gbufferPipeline.getPipeline());
+
+    VkViewport vp{0, 0, (float)m_offscreenWidth, (float)m_offscreenHeight, 0, 1};
+    VkRect2D scissor{{0, 0}, {m_offscreenWidth, m_offscreenHeight}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // 绑定 Set 0（per-frame）
+    VkDescriptorSet frameSet = m_descriptor.getPerFrameSet(m_currentFrame);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_gbufferPipeline.getPipelineLayout(), 0, 1, &frameSet, 0, nullptr);
+
+    // 遍历场景渲染所有不透明物体
+    scene.traverseNodes([&](Node* node) {
+        if (node->isLight()) return;
+        if (node->meshType == MeshType::None && node->meshPath.empty()) return;
+
+        PushConstantData pc{};
+        pc.model = toShaderMatrix(node->getWorldMatrix());
+        pc.highlighted = 0;
+        vkCmdPushConstants(cmd, m_gbufferPipeline.getPipelineLayout(),
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(PushConstantData), &pc);
+
+        // 绑定材质 descriptor set (Set 1)
+        const MaterialInstance* mat = nullptr;
+        if (!node->materialPath.empty())
+            mat = m_assetManager.loadMaterial(node->materialPath);
+        VkDescriptorSet matSet = mat ? mat->descriptorSet : m_defaultMaterialSet;
+        if (matSet)
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_gbufferPipeline.getPipelineLayout(), 1, 1, &matSet, 0, nullptr);
+
+        if (!node->meshPath.empty()) {
+            auto* mesh = m_assetManager.loadMesh(node->meshPath);
+            if (mesh) {
+                VkBuffer buffers[] = {mesh->vertexBuffer};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+                vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, mesh->indexCount, 1, 0, 0, 0);
+            }
+        } else if (node->meshType != MeshType::None) {
+            m_meshLibrary.bind(cmd, node->meshType);
+            vkCmdDrawIndexed(cmd, m_meshLibrary.getIndexCount(node->meshType), 1, 0, 0, 0);
+        }
+    });
+
+    vkCmdEndRenderPass(cmd);
+}
+
+void Renderer::renderSSAOPass(VkCommandBuffer /*cmd*/)
+{
+    // TODO: SSAO pass 实现（待 G-Buffer + Lighting 验证通过后添加）
+}
+
+void Renderer::renderLightingPass(VkCommandBuffer cmd)
+{
+    if (m_lightingPipeline == VK_NULL_HANDLE) return;
+
+    // 更新 lighting descriptor set（每帧绑定 G-Buffer + 场景数据）
+    {
+        VkDevice device = m_context.getDevice();
+        VkDescriptorSet frameSet = m_descriptor.getPerFrameSet(m_currentFrame);
+
+        // 从 per-frame set 中获取 UBO buffer
+        // lighting set binding 0 = FrameData UBO（与 per-frame set 共享同一 buffer）
+        std::vector<VkWriteDescriptorSet> writes;
+
+        // Binding 0: FrameData UBO
+        VkDescriptorBufferInfo uboInfo{};
+        uboInfo.buffer = m_buffer.getUniformBuffers()[m_currentFrame];
+        uboInfo.offset = 0;
+        uboInfo.range = sizeof(UniformBufferObject);
+
+        VkWriteDescriptorSet uboWrite{};
+        uboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        uboWrite.dstSet = m_lightingSet;
+        uboWrite.dstBinding = 0;
+        uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboWrite.descriptorCount = 1;
+        uboWrite.pBufferInfo = &uboInfo;
+        writes.push_back(uboWrite);
+
+        // Binding 1-3: G-Buffer RT0, RT1, RT2
+        VkDescriptorImageInfo gbufferInfos[3];
+        for (int i = 0; i < 3; i++) {
+            gbufferInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            gbufferInfos[i].imageView = m_gbufferViews[i];
+            gbufferInfos[i].sampler = m_gbufferSampler;
+        }
+        for (int i = 0; i < 3; i++) {
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = m_lightingSet;
+            w.dstBinding = 1 + i;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.descriptorCount = 1;
+            w.pImageInfo = &gbufferInfos[i];
+            writes.push_back(w);
+        }
+
+        // Binding 4: Depth texture
+        VkDescriptorImageInfo depthInfo{};
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depthInfo.imageView = m_offscreenDepthImageView;
+        depthInfo.sampler = m_gbufferSampler;
+        {
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = m_lightingSet;
+            w.dstBinding = 4;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.descriptorCount = 1;
+            w.pImageInfo = &depthInfo;
+            writes.push_back(w);
+        }
+
+        // Binding 5: Shadow map
+        VkDescriptorImageInfo shadowInfo{};
+        shadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        shadowInfo.imageView = m_shadowImageView ? m_shadowImageView : m_offscreenImageView;
+        shadowInfo.sampler = m_shadowSampler ? m_shadowSampler : m_gbufferSampler;
+        {
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = m_lightingSet;
+            w.dstBinding = 5;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.descriptorCount = 1;
+            w.pImageInfo = &shadowInfo;
+            writes.push_back(w);
+        }
+
+        // Binding 6-8: IBL (irradiance, prefiltered, brdfLUT)
+        std::array<VkImageView, 3> iblViews;
+        VkSampler iblSampler;
+        if (m_iblGenerator.isGenerated()) {
+            iblViews = {m_iblGenerator.getIrradianceView(),
+                        m_iblGenerator.getPrefilteredView(),
+                        m_iblGenerator.getBrdfLutView()};
+            iblSampler = m_iblGenerator.getBrdfLutSampler();
+        } else {
+            iblViews = {m_iblFallbackCubemapView,
+                        m_iblFallbackCubemapView,
+                        m_iblFallbackLutView};
+            iblSampler = m_iblFallbackSampler;
+        }
+
+        VkDescriptorImageInfo iblInfos[3];
+        for (int i = 0; i < 3; i++) {
+            iblInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            iblInfos[i].imageView = iblViews[i];
+            iblInfos[i].sampler = iblSampler;
+        }
+        for (int i = 0; i < 3; i++) {
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = m_lightingSet;
+            w.dstBinding = 6 + i;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.descriptorCount = 1;
+            w.pImageInfo = &iblInfos[i];
+            writes.push_back(w);
+        }
+
+        // Binding 9: SSAO texture（暂用 fallback）
+        VkDescriptorImageInfo ssaoInfo{};
+        ssaoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ssaoInfo.imageView = m_offscreenImageView; // TODO: 替换为真实 SSAO 纹理
+        ssaoInfo.sampler = m_gbufferSampler;
+        {
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = m_lightingSet;
+            w.dstBinding = 9;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.descriptorCount = 1;
+            w.pImageInfo = &ssaoInfo;
+            writes.push_back(w);
+        }
+
+        vkUpdateDescriptorSets(device, (uint32_t)writes.size(), writes.data(), 0, nullptr);
+    }
+
+    // Lighting render pass
+    VkRenderPassBeginInfo rpBegin{};
+    rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpBegin.renderPass = m_lightingRenderPass;
+    rpBegin.framebuffer = m_lightingFramebuffer;
+    rpBegin.renderArea = {{0, 0}, {m_offscreenWidth, m_offscreenHeight}};
+    VkClearValue clearColor{};
+    clearColor.color = {{0, 0, 0, 1}};
+    rpBegin.clearValueCount = 1;
+    rpBegin.pClearValues = &clearColor;
+
+    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_lightingPipeline);
+
+    VkViewport vp{0, 0, (float)m_offscreenWidth, (float)m_offscreenHeight, 0, 1};
+    VkRect2D scissor{{0, 0}, {m_offscreenWidth, m_offscreenHeight}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_lightingPipelineLayout, 0, 1, &m_lightingSet, 0, nullptr);
+
+    // Push constants
+    struct { float screenW, screenH; int ssaoEnabled; int _pad; } lightingPC;
+    lightingPC.screenW = (float)m_offscreenWidth;
+    lightingPC.screenH = (float)m_offscreenHeight;
+    lightingPC.ssaoEnabled = 0; // TODO: SSAO 开关
+    lightingPC._pad = 0;
+    vkCmdPushConstants(cmd, m_lightingPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(lightingPC), &lightingPC);
+
+    vkCmdDraw(cmd, 6, 1, 0, 0); // 全屏 quad
 
     vkCmdEndRenderPass(cmd);
 }

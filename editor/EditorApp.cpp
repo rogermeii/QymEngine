@@ -65,6 +65,7 @@ void EditorApp::onInit()
 
     m_consolePanel.init();
     m_modelPreview.init(m_renderer);
+    PostProcessPanel::setRenderer(&m_renderer);
 
     // Initialize undo manager (preserve multi-selection across undo/redo)
     m_undoManager.init(
