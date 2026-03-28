@@ -51,6 +51,8 @@ public:
 
     // Shader hot reload: recompile shaders and rebuild pipelines
     void reloadShaders();
+    // 增量热重载：只重编指定的 .slang 文件，只重建受影响的 pipeline
+    void reloadModifiedShaders(const std::vector<std::string>& changedSlangFiles);
 
     // --- Bindless material system (PC only) ---
     bool isBindlessEnabled() const { return m_bindlessEnabled; }

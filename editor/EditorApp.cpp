@@ -160,6 +160,10 @@ void EditorApp::onInit()
 
     if (m_rdocApi)
         Log::info("RenderDoc: ready (press F12 to capture)");
+
+    // 启动 shader 文件监视（热重载）
+    m_shaderWatcher.start(std::string(ASSETS_DIR) + "/shaders");
+    Log::info("ShaderFileWatcher: started");
 #endif
 
     Log::info("QymEngine Editor initialized");
@@ -408,6 +412,32 @@ void EditorApp::onUpdate()
     handleShortcuts();
 
 #ifndef __ANDROID__
+    // Ctrl+R: 全量 shader 热重载
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R)) {
+        m_shaderReloadStatus = "Reloading all shaders...";
+        m_shaderReloadTimer = 0.0f;
+        auto startTime = std::chrono::steady_clock::now();
+        m_renderer.reloadShaders();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startTime).count();
+        m_shaderReloadStatus = "All shaders reloaded (" + std::to_string(elapsed) + "ms)";
+        m_shaderReloadTimer = 3.0f;
+    }
+
+    // 文件监视：增量热重载
+    {
+        auto changed = m_shaderWatcher.pollChanges();
+        if (!changed.empty()) {
+            auto startTime = std::chrono::steady_clock::now();
+            m_renderer.reloadModifiedShaders(changed);
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - startTime).count();
+            m_shaderReloadStatus = "Reloaded " + std::to_string(changed.size())
+                + " shader(s) (" + std::to_string(elapsed) + "ms)";
+            m_shaderReloadTimer = 3.0f;
+        }
+    }
+
     // F12 shortcut for RenderDoc capture
     if (ImGui::IsKeyPressed(ImGuiKey_F12) && m_rdocApi)
         m_captureRequested = true;
@@ -447,6 +477,22 @@ void EditorApp::onUpdate()
     m_projectPanel.onImGuiRender();
     m_consolePanel.onImGuiRender();
     m_postProcessPanel.onImGuiRender(m_scene);
+
+#ifndef __ANDROID__
+    // Shader 热重载状态 overlay
+    if (m_shaderReloadTimer > 0.0f) {
+        m_shaderReloadTimer -= ImGui::GetIO().DeltaTime;
+        ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, 40.0f),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowBgAlpha(0.7f);
+        ImGui::Begin("##ShaderReloadStatus", nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
+            ImGuiWindowFlags_NoInputs);
+        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.4f, 1.0f), "%s", m_shaderReloadStatus.c_str());
+        ImGui::End();
+    }
+#endif
 
     m_imguiLayer.endFrame(m_renderer.getCurrentCommandBuffer(),
                           m_renderer.getImageIndex());

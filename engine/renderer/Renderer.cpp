@@ -14,6 +14,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <cstring>
+#include <set>
+#include <filesystem>
 
 namespace QymEngine {
 
@@ -2016,6 +2018,123 @@ void Renderer::reloadShaders()
 
     // 重新加载后处理着色器
     m_postProcess.reloadShaders();
+}
+
+void Renderer::reloadModifiedShaders(const std::vector<std::string>& changedSlangFiles)
+{
+    VkDevice device = m_context.getDevice();
+    vkDeviceWaitIdle(device);
+
+    // 1. 增量编译：对每个修改的 .slang 单独调用 ShaderCompiler
+    std::string compilerPath;
+#ifdef _WIN32
+    compilerPath = std::string(ASSETS_DIR) + "/../build3/tools/shader_compiler/Debug/ShaderCompiler.exe";
+#else
+    compilerPath = "ShaderCompiler";
+#endif
+    std::string shadersDir = std::string(ASSETS_DIR) + "/shaders";
+
+    std::set<std::string> changedBundles; // 记录哪些 bundle 被重编了
+    for (auto& slangFile : changedSlangFiles) {
+        std::string fullPath = shadersDir + "/" + slangFile;
+        // 输出目录与源文件同级
+        std::string outDir = std::filesystem::path(fullPath).parent_path().string();
+        std::string cmd = "\"" + compilerPath + "\" --no-msl \"" + fullPath + "\" \"" + outDir + "\"";
+#if !TARGET_OS_IOS
+        int result = system(cmd.c_str());
+        if (result != 0) {
+            SDL_Log("[HotReload] 编译失败: %s", slangFile.c_str());
+            continue;
+        }
+#endif
+        // .slang → .shaderbundle 的基础名
+        std::string baseName = std::filesystem::path(slangFile).stem().string();
+        changedBundles.insert(baseName);
+        SDL_Log("[HotReload] 重编: %s", slangFile.c_str());
+    }
+
+    if (changedBundles.empty()) return;
+
+    // 2. 根据 bundle 名匹配需要重建的 pipeline
+    std::string var = shaderVariant("default");
+
+    // 场景管线（Triangle/Lit shader）
+    if (changedBundles.count("Triangle") || changedBundles.count("Lit")) {
+        m_assetManager.invalidateAllShadersAndMaterials();
+
+        std::string triPath = shaderBundlePath("Triangle");
+        ShaderBundle triBundle;
+        if (triBundle.load(triPath) && triBundle.hasVariant(var)) {
+            auto vertSpv = triBundle.getVertSpv(var);
+            auto fragSpv = triBundle.getFragSpv(var);
+            auto reflectJson = triBundle.getReflectJson(var);
+
+            m_offscreenPipeline.cleanup(device);
+            m_wireframePipeline.cleanup(device);
+            m_offscreenPipeline.createFromMemory(device, m_offscreenRenderPass,
+                {m_offscreenWidth, m_offscreenHeight}, m_layoutCache, VK_POLYGON_MODE_FILL,
+                vertSpv, fragSpv, reflectJson, m_perFrameLayout);
+            m_wireframePipeline.createFromMemory(device, m_offscreenRenderPass,
+                {m_offscreenWidth, m_offscreenHeight}, m_layoutCache, VK_POLYGON_MODE_LINE,
+                vertSpv, fragSpv, reflectJson, m_perFrameLayout);
+
+            m_pipeline.cleanup(device);
+            m_pipeline.createFromMemory(device, m_renderPass.get(), m_swapChain.getExtent(),
+                m_layoutCache, VK_POLYGON_MODE_FILL, vertSpv, fragSpv, reflectJson, m_perFrameLayout);
+        }
+    }
+
+    // Unlit shader（材质系统加载）
+    if (changedBundles.count("Unlit")) {
+        m_assetManager.invalidateAllShadersAndMaterials();
+    }
+
+    // Shadow 管线
+    if (changedBundles.count("Shadow")) {
+        destroyShadowResources();
+        createShadowResources();
+    }
+
+    // Sky 管线
+    if (changedBundles.count("Sky")) {
+        if (m_skyPipeline) vkDestroyPipeline(device, m_skyPipeline, nullptr);
+        if (m_skyPipelineLayout) vkDestroyPipelineLayout(device, m_skyPipelineLayout, nullptr);
+        m_skyPipeline = VK_NULL_HANDLE;
+        m_skyPipelineLayout = VK_NULL_HANDLE;
+        createFullscreenBundlePipeline(device, m_offscreenRenderPass,
+            {m_frameOnlyLayout, m_skySetLayout}, shaderBundlePath("Sky"), var,
+            false, false, false, m_skyPipeline, m_skyPipelineLayout, "sky");
+    }
+
+    // Grid 管线
+    if (changedBundles.count("Grid")) {
+        if (m_gridPipeline) vkDestroyPipeline(device, m_gridPipeline, nullptr);
+        if (m_gridPipelineLayout) vkDestroyPipelineLayout(device, m_gridPipelineLayout, nullptr);
+        m_gridPipeline = VK_NULL_HANDLE;
+        m_gridPipelineLayout = VK_NULL_HANDLE;
+        try {
+            createFullscreenBundlePipeline(device, m_offscreenRenderPass,
+                {m_frameOnlyLayout}, shaderBundlePath("Grid"), var,
+                true, true, false, m_gridPipeline, m_gridPipelineLayout, "grid");
+        } catch (...) {
+            m_gridPipeline = VK_NULL_HANDLE;
+            m_gridPipelineLayout = VK_NULL_HANDLE;
+        }
+    }
+
+    // 后处理管线
+    bool needPostProcessReload = false;
+    for (auto& name : {"BloomDownsample", "BloomUpsample", "DOF", "Composite", "FXAA"}) {
+        if (changedBundles.count(name)) {
+            needPostProcessReload = true;
+            break;
+        }
+    }
+    if (needPostProcessReload) {
+        m_postProcess.reloadShaders();
+    }
+
+    SDL_Log("[HotReload] 完成，重建 %zu 个 bundle 的 pipeline", changedBundles.size());
 }
 
 void Renderer::resizeOffscreen(uint32_t width, uint32_t height)

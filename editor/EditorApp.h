@@ -21,6 +21,7 @@
 #endif
 #ifndef __ANDROID__
 #include "UIAutomation.h"
+#include "asset/ShaderFileWatcher.h"
 #endif
 
 #ifdef _WIN32
@@ -87,6 +88,9 @@ private:
     std::string m_captureOutputPath;
 
     UIAutomation m_uiAutomation;
+    ShaderFileWatcher m_shaderWatcher;
+    std::string m_shaderReloadStatus;   // UI 显示的热重载状态
+    float m_shaderReloadTimer = 0.0f;   // 状态消息倒计时（秒）
 #endif
 
     bool m_forceBindless = false;
