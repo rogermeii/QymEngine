@@ -463,9 +463,11 @@ void Renderer::drawScene(Scene& scene)
 
         if (m_deferredEnabled && m_gbufferRenderPass != VK_NULL_HANDLE) {
             // 延迟渲染路径：G-Buffer → SSAO → Lighting
+            auto& ppSettings = scene.getPostProcessSettings();
             renderGBufferPass(cmdBuf, scene);
-            renderSSAOPass(cmdBuf);
-            renderLightingPass(cmdBuf);
+            if (ppSettings.ssaoEnabled)
+                renderSSAOPass(cmdBuf, ppSettings);
+            renderLightingPass(cmdBuf, ppSettings);
         } else {
             // 前向渲染路径
             drawSceneToOffscreen(cmdBuf, scene);
@@ -3891,7 +3893,7 @@ void Renderer::renderGBufferPass(VkCommandBuffer cmd, Scene& scene)
     vkCmdEndRenderPass(cmd);
 }
 
-void Renderer::renderSSAOPass(VkCommandBuffer cmd)
+void Renderer::renderSSAOPass(VkCommandBuffer cmd, const PostProcessSettings& settings)
 {
     if (m_ssaoPipeline == VK_NULL_HANDLE || m_ssaoRenderPass == VK_NULL_HANDLE) return;
 
@@ -3988,12 +3990,12 @@ void Renderer::renderSSAOPass(VkCommandBuffer cmd)
     ssaoPC.screenH = (float)m_offscreenHeight;
     ssaoPC.noiseScaleX = m_offscreenWidth / 4.0f;
     ssaoPC.noiseScaleY = m_offscreenHeight / 4.0f;
-    ssaoPC.radius = 0.5f;
-    ssaoPC.bias = 0.025f;
-    ssaoPC.intensity = 1.0f;
-    ssaoPC.algorithm = 0; // Classic SSAO
-    ssaoPC.kernelSize = 32;
-    ssaoPC.power = 1.5f;
+    ssaoPC.radius = settings.ssaoRadius;
+    ssaoPC.bias = settings.ssaoBias;
+    ssaoPC.intensity = settings.ssaoIntensity;
+    ssaoPC.algorithm = settings.ssaoAlgorithm;
+    ssaoPC.kernelSize = settings.ssaoKernelSize;
+    ssaoPC.power = settings.ssaoPower;
 
     vkCmdPushConstants(cmd, m_ssaoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -4004,7 +4006,7 @@ void Renderer::renderSSAOPass(VkCommandBuffer cmd)
     vkCmdEndRenderPass(cmd);
 }
 
-void Renderer::renderLightingPass(VkCommandBuffer cmd)
+void Renderer::renderLightingPass(VkCommandBuffer cmd, const PostProcessSettings& settings)
 {
     if (m_lightingPipeline == VK_NULL_HANDLE) return;
 
@@ -4160,7 +4162,7 @@ void Renderer::renderLightingPass(VkCommandBuffer cmd)
     struct { float screenW, screenH; int ssaoEnabled; int _pad; } lightingPC;
     lightingPC.screenW = (float)m_offscreenWidth;
     lightingPC.screenH = (float)m_offscreenHeight;
-    lightingPC.ssaoEnabled = (m_ssaoPipeline != VK_NULL_HANDLE) ? 1 : 0;
+    lightingPC.ssaoEnabled = (settings.ssaoEnabled && m_ssaoPipeline != VK_NULL_HANDLE) ? 1 : 0;
     lightingPC._pad = 0;
     vkCmdPushConstants(cmd, m_lightingPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

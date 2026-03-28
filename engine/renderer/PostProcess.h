@@ -40,6 +40,15 @@ struct PostProcessSettings {
     float dofFocalRange = 3.0f;
     float dofMaxBlur = 8.0f;
 
+    // SSAO (延迟渲染模式下可用)
+    bool  ssaoEnabled = true;
+    int   ssaoAlgorithm = 0;       // 0=Classic, 1=HBAO, 2=GTAO
+    float ssaoRadius = 0.5f;
+    float ssaoBias = 0.025f;
+    float ssaoIntensity = 1.0f;
+    int   ssaoKernelSize = 32;
+    float ssaoPower = 1.5f;
+
     // FXAA
     bool  fxaaEnabled = true;
     float fxaaSubpixQuality = 0.75f;

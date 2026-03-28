@@ -24,6 +24,22 @@ void PostProcessPanel::onImGuiRender(Scene& scene) {
         ImGui::Separator();
     }
 
+    // SSAO 控制（仅延迟渲染模式）
+    if (s_renderer && s_renderer->isDeferredEnabled()) {
+        if (ImGui::CollapsingHeader("SSAO", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Checkbox("启用##ssao", &pp.ssaoEnabled);
+            if (pp.ssaoEnabled) {
+                const char* algorithms[] = {"Classic SSAO", "HBAO", "GTAO"};
+                ImGui::Combo("算法", &pp.ssaoAlgorithm, algorithms, 3);
+                ImGui::DragFloat("采样半径", &pp.ssaoRadius, 0.01f, 0.1f, 5.0f);
+                ImGui::DragFloat("偏移", &pp.ssaoBias, 0.001f, 0.0f, 0.1f);
+                ImGui::DragFloat("强度##ssao", &pp.ssaoIntensity, 0.01f, 0.0f, 3.0f);
+                ImGui::SliderInt("采样数", &pp.ssaoKernelSize, 8, 64);
+                ImGui::DragFloat("AO 指数", &pp.ssaoPower, 0.1f, 0.5f, 5.0f);
+            }
+        }
+    }
+
     if (ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("启用##bloom", &pp.bloomEnabled);
         if (pp.bloomEnabled) {

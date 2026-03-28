@@ -291,8 +291,8 @@ private:
     void createDeferredResources();
     void destroyDeferredResources();
     void renderGBufferPass(VkCommandBuffer cmd, Scene& scene);
-    void renderSSAOPass(VkCommandBuffer cmd);
-    void renderLightingPass(VkCommandBuffer cmd);
+    void renderSSAOPass(VkCommandBuffer cmd, const PostProcessSettings& settings);
+    void renderLightingPass(VkCommandBuffer cmd, const PostProcessSettings& settings);
 
 public:
     void setDeferredEnabled(bool enabled) { m_deferredEnabled = enabled; }
