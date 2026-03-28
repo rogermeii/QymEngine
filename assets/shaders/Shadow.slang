@@ -40,9 +40,6 @@ struct PushConstants
 struct VSInput
 {
     [[vk::location(0)]] float3 position : POSITION;
-    [[vk::location(1)]] float3 color : COLOR;
-    [[vk::location(2)]] float2 texCoord : TEXCOORD0;
-    [[vk::location(3)]] float3 normal : NORMAL;
 };
 
 [shader("vertex")]

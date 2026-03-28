@@ -2876,14 +2876,24 @@ void main() {
         stages[1].module = fragMod;
         stages[1].pName = "main";
 
-        auto bindingDesc = Vertex::getBindingDescription();
-        auto attrDescs = Vertex::getAttributeDescriptions();
+        // Shadow pass 只需要 position 属性，stride 与完整 Vertex 一致（共用 vertex buffer）
+        VkVertexInputBindingDescription shadowBindingDesc{};
+        shadowBindingDesc.binding = 0;
+        shadowBindingDesc.stride = sizeof(Vertex);
+        shadowBindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+        VkVertexInputAttributeDescription shadowAttrDesc{};
+        shadowAttrDesc.binding = 0;
+        shadowAttrDesc.location = 0;
+        shadowAttrDesc.format = VK_FORMAT_R32G32B32_SFLOAT;
+        shadowAttrDesc.offset = offsetof(Vertex, pos);
+
         VkPipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInput.vertexBindingDescriptionCount = 1;
-        vertexInput.pVertexBindingDescriptions = &bindingDesc;
-        vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrDescs.size());
-        vertexInput.pVertexAttributeDescriptions = attrDescs.data();
+        vertexInput.pVertexBindingDescriptions = &shadowBindingDesc;
+        vertexInput.vertexAttributeDescriptionCount = 1;
+        vertexInput.pVertexAttributeDescriptions = &shadowAttrDesc;
 
         VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
         inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
